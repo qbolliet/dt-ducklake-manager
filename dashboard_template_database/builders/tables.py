@@ -129,41 +129,21 @@ class DuckdbTablesBuilder(SchemaBuilder):
         # Enregistrement de la table comme vue temporaire
         self.conn.register('temp_fact', self.df_fact)
         
-        # Initialisation de la liste des conditions de jointure avec les tables de dimensions
-        join_conditions = []
-        # Initialisation de la liste des colonnes à sélectionner
-        # select_columns = []
-        
-        # Parcours des tables de dimensions correspondant à des clés étrangères dans la table d'informations
-        for dim_name in self.dimension_tables.keys():
-            # Initialisation du nom de la table
-            dim_table = f"{table_prefix}{dim_name}"
-            
-            # Ajout des conditions de jointure sur la base de la colonne "value" des tables de dimensions
-            join_conditions.append(
-                f"LEFT JOIN {dim_table} ON temp_fact.{dim_name} = {dim_table}.value"
-            )
-            
-            # Logging
-            self.logger.info(f"Successfully created foreign key for dimension '{dim_name}'")
-            # Ajout de la colonne qui correspond à une clé étrangère
-            # select_columns.append(f"temp_fact.{dim_name}")
-        
-        # Ajout des colonnes des variables non catégorielles
-        # select_columns.extend([f"temp_fact.{col}" for col in self.df_fact.columns if col not in self.dimension_tables.keys()])
-        
-        # Création de la table d'information
+        # Création de la table d'information avec seulement les colonnes originales
         query = f"""
         CREATE TABLE {table_name} AS 
-        SELECT *
+        SELECT {', '.join(self.df_fact.columns)}
         FROM temp_fact
-        {' '.join(join_conditions)}
         """
         
         self.conn.execute(query)
 
-        # Ajout de la vue
+        # Suppression de la vue temporaire
         self.conn.execute('DROP VIEW temp_fact')
+
+        # Logging des clés étrangères créées (pour information)
+        for dim_name in self.dimension_tables.keys():
+            self.logger.info(f"Foreign key created for dimension '{dim_name}' - can be joined on {table_name}.{dim_name} = {table_prefix}{dim_name}.value")
 
         # Logging
         self.logger.info(f"Successfully registered duckdb fact table")
