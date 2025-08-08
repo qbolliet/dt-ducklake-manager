@@ -3,7 +3,7 @@
 import os
 import pandas as pd
 from pathlib import Path
-from typing import Dict, Optional, Union
+from typing import Dict, Optional
 # Duckdb
 import duckdb
 
@@ -27,7 +27,7 @@ class DuckdbTablesBuilder(SchemaBuilder):
     """
 
     # Initialisation
-    def __init__(self, df: pd.DataFrame, categorical_threshold: Optional[int] = 50, connection: Optional[duckdb.DuckDBPyConnection] = None, path : Optional[Union[os.PathLike, None]]=None, log_filename: Optional[os.PathLike] = os.path.join(FILE_PATH.parents[2], "logs/duckdb_schema_builder.log")):
+    def __init__(self, df: pd.DataFrame, categorical_threshold: Optional[int] = 50, connection: Optional[duckdb.DuckDBPyConnection] = None, path : Optional[os.PathLike]=None, log_filename: Optional[os.PathLike] = os.path.join(FILE_PATH.parents[2], "logs/duckdb_schema_builder.log")):
         """
         Initialize the DuckdbTablesBuilder class.
 
