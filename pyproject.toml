@@ -19,6 +19,7 @@ dependencies = [
     "xlsxwriter>=3.2.1,<4",
     "geopandas>=1.0.1,<2",
     "matplotlib>=3.10.1,<4",
+    "sqlparse>=0.5.3",
 ]
 
 [dependency-groups]
