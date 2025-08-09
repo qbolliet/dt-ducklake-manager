@@ -1,24 +1,26 @@
-# Module pour la mise à jour incrémentale des tables
+# Importation des modules
+# Modules de base
 import os
 import pandas as pd
 import numpy as np
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple, Union, Callable, Any
-import duckdb
-import hashlib
-import json
-from datetime import datetime
+# Types
+from typing import Dict, List, Optional, Union, Literal
 from enum import Enum
-from dataclasses import dataclass
+# DuckDB
+import duckdb
+# Traitement en parallèle
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import threading
 
+# Import des éléments du module
 from ..builders.schema import SchemaBuilder
 from ..utils.logger import _init_logger
 
 # Emplacement du fichier
 FILE_PATH = Path(os.path.abspath(__file__))
 
+# Type pour la résolution de conflits
 class ConflictResolutionStrategy(Enum):
     """
     Stratégies de résolution de conflits de types.
@@ -26,236 +28,20 @@ class ConflictResolutionStrategy(Enum):
     PROMOTE_TYPES = "promote_types"  # Promotion automatique des types (int -> float, etc.)
     STRICT_VALIDATION = "strict_validation"  # Validation stricte, échec si conflit
     COERCE_TO_STRING = "coerce_to_string"  # Conversion forcée vers string
-    USER_DEFINED = "user_defined"  # Fonction personnalisée de résolution
 
-class DataValidationLevel(Enum):
-    """
-    Niveaux de validation des données.
-    """
-    NONE = "none"
-    BASIC = "basic"      # Validation des types et NULL
-    STRICT = "strict"    # Validation complète avec contraintes
-    CUSTOM = "custom"    # Validation personnalisée
-
-@dataclass
-class ValidationRule:
-    """
-    Règle de validation pour une colonne.
-    """
-    column_name: str
-    rule_type: str  # 'not_null', 'range', 'regex', 'custom'
-    parameters: Dict[str, Any]
-    error_message: str
-    severity: str  # 'error', 'warning'
-
-@dataclass
-class ConflictResolution:
-    """
-    Configuration de résolution de conflit.
-    """
-    column_name: str
-    source_type: str
-    target_type: str
-    resolution_strategy: str
-    custom_function: Optional[Callable] = None
-
-class DataQualityChecker:
-    """
-    Composant de vérification de qualité des données.
-    """
-    
-    def __init__(self, validation_rules: List[ValidationRule] = None):
-        self.validation_rules = validation_rules or []
-        self.default_rules = self._create_default_rules()
-    
-    def validate_dataframe(self, df: pd.DataFrame, 
-                          validation_level: DataValidationLevel = DataValidationLevel.BASIC) -> Dict[str, Any]:
-        """
-        Valide un DataFrame selon les règles définies.
-        
-        Args:
-            df: DataFrame à valider
-            validation_level: Niveau de validation
-            
-        Returns:
-            Résultats de validation
-        """
-        validation_results = {
-            'is_valid': True,
-            'errors': [],
-            'warnings': [],
-            'column_stats': {},
-            'quality_score': 0.0
-        }
-        
-        if validation_level == DataValidationLevel.NONE:
-            validation_results['quality_score'] = 1.0
-            return validation_results
-        
-        # Validation basique
-        if validation_level in [DataValidationLevel.BASIC, DataValidationLevel.STRICT]:
-            validation_results.update(self._basic_validation(df))
-        
-        # Validation stricte
-        if validation_level == DataValidationLevel.STRICT:
-            validation_results.update(self._strict_validation(df))
-        
-        # Validation personnalisée
-        if validation_level == DataValidationLevel.CUSTOM:
-            validation_results.update(self._custom_validation(df))
-        
-        # Calcul du score de qualité
-        validation_results['quality_score'] = self._calculate_quality_score(validation_results)
-        
-        return validation_results
-    
-    def _create_default_rules(self) -> List[ValidationRule]:
-        """
-        Crée des règles de validation par défaut.
-        
-        Returns:
-            Liste des règles par défaut
-        """
-        return [
-            ValidationRule(
-                column_name="*",
-                rule_type="excessive_nulls",
-                parameters={"max_null_ratio": 0.8},
-                error_message="Trop de valeurs NULL dans la colonne",
-                severity="warning"
-            )
-        ]
-    
-    def _basic_validation(self, df: pd.DataFrame) -> Dict[str, Any]:
-        """
-        Validation basique du DataFrame.
-        
-        Args:
-            df: DataFrame à valider
-            
-        Returns:
-            Résultats de validation basique
-        """
-        results = {'errors': [], 'warnings': [], 'column_stats': {}}
-        
-        for column in df.columns:
-            null_count = df[column].isnull().sum()
-            null_ratio = null_count / len(df)
-            
-            results['column_stats'][column] = {
-                'null_count': null_count,
-                'null_ratio': null_ratio,
-                'dtype': str(df[column].dtype),
-                'unique_count': df[column].nunique()
-            }
-            
-            # Vérification du ratio de NULL
-            if null_ratio > 0.8:
-                results['warnings'].append(
-                    f"Colonne {column}: {null_ratio:.1%} de valeurs NULL"
-                )
-        
-        return results
-    
-    def _strict_validation(self, df: pd.DataFrame) -> Dict[str, Any]:
-        """
-        Validation stricte du DataFrame.
-        
-        Args:
-            df: DataFrame à valider
-            
-        Returns:
-            Résultats de validation stricte
-        """
-        results = {'errors': [], 'warnings': []}
-        
-        # Application des règles personnalisées
-        for rule in self.validation_rules:
-            if rule.column_name == "*" or rule.column_name in df.columns:
-                columns_to_check = df.columns if rule.column_name == "*" else [rule.column_name]
-                
-                for column in columns_to_check:
-                    if not self._apply_validation_rule(df[column], rule):
-                        if rule.severity == "error":
-                            results['errors'].append(f"{column}: {rule.error_message}")
-                        else:
-                            results['warnings'].append(f"{column}: {rule.error_message}")
-        
-        return results
-    
-    def _custom_validation(self, df: pd.DataFrame) -> Dict[str, Any]:
-        """
-        Validation personnalisée du DataFrame.
-        
-        Args:
-            df: DataFrame à valider
-            
-        Returns:
-            Résultats de validation personnalisée
-        """
-        # À implémenter selon les besoins spécifiques
-        return {'errors': [], 'warnings': []}
-    
-    def _apply_validation_rule(self, series: pd.Series, rule: ValidationRule) -> bool:
-        """
-        Applique une règle de validation à une série.
-        
-        Args:
-            series: Série à valider
-            rule: Règle à appliquer
-            
-        Returns:
-            True si la règle est respectée
-        """
-        if rule.rule_type == "not_null":
-            return series.isnull().sum() == 0
-        
-        elif rule.rule_type == "excessive_nulls":
-            max_ratio = rule.parameters.get("max_null_ratio", 0.5)
-            null_ratio = series.isnull().sum() / len(series)
-            return null_ratio <= max_ratio
-        
-        elif rule.rule_type == "range":
-            min_val = rule.parameters.get("min")
-            max_val = rule.parameters.get("max")
-            if min_val is not None and max_val is not None:
-                return series.between(min_val, max_val, inclusive="both").all()
-        
-        return True
-    
-    def _calculate_quality_score(self, validation_results: Dict[str, Any]) -> float:
-        """
-        Calcule un score de qualité basé sur les résultats de validation.
-        
-        Args:
-            validation_results: Résultats de validation
-            
-        Returns:
-            Score entre 0.0 et 1.0
-        """
-        error_count = len(validation_results['errors'])
-        warning_count = len(validation_results['warnings'])
-        
-        # Score basé sur le nombre d'erreurs et avertissements
-        penalty = error_count * 0.2 + warning_count * 0.1
-        score = max(0.0, 1.0 - penalty)
-        
-        return score
-
+# Classe de mise à jour de la base de données
 class DatabaseUpdater:
     """
     A class to handle incremental updates to DuckDB databases.
     
-    Supports adding, updating, and merging data while maintaining
-    consistency between fact, dimension, and metadata tables.
+    Supports updating metadata, fact tables, and dimension tables while maintaining
+    consistency and handling type conflicts. Includes duplicate removal and index management.
     """
-    
+    # Initialisation
     def __init__(self, 
                  connection: duckdb.DuckDBPyConnection,
                  categorical_threshold: Optional[int] = 50,
                  log_filename: Optional[os.PathLike] = None,
-                 conflict_resolution_strategy: ConflictResolutionStrategy = ConflictResolutionStrategy.PROMOTE_TYPES,
-                 validation_level: DataValidationLevel = DataValidationLevel.BASIC,
                  max_workers: int = 4,
                  batch_size: int = 10000):
         """
@@ -265,15 +51,12 @@ class DatabaseUpdater:
             connection: DuckDB connection object
             categorical_threshold: Maximum unique values for categorical columns
             log_filename: Path to log file
-            conflict_resolution_strategy: Strategy for resolving type conflicts
-            validation_level: Level of data validation
             max_workers: Maximum number of parallel workers
             batch_size: Size of batches for processing
         """
+        # Initialisation des arguments
         self.conn = connection
         self.categorical_threshold = categorical_threshold
-        self.conflict_resolution_strategy = conflict_resolution_strategy
-        self.validation_level = validation_level
         self.max_workers = max_workers
         self.batch_size = batch_size
         
@@ -284,154 +67,368 @@ class DatabaseUpdater:
         
         # Cache pour les métadonnées
         self._metadata_cache = None
-        self._dimension_cache = {}
-        
-        # Composants de validation et résolution de conflits
-        self.data_quality_checker = DataQualityChecker()
-        self.conflict_resolutions = {}
         
         # Verrou pour les opérations thread-safe
         self._lock = threading.Lock()
     
-    def load_current_metadata(self) -> pd.DataFrame:
+    # Méthode de mise à jour de la base de données
+    def update_database(self,
+                       update_df: pd.DataFrame,
+                       check_duplicates_db: bool = True,
+                       check_duplicates_update: bool = True,
+                       keep: Literal[False, 'first', 'last'] = False,
+                       indexes: Optional[Union[List[str], List[List[str]]]] = None) -> Dict:
         """
-        Load current metadata from the database.
+        Update the entire database with new data.
         
+        Args:
+            update_df: DataFrame containing update data
+            check_duplicates_db: Whether to check duplicates in existing database
+            check_duplicates_update: Whether to check duplicates in update DataFrame
+            keep: Which duplicates to keep when removing duplicates
+            indexes: List of index definitions (single columns or composite indexes)
+            
         Returns:
-            DataFrame containing current metadata
+            Dictionary with update statistics
         """
-        if self._metadata_cache is None:
+        # Logging
+        self.logger.info("Updating the database")
+        
+        # Statistiques de mise à jour
+        stats = {
+            'metadata_changes': {},
+            'fact_table_changes': {},
+            'dimension_changes': {},
+            'duplicates_removed': {'database': 0, 'update': 0},
+            'indexes_updated': []
+        }
+        
+        # Étape 1: Suppression des doublons dans les données de mise à jour si demandée
+        if check_duplicates_update:
+            update_df = self._remove_duplicates_from_dataframe(update_df, keep, 'update')
+            stats['duplicates_removed']['update'] = len(update_df)
+        
+        # Étape 2: Suppression des doublons dans la base de données existante si demandée
+        if check_duplicates_db:
+            removed_count = self._remove_duplicates_from_database(keep)
+            stats['duplicates_removed']['database'] = removed_count
+        
+        # Étape 3: Mise à jour des métadonnées
+        stats['metadata_changes'] = self.update_metadata(update_df)
+        
+        # Étape 4: Mise à jour de la table de faits
+        stats['fact_table_changes'] = self.update_fact_table(update_df)
+        
+        # Étape 5: Mise à jour des tables de dimensions
+        stats['dimension_changes'] = self.update_dimension_tables(update_df)
+        
+        # Étape 6: Mise à jour des index si spécifiés
+        if indexes is not None:
+            stats['indexes_updated'] = self.update_indexes(indexes)
+        
+        # Invalidation du cache des métadonnées
+        self._metadata_cache = None
+        
+        # Logging
+        self.logger.info("Finishing the update of the database")
+
+        return stats
+    
+    # Méthode de mise à jour des métadonnées
+    def update_metadata(self, update_df: pd.DataFrame) -> Dict:
+        """
+        Update metadata table with new columns and resolve type conflicts.
+        
+        Args:
+            update_df: DataFrame containing new data
+            
+        Returns:
+            Dictionary with metadata update statistics
+        """
+        # Logging
+        self.logger.info("Updating the metadata table")
+        
+        stats = {
+            'columns_added': [],
+            'types_changed': [],
+            'categorical_changes': [],
+            'conflicts_resolved': []
+        }
+        
+        # Chargement des métadonnées actuelles
+        current_metadata = self._load_current_metadata()
+        current_columns = set(current_metadata['name'].values) if len(current_metadata) > 0 else set()
+        new_columns = set(update_df.columns)
+        
+        # Identification des nouvelles colonnes
+        columns_to_add = new_columns - current_columns
+        
+        # Ajout des nouvelles colonnes aux métadonnées
+        for col in columns_to_add:
+            self._add_column_to_metadata(col, update_df)
+            stats['columns_added'].append(col)
+        
+        # Vérification des conflits de types pour les colonnes existantes
+        for col in current_columns.intersection(new_columns):
+            conflict_resolution = self._resolve_type_conflicts(col, update_df, current_metadata)
+            if conflict_resolution:
+                stats['conflicts_resolved'].append(conflict_resolution)
+                if conflict_resolution['type_changed']:
+                    stats['types_changed'].append({
+                        'column': col,
+                        'old_type': conflict_resolution['old_type'],
+                        'new_type': conflict_resolution['new_type'],
+                        'strategy': conflict_resolution['strategy']
+                    })
+        
+        # Vérification des changements catégoriels
+        categorical_changes = self._update_categorical_status(update_df, current_metadata)
+        stats['categorical_changes'] = categorical_changes
+        
+        return stats
+    
+    # Méthode de mise à jour de la table des faits
+    def update_fact_table(self, update_df: pd.DataFrame) -> Dict:
+        """
+        Update fact table with new columns, rows, and type changes.
+        
+        Args:
+            update_df: DataFrame containing update data
+            
+        Returns:
+            Dictionary with fact table update statistics
+        """
+        # Logging
+        self.logger.info("Updating the fact table")
+        
+        stats = {
+            'columns_added': [],
+            'rows_added': 0,
+            'rows_updated': 0,
+            'types_updated': []
+        }
+        
+        # Récupération de la structure actuelle de la fact table
+        try:
+            current_columns = [col[0] for col in self.conn.execute("DESCRIBE fact_table").fetchall()]
+        except:
+            # Table n'existe pas encore
+            current_columns = []
+        
+        # Ajout des colonnes manquantes
+        new_columns = set(update_df.columns) - set(current_columns)
+        for col in new_columns:
+            self._add_column_to_fact_table(col, update_df)
+            stats['columns_added'].append(col)
+        
+        # Mise à jour des types de colonnes si nécessaire
+        for col in set(update_df.columns).intersection(set(current_columns)):
+            if self._update_column_type_in_fact_table(col, update_df):
+                stats['types_updated'].append(col)
+        
+        # Ajout/mise à jour des lignes
+        if len(current_columns) > 0:
+            # Mise à jour avec upsert basé sur toutes les colonnes communes
+            merge_keys = list(set(update_df.columns).intersection(set(current_columns)))
+            upsert_stats = self._upsert_to_fact_table(update_df, merge_keys)
+            stats['rows_added'] = upsert_stats['rows_added']
+            stats['rows_updated'] = upsert_stats['rows_updated']
+        else:
+            # Création de la table avec les données
+            stats['rows_added'] = self._create_fact_table_with_data(update_df)
+        
+        return stats
+    
+    # Méthode de mise à jour des tables de dimension
+    def update_dimension_tables(self, update_df: pd.DataFrame) -> Dict:
+        """
+        Update dimension tables by removing non-categorical tables and updating values.
+        
+        Args:
+            update_df: DataFrame containing update data
+            
+        Returns:
+            Dictionary with dimension table update statistics
+        """
+        # Logging
+        self.logger.info("Updating dimension tables")
+        
+        stats = {
+            'tables_removed': [],
+            'values_added': {},
+            'metadata_updated': []
+        }
+        
+        # Chargement des métadonnées actuelles
+        current_metadata = self._load_current_metadata()
+        
+        # Vérification de chaque colonne pour les changements catégoriels
+        # Parcours des colonnes référencées dans les méta-données
+        for _, row in current_metadata.iterrows():
+            # Extraction du nom et
+            col_name = row['name']
+            # Extraction du statut de la colonne
+            was_categorical = row['is_categorical']
+            
+            # Parcours des colonnes
+            if col_name in update_df.columns:
+                # Vérification si la colonne est toujours catégorielle
+                unique_count = update_df[col_name].nunique()
+                is_still_categorical = (
+                    str(update_df[col_name].dtype) == 'object' and 
+                    unique_count <= self.categorical_threshold
+                )
+                # Distinction des différents cas
+                # N'est plus catégorielle
+                if was_categorical and not is_still_categorical:
+                    # Suppression de la table de dimension
+                    table_name = f"dim_{col_name}"
+                    try:
+                        # Suppression de la table des métadonnées
+                        self.conn.execute(f"DROP TABLE IF EXISTS {table_name}")
+                        stats['tables_removed'].append(table_name)
+                        
+                        # Mise à jour du statut catégoriel dans les métadonnées
+                        self.conn.execute(
+                            "UPDATE metadata SET is_categorical = ? WHERE name = ?",
+                            [False, col_name]
+                        )
+                        stats['metadata_updated'].append(col_name)
+                        # Logging
+                        self.logger.info(f"Suppression de la table de dimension {table_name} (trop de modalités)")
+                    except Exception as e:
+                        # Logging
+                        self.logger.error(f"Erreur lors de la suppression de {table_name}: {e}")
+                # Est toujours catégorielle
+                elif is_still_categorical:
+                    # Mise à jour des valeurs de la dimension
+                    values_added = self._update_dimension_values(col_name, update_df[col_name])
+                    if values_added > 0:
+                        stats['values_added'][col_name] = values_added
+                # Devient catégorielle
+        
+        return stats
+    
+    # Méthode de mise à jour des index
+    def update_indexes(self, indexes: Union[List[str], List[List[str]]]) -> List[str]:
+        """
+        Update database indexes by removing old ones and creating new ones.
+        
+        Args:
+            indexes: List of index definitions (column names or lists of column names)
+            
+        Returns:
+            List of created index names
+        """
+        # Logging
+        self.logger.info("Updating indexes")
+        
+        # Suppression de tous les index existants (sauf les index système)
+        try:
+            # Récupération des index existants
+            existing_indexes = self.conn.execute("""
+                SELECT name FROM sqlite_master 
+                WHERE type = 'index' AND name NOT LIKE 'sqlite_%'
+            """).fetchall()
+            # Parcours des index
+            for idx in existing_indexes:
+                try:
+                    self.conn.execute(f"DROP INDEX IF EXISTS {idx[0]}")
+                    self.logger.info(f"Index {idx[0]} supprimé")
+                except Exception as e:
+                    self.logger.warning(f"Impossible de supprimer l'index {idx[0]}: {e}")
+        except Exception as e:
+            self.logger.warning(f"Erreur lors de la récupération des index existants: {e}")
+        
+        # Création des nouveaux index
+        for i, index_def in enumerate(indexes):
             try:
-                self._metadata_cache = self.conn.execute("SELECT * FROM metadata").fetchdf()
+                if isinstance(index_def, str):
+                    # Index sur une seule colonne
+                    index_name = f"idx_{index_def}"
+                    # Création de la requête
+                    create_query = f"CREATE INDEX {index_name} ON fact_table ({index_def})"
+                elif isinstance(index_def, list):
+                    # Index composite
+                    columns_str = ', '.join(index_def)
+                    index_name = f"idx_{'_'.join(index_def)}"
+                    # Création de la requête
+                    create_query = f"CREATE INDEX {index_name} ON fact_table ({columns_str})"
+                else:
+                    # Logging
+                    self.logger.warning(f"Définition d'index invalide: {index_def}")
+                    continue
+                # Exécution de la requête
+                self.conn.execute(create_query)
+                # Logging
+                self.logger.info(f"Index {index_name} créé")
+                
             except Exception as e:
-                self.logger.error(f"Failed to load metadata: {e}")
-                raise
-        
-        return self._metadata_cache
+                self.logger.error(f"Erreur lors de la création de l'index {index_def}: {e}")
     
-    def validate_and_cleanse_data(self, df: pd.DataFrame) -> Tuple[pd.DataFrame, Dict[str, Any]]:
+    # Méthodes pour le traitement par lots et la parallélisation
+    # Méthode de processing en batchs
+    def _process_large_dataframe_in_batches(self, df: pd.DataFrame, 
+                                          process_func, batch_size: Optional[int] = None) -> List:
         """
-        Validate and cleanse incoming data.
+        Method processing large pandas DataFrames in batches
         
         Args:
-            df: DataFrame to validate and cleanse
+            df: DataFrame à traiter
+            process_func: Fonction de traitement à appliquer à chaque lot
+            batch_size: Taille des lots (utilise self.batch_size par défaut)
             
         Returns:
-            Tuple of (cleansed_df, validation_results)
+            Liste des résultats de traitement
+        """
+        # Initialisation de la taille des batchs
+        batch_size = batch_size or self.batch_size
+        # Initialisation des résultats
+        results = []
+        
+        # Logging
+        self.logger.info(f"Traitement par lots de {len(df)} lignes avec des lots de {batch_size}")
+        # Parcours des observations du jeu de données en batch
+        for i in range(0, len(df), batch_size):
+            # Circonscription du batch
+            batch_start = i
+            batch_end = min(i + batch_size, len(df))
+            batch_df = df.iloc[batch_start:batch_end].copy()
             
-        Example:
-            >>> updater = DatabaseUpdater(connection)
-            >>> clean_df, results = updater.validate_and_cleanse_data(raw_df)
-            >>> if results['quality_score'] < 0.8:
-            ...     print("Data quality issues detected")
-        """
-        self.logger.info("Validation et nettoyage des données")
+            try:
+                # Processing du batch
+                result = process_func(batch_df)
+                # Ajout du résultat
+                results.append(result)
+            except Exception as e:
+                # Logging
+                self.logger.error(f"Erreur lors du traitement du lot {batch_start}-{batch_end}: {e}")
+                # Ajout d'un résultat vide
+                results.append(None)
         
-        # Validation initiale
-        validation_results = self.data_quality_checker.validate_dataframe(df, self.validation_level)
-        
-        # Nettoyage des données
-        cleansed_df = df.copy()
-        
-        # Nettoyage basique
-        cleansed_df = self._basic_data_cleansing(cleansed_df)
-        
-        # Nettoyage avancé si validation stricte
-        if self.validation_level == DataValidationLevel.STRICT:
-            cleansed_df = self._advanced_data_cleansing(cleansed_df, validation_results)
-        
-        # Re-validation après nettoyage
-        final_validation = self.data_quality_checker.validate_dataframe(
-            cleansed_df, DataValidationLevel.BASIC
-        )
-        
-        validation_results['post_cleansing'] = final_validation
-        validation_results['improvement'] = (
-            final_validation['quality_score'] - validation_results['quality_score']
-        )
-        
-        return cleansed_df, validation_results
+        return results
     
-    def resolve_type_conflicts(self, df: pd.DataFrame, 
-                              schema_changes: Dict) -> Tuple[pd.DataFrame, Dict[str, ConflictResolution]]:
+    # Méthode de mise à jour en parallèle des tables de dimension
+    def _parallel_dimension_update(self, columns_and_values: List[tuple]) -> Dict[str, int]:
         """
-        Resolve type conflicts between new data and existing schema.
+        Mise à jour parallèle des tables de dimensions.
         
         Args:
-            df: DataFrame with potential type conflicts
-            schema_changes: Detected schema changes
+            columns_and_values: Liste de tuples (nom_colonne, valeurs_uniques)
             
         Returns:
-            Tuple of (resolved_df, conflict_resolutions)
+            Dictionnaire des statistiques de mise à jour par dimension
         """
-        self.logger.info("Résolution des conflits de types")
-        
-        resolved_df = df.copy()
-        conflict_resolutions = {}
-        
-        for type_change in schema_changes.get('type_changes', []):
-            column = type_change['column']
-            old_type = type_change['old_type']
-            new_type = type_change['new_type']
-            
-            resolution = ConflictResolution(
-                column_name=column,
-                source_type=new_type,
-                target_type=old_type,
-                resolution_strategy=self.conflict_resolution_strategy.value
-            )
-            
-            # Application de la stratégie de résolution
-            if self.conflict_resolution_strategy == ConflictResolutionStrategy.PROMOTE_TYPES:
-                resolved_df[column] = self._promote_types(resolved_df[column], old_type, new_type)
-                
-            elif self.conflict_resolution_strategy == ConflictResolutionStrategy.COERCE_TO_STRING:
-                resolved_df[column] = resolved_df[column].astype(str)
-                
-            elif self.conflict_resolution_strategy == ConflictResolutionStrategy.STRICT_VALIDATION:
-                # Validation stricte - échec si conflit non résolvable
-                if not self._can_convert_type(resolved_df[column], old_type):
-                    raise ValueError(f"Conflit de type non résolvable pour {column}: {new_type} -> {old_type}")
-                    
-            elif self.conflict_resolution_strategy == ConflictResolutionStrategy.USER_DEFINED:
-                if column in self.conflict_resolutions:
-                    custom_func = self.conflict_resolutions[column].custom_function
-                    if custom_func:
-                        resolved_df[column] = custom_func(resolved_df[column], old_type, new_type)
-            
-            conflict_resolutions[column] = resolution
-        
-        return resolved_df, conflict_resolutions
-    
-    def parallel_dimension_update(self, df: pd.DataFrame) -> Dict[str, int]:
-        """
-        Update dimension tables in parallel for better performance.
-        
-        Args:
-            df: DataFrame containing dimension values
-            
-        Returns:
-            Statistics of dimension updates
-        """
-        self.logger.info("Mise à jour parallèle des dimensions")
-        
-        metadata = self.load_current_metadata()
-        categorical_columns = metadata[metadata['is_categorical'] == True]['name'].tolist()
-        
-        # Filtrage des colonnes catégorielles présentes dans le DataFrame
-        dimensions_to_update = [col for col in categorical_columns if col in df.columns]
-        
-        if not dimensions_to_update:
-            return {}
+        # Logging
+        self.logger.info(f"Mise à jour parallèle de {len(columns_and_values)} dimensions")
         
         update_stats = {}
         
-        # Traitement parallèle des dimensions
         with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
             # Soumission des tâches
             future_to_dimension = {
-                executor.submit(self._update_single_dimension, df[dim].unique(), dim): dim 
-                for dim in dimensions_to_update
+                executor.submit(self._update_dimension_values, col_name, values): col_name
+                for col_name, values in columns_and_values
             }
             
             # Récupération des résultats
@@ -441,564 +438,370 @@ class DatabaseUpdater:
                     values_added = future.result()
                     update_stats[dimension] = values_added
                 except Exception as e:
-                    self.logger.error(f"Erreur lors de la mise à jour de {dimension}: {e}")
+                    self.logger.error(f"Erreur lors de la mise à jour parallèle de {dimension}: {e}")
                     update_stats[dimension] = 0
         
         return update_stats
     
-    def memory_efficient_merge(self, df: pd.DataFrame, 
-                              merge_keys: List[str],
-                              chunk_size: Optional[int] = None) -> Dict[str, Any]:
-        """
-        Perform memory-efficient merge for large DataFrames.
-        
-        Args:
-            df: Large DataFrame to merge
-            merge_keys: Keys for merging
-            chunk_size: Size of chunks for processing
-            
-        Returns:
-            Merge statistics
-        """
-        chunk_size = chunk_size or self.batch_size
-        
-        self.logger.info(f"Fusion optimisée mémoire par chunks de {chunk_size}")
-        
-        merge_stats = {
-            'total_rows': len(df),
-            'chunks_processed': 0,
-            'rows_added': 0,
-            'rows_updated': 0,
-            'memory_usage': []
-        }
-        
-        # Traitement par chunks
-        for chunk_start in range(0, len(df), chunk_size):
-            chunk_end = min(chunk_start + chunk_size, len(df))
-            chunk_df = df.iloc[chunk_start:chunk_end].copy()
-            
-            # Mesure de l'utilisation mémoire
-            memory_before = chunk_df.memory_usage(deep=True).sum()
-            
-            # Traitement du chunk
-            chunk_stats = self._process_chunk(chunk_df, merge_keys)
-            
-            # Mise à jour des statistiques
-            merge_stats['chunks_processed'] += 1
-            merge_stats['rows_added'] += chunk_stats.get('rows_added', 0)
-            merge_stats['rows_updated'] += chunk_stats.get('rows_updated', 0)
-            merge_stats['memory_usage'].append(memory_before)
-            
-            # Nettoyage explicite
-            del chunk_df
-            
-        # Statistiques finales
-        merge_stats['avg_memory_per_chunk'] = np.mean(merge_stats['memory_usage'])
-        merge_stats['peak_memory'] = max(merge_stats['memory_usage'])
-        
-        return merge_stats
+    # Méthodes privées utilitaires
     
-    def _basic_data_cleansing(self, df: pd.DataFrame) -> pd.DataFrame:
+    def _load_current_metadata(self) -> pd.DataFrame:
         """
-        Nettoyage basique des données.
+        Chargement des métadonnées actuelles depuis la base de données.
         
-        Args:
-            df: DataFrame à nettoyer
-            
         Returns:
-            DataFrame nettoyé
+            DataFrame contenant les métadonnées actuelles
         """
-        cleansed_df = df.copy()
+        # Chargement de la table si elle n'est pas en cache
+        if self._metadata_cache is None:
+            try:
+                # Chargement
+                self._metadata_cache = self.conn.execute("SELECT * FROM metadata").fetchdf()
+            except:
+                # Si la table n'existe pas encore, on l'initialise vide
+                self._metadata_cache = pd.DataFrame(columns=['name', 'label', 'python_type', 'sql_type', 'is_categorical'])
         
-        # Suppression des doublons
-        initial_count = len(cleansed_df)
-        cleansed_df = cleansed_df.drop_duplicates()
-        if len(cleansed_df) != initial_count:
-            self.logger.info(f"Suppression de {initial_count - len(cleansed_df)} doublons")
-        
-        # Nettoyage des chaînes de caractères
-        for column in cleansed_df.columns:
-            if cleansed_df[column].dtype == 'object':
-                # Suppression des espaces en début/fin
-                cleansed_df[column] = cleansed_df[column].astype(str).str.strip()
-                
-                # Remplacement des chaînes vides par NaN
-                cleansed_df[column] = cleansed_df[column].replace('', np.nan)
-                
-                # Normalisation de la casse (optionnel)
-                # cleansed_df[column] = cleansed_df[column].str.lower()
-        
-        return cleansed_df
+        return self._metadata_cache
     
-    def _advanced_data_cleansing(self, df: pd.DataFrame, 
-                               validation_results: Dict[str, Any]) -> pd.DataFrame:
+    # Méthode de suppression des doublons d'un jeu de données
+    def _remove_duplicates_from_dataframe(self, df: pd.DataFrame, 
+                                        keep: Literal[False, 'first', 'last'],
+                                        source: str) -> pd.DataFrame:
         """
-        Nettoyage avancé basé sur les résultats de validation.
+        Suppression des doublons d'un DataFrame en excluant la colonne 'value'.
         
         Args:
-            df: DataFrame à nettoyer
-            validation_results: Résultats de validation
+            df: DataFrame à traiter
+            keep: Stratégie de conservation des doublons
+            source: Source des données pour le logging
             
         Returns:
-            DataFrame nettoyé
+            DataFrame sans doublons
         """
-        cleansed_df = df.copy()
+        # Comptage du nombre d'observations
+        initial_count = len(df)
         
-        # Traitement des colonnes avec trop de NULL
-        for column, stats in validation_results.get('column_stats', {}).items():
-            if stats['null_ratio'] > 0.8:
-                self.logger.warning(f"Suppression de la colonne {column} (trop de NULL)")
-                cleansed_df = cleansed_df.drop(columns=[column])
+        # Identification des colonnes à vérifier (toutes sauf 'value' si elle existe)
+        columns_to_check = [col for col in df.columns if col != 'value']
         
-        return cleansed_df
+        # Suppression des duplicats
+        if keep == False:
+            df_cleaned = df.drop_duplicates(subset=columns_to_check, keep=False)
+        else:
+            df_cleaned = df.drop_duplicates(subset=columns_to_check, keep=keep)
+        
+        # COmptage du nombre d'obserabtion supprimées
+        removed_count = initial_count - len(df_cleaned)
+        if removed_count > 0:
+            self.logger.warning(f"Suppression des doublons ({source}): {removed_count} observations supprimées")
+        
+        return df_cleaned
     
-    def _promote_types(self, series: pd.Series, old_type: str, new_type: str) -> pd.Series:
+    # Méthode de déduplication de la base de données
+    def _remove_duplicates_from_database(self, keep: Literal[False, 'first', 'last']) -> int:
         """
-        Promeut les types selon une hiérarchie logique.
+        Suppression des doublons dans la table de faits existante.
         
         Args:
-            series: Série à convertir
-            old_type: Type actuel
-            new_type: Nouveau type
+            keep: Stratégie de conservation des doublons
             
         Returns:
-            Série avec type promu
-        """
-        # Hiérarchie de promotion: int -> float -> str
-        type_hierarchy = {
-            'int64': 1,
-            'float64': 2,
-            'object': 3
-        }
-        
-        old_level = type_hierarchy.get(old_type, 0)
-        new_level = type_hierarchy.get(new_type, 0)
-        
-        if new_level > old_level:
-            # Promotion vers un type plus général
-            if new_level == 2:  # float
-                return pd.to_numeric(series, errors='coerce')
-            elif new_level == 3:  # string
-                return series.astype(str)
-        
-        # Si pas de promotion possible, retourner la série originale
-        return series
-    
-    def _can_convert_type(self, series: pd.Series, target_type: str) -> bool:
-        """
-        Vérifie si une série peut être convertie vers un type cible.
-        
-        Args:
-            series: Série à tester
-            target_type: Type cible
-            
-        Returns:
-            True si la conversion est possible
+            Nombre de lignes supprimées
         """
         try:
-            if 'int' in target_type:
-                pd.to_numeric(series, errors='raise')
-            elif 'float' in target_type:
-                pd.to_numeric(series, errors='raise')
-            elif target_type == 'object':
-                series.astype(str)
-            return True
-        except (ValueError, TypeError):
-            return False
-    
-    def _update_single_dimension(self, unique_values: np.ndarray, dimension_name: str) -> int:
-        """
-        Met à jour une table de dimension spécifique (thread-safe).
-        
-        Args:
-            unique_values: Valeurs uniques de la dimension
-            dimension_name: Nom de la dimension
+            # Récupération du nombre initial de lignes
+            initial_count = self.conn.execute("SELECT COUNT(*) FROM fact_table").fetchone()[0]
             
-        Returns:
-            Nombre de nouvelles valeurs ajoutées
-        """
-        with self._lock:
-            try:
-                return self._create_dimension_table_values(dimension_name, unique_values)
-            except Exception as e:
-                self.logger.error(f"Erreur lors de la mise à jour de {dimension_name}: {e}")
+            # Récupération des colonnes (exclure 'value' si elle existe)
+            all_columns = [col[0] for col in self.conn.execute("DESCRIBE fact_table").fetchall()]
+            columns_to_check = [col for col in all_columns if col != 'value']
+            
+            if not columns_to_check:
                 return 0
+            
+            # Construction de la requête de suppression des doublons
+            columns_str = ', '.join(columns_to_check)
+            
+            if keep == False:
+                # Suppression de tous les doublons
+                delete_query = f"""
+                DELETE FROM fact_table 
+                WHERE rowid NOT IN (
+                    SELECT MIN(rowid) 
+                    FROM fact_table 
+                    GROUP BY {columns_str}
+                    HAVING COUNT(*) = 1
+                )
+                """
+            else:
+                # Conservation du premier ou dernier
+                order_clause = "ASC" if keep == 'first' else "DESC"
+                delete_query = f"""
+                DELETE FROM fact_table 
+                WHERE rowid NOT IN (
+                    SELECT rowid FROM (
+                        SELECT rowid, ROW_NUMBER() OVER (
+                            PARTITION BY {columns_str} 
+                            ORDER BY rowid {order_clause}
+                        ) as rn
+                        FROM fact_table
+                    ) WHERE rn = 1
+                )
+                """
+            
+            self.conn.execute(delete_query)
+            
+            # Calcul des lignes supprimées
+            final_count = self.conn.execute("SELECT COUNT(*) FROM fact_table").fetchone()[0]
+            removed_count = initial_count - final_count
+            
+            if removed_count > 0:
+                self.logger.warning(f"Suppression des doublons (base de données): {removed_count} lignes supprimées")
+            
+            return removed_count
+            
+        except Exception as e:
+            self.logger.error(f"Erreur lors de la suppression des doublons dans la base: {e}")
+            return 0
     
-    def _create_dimension_table_values(self, dimension_name: str, values: np.ndarray) -> int:
+    # Méthode d'ajout des informations d'une colonne à la table des métadonnées
+    def _add_column_to_metadata(self, column: str, df: pd.DataFrame) -> None:
         """
-        Crée ou met à jour les valeurs d'une table de dimension.
+        Ajout d'une nouvelle colonne aux métadonnées.
         
         Args:
-            dimension_name: Nom de la dimension
-            values: Valeurs à ajouter
-            
-        Returns:
-            Nombre de valeurs ajoutées
+            column: Nom de la colonne
+            df: DataFrame contenant la colonne
         """
-        table_name = f"dim_{dimension_name}"
-        
-        # Création de la table si elle n'existe pas
-        create_query = f"""
-            CREATE TABLE IF NOT EXISTS {table_name} (
-                value VARCHAR PRIMARY KEY,
-                label VARCHAR
-            )
-        """
-        self.conn.execute(create_query)
-        
-        values_added = 0
-        
-        # Insertion des nouvelles valeurs
-        for value in values:
-            if pd.notna(value):
-                try:
-                    insert_query = f"""
-                        INSERT INTO {table_name} (value, label) 
-                        VALUES (?, ?)
-                        ON CONFLICT (value) DO NOTHING
-                    """
-                    self.conn.execute(insert_query, [str(value), str(value)])
-                    if self.conn.execute("SELECT changes()").fetchone()[0] > 0:
-                        values_added += 1
-                except Exception as e:
-                    self.logger.warning(f"Impossible d'insérer la valeur {value} dans {table_name}: {e}")
-        
-        return values_added
-    
-    def _process_chunk(self, chunk_df: pd.DataFrame, merge_keys: List[str]) -> Dict[str, int]:
-        """
-        Traite un chunk de données.
-        
-        Args:
-            chunk_df: Chunk à traiter
-            merge_keys: Clés de fusion
-            
-        Returns:
-            Statistiques du traitement du chunk
-        """
-        # Validation du chunk
-        validation_results = self.data_quality_checker.validate_dataframe(
-            chunk_df, DataValidationLevel.BASIC
+        # Identification du type de la colonne
+        dtype = str(df[column].dtype)
+        # Conversion du type en SQL
+        sql_type = SchemaBuilder._map_python_to_sql_type(dtype)
+        # Définition si la variable est catégorielle
+        is_categorical = (
+            dtype == 'object' and 
+            df[column].nunique() <= self.categorical_threshold
         )
         
-        if validation_results['quality_score'] < 0.5:
-            self.logger.warning("Qualité de données faible dans le chunk, nettoyage appliqué")
-            chunk_df = self._basic_data_cleansing(chunk_df)
+        # Création de la table metadata si elle n'existe pas
+        self.conn.execute("""
+            CREATE TABLE IF NOT EXISTS metadata (
+                name VARCHAR,
+                label VARCHAR,
+                python_type VARCHAR,
+                sql_type VARCHAR,
+                is_categorical BOOLEAN
+            )
+        """)
         
-        # Insertion du chunk
-        return self.append_to_fact_table(chunk_df)
-
-    def detect_schema_changes(self, new_df: pd.DataFrame) -> Dict:
+        # Insertion de la nouvelle colonne
+        label = column.replace('_', ' ').title()
+        self.conn.execute("""
+            INSERT INTO metadata (name, label, python_type, sql_type, is_categorical)
+            VALUES (?, ?, ?, ?, ?)
+        """, [column, label, dtype, sql_type, is_categorical])
+        # Logging
+        self.logger.info(f"Ajout de la colonne {column} aux métadonnées")
+    
+    # Méthode de résolutions des conflits de types
+    def _resolve_type_conflicts(self, column: str, df: pd.DataFrame, 
+                               current_metadata: pd.DataFrame) -> Optional[Dict]:
         """
-        Detect schema changes between new data and existing database.
+        Résolution des conflits de types selon la stratégie la moins contraignante.
         
         Args:
-            new_df: New DataFrame to compare
+            column: Nom de la colonne
+            df: DataFrame avec les nouvelles données
+            current_metadata: Métadonnées actuelles
             
         Returns:
-            Dictionary describing detected changes
+            Dictionnaire avec les informations de résolution du conflit
         """
-        changes = {
-            'new_columns': [],
-            'removed_columns': [],
-            'type_changes': [],
-            'categorical_changes': []
+        # Identification du type actuel de la colonne dans la base de données
+        current_type = current_metadata[current_metadata['name'] == column]['python_type'].values[0]
+        # Identification du nouveau type
+        new_type = str(df[column].dtype)
+        # Ne fait rien si inchangé
+        if current_type == new_type:
+            return None
+        
+        # Hiérarchie des types (du plus contraignant au moins contraignant)
+        type_hierarchy = {
+            'bool': 1,
+            'int64': 2,
+            'float64': 3,
+            'object': 4
         }
         
-        # Chargement des métadonnées actuelles
-        current_metadata = self.load_current_metadata()
-        current_columns = set(current_metadata['name'].values)
-        new_columns = set(new_df.columns)
+        current_level = type_hierarchy.get(current_type, 0)
+        new_level = type_hierarchy.get(new_type, 0)
         
-        # Nouvelles colonnes
-        changes['new_columns'] = list(new_columns - current_columns)
+        # Sélection du type le moins contraignant
+        if new_level > current_level:
+            resolved_type = new_type
+            strategy = ConflictResolutionStrategy.PROMOTE_TYPES.value
+        else:
+            resolved_type = current_type
+            strategy = ConflictResolutionStrategy.PROMOTE_TYPES.value
         
-        # Colonnes supprimées (non présentes dans les nouvelles données)
-        changes['removed_columns'] = list(current_columns - new_columns)
+        # Conversion en python
+        sql_type = SchemaBuilder._map_python_to_sql_type(resolved_type)
+        # Mise à jour des métadonnées
+        self.conn.execute("""
+            UPDATE metadata 
+            SET python_type = ?, sql_type = ?
+            WHERE name = ?
+        """, [resolved_type, sql_type, column])
+        # Logging
+        self.logger.info(f"Résolution de conflit de type pour {column}: {current_type} -> {resolved_type}")
         
-        # Vérification des changements de type
-        for col in current_columns.intersection(new_columns):
-            current_type = current_metadata[current_metadata['name'] == col]['python_type'].values[0]
-            new_type = str(new_df[col].dtype)
+        return {
+            'column': column,
+            'old_type': current_type,
+            'new_type': resolved_type,
+            'strategy': strategy,
+            'type_changed': True
+        }
+    
+    # Méthode de mise à jour du statut de variable catégorielle
+    def _update_categorical_status(self, df: pd.DataFrame, 
+                                 current_metadata: pd.DataFrame) -> List[Dict]:
+        """
+        Mise à jour du statut catégoriel des colonnes.
+        
+        Args:
+            df: DataFrame avec les nouvelles données
+            current_metadata: Métadonnées actuelles
             
-            if current_type != new_type:
-                changes['type_changes'].append({
-                    'column': col,
-                    'old_type': current_type,
-                    'new_type': new_type
-                })
-            
-            # Vérification si une colonne devient catégorielle ou non
-            current_is_cat = current_metadata[current_metadata['name'] == col]['is_categorical'].values[0]
-            new_unique_count = new_df[col].nunique()
-            new_is_cat = (str(new_df[col].dtype) == 'object' and 
-                         new_unique_count <= self.categorical_threshold)
-            
-            if current_is_cat != new_is_cat:
-                changes['categorical_changes'].append({
-                    'column': col,
-                    'was_categorical': current_is_cat,
-                    'is_categorical': new_is_cat
-                })
+        Returns:
+            Liste des changements catégoriels
+        """
+        changes = []
+        # Parcours des colonnes
+        for col in df.columns:
+            if col in current_metadata['name'].values:
+                # Identification si la variable dans la base de données est actuellement catégorielle
+                current_is_cat = current_metadata[current_metadata['name'] == col]['is_categorical'].values[0]
+                # Comptage du nombre de modalités pour savoir si après la mise à jour la variable est catégorielle
+                new_unique_count = df[col].nunique()
+                new_is_cat = (
+                    str(df[col].dtype) == 'object' and 
+                    new_unique_count <= self.categorical_threshold
+                )
+                
+                if current_is_cat != new_is_cat:
+                    # Mise à jour du statut dans les métadonnées
+                    self.conn.execute("""
+                        UPDATE metadata 
+                        SET is_categorical = ?
+                        WHERE name = ?
+                    """, [new_is_cat, col])
+                    
+                    changes.append({
+                        'column': col,
+                        'was_categorical': current_is_cat,
+                        'is_categorical': new_is_cat
+                    })
+                    # Logging
+                    self.logger.info(f"Changement de statut catégoriel pour {col}: {current_is_cat} -> {new_is_cat}")
         
         return changes
     
-    def add_new_columns(self, new_columns: List[str], new_df: pd.DataFrame) -> None:
+    # Méthode d'ajout d'une nouvelle colonne à la table des faits
+    def _add_column_to_fact_table(self, column: str, df: pd.DataFrame) -> None:
         """
-        Add new columns to the fact table and update metadata.
+        Ajout d'une nouvelle colonne à la table de faits.
         
         Args:
-            new_columns: List of new column names
-            new_df: DataFrame containing the new columns
+            column: Nom de la colonne
+            df: DataFrame contenant la colonne
         """
-        for col in new_columns:
-            dtype = str(new_df[col].dtype)
-            sql_type = SchemaBuilder._map_python_to_sql_type(dtype)
-            
-            # Ajout de la colonne à la fact table
-            try:
-                # Valeur par défaut selon le type
-                default_value = "NULL"
-                if 'int' in dtype:
-                    default_value = "0"
-                elif 'float' in dtype:
-                    default_value = "0.0"
-                elif dtype == 'bool':
-                    default_value = "FALSE"
-                elif dtype == 'object':
-                    default_value = "''"
-                
-                alter_query = f"ALTER TABLE fact_table ADD COLUMN {col} {sql_type} DEFAULT {default_value}"
-                self.conn.execute(alter_query)
-                
-                self.logger.info(f"Added column {col} to fact_table")
-                
-            except Exception as e:
-                self.logger.error(f"Failed to add column {col}: {e}")
-                raise
-            
-            # Mise à jour des métadonnées
-            self.update_metadata_for_column(col, new_df)
-            
-            # Si la colonne est catégorielle, créer la table de dimension
-            if dtype == 'object' and new_df[col].nunique() <= self.categorical_threshold:
-                self.create_dimension_table(col, new_df[col].unique())
-    
-    def update_metadata_for_column(self, column: str, df: pd.DataFrame) -> None:
-        """
-        Update or insert metadata for a specific column.
-        
-        Args:
-            column: Column name
-            df: DataFrame containing the column
-        """
+        # Identification du type de la colonne
         dtype = str(df[column].dtype)
+        # Conversion du type en SQL
         sql_type = SchemaBuilder._map_python_to_sql_type(dtype)
-        is_categorical = (dtype == 'object' and 
-                         df[column].nunique() <= self.categorical_threshold)
         
-        # Vérification si la colonne existe déjà dans les métadonnées
-        existing = self.conn.execute(
-            "SELECT COUNT(*) FROM metadata WHERE name = ?", 
-            [column]
-        ).fetchone()[0]
-        
-        if existing > 0:
-            # Mise à jour
-            update_query = """
-                UPDATE metadata 
-                SET python_type = ?, sql_type = ?, is_categorical = ?
-                WHERE name = ?
-            """
-            self.conn.execute(update_query, [dtype, sql_type, is_categorical, column])
-            self.logger.info(f"Updated metadata for column {column}")
+        # Valeur par défaut selon le type
+        if 'int' in dtype:
+            default_value = "0"
+        elif 'float' in dtype:
+            default_value = "0.0"
+        elif dtype == 'bool':
+            default_value = "FALSE"
         else:
-            # Insertion
-            insert_query = """
-                INSERT INTO metadata (name, label, python_type, sql_type, is_categorical)
-                VALUES (?, ?, ?, ?, ?)
-            """
-            label = column.replace('_', ' ').title()
-            self.conn.execute(insert_query, [column, label, dtype, sql_type, is_categorical])
-            self.logger.info(f"Inserted metadata for column {column}")
+            default_value = "''"
+        # Requête d'ajout de la colonne
+        alter_query = f"ALTER TABLE fact_table ADD COLUMN {column} {sql_type} DEFAULT {default_value}"
+        # Exécution de la requête
+        self.conn.execute(alter_query)
+        # Logging
+        self.logger.info(f"Ajout de la colonne {column} à la table de faits")
     
-    def create_dimension_table(self, dimension_name: str, values: np.ndarray) -> None:
+    # Mise à jour du type de la colonne dans la table des faist
+    def _update_column_type_in_fact_table(self, column: str, df: pd.DataFrame) -> bool:
         """
-        Create or update a dimension table.
+        Mise à jour du type d'une colonne dans la table de faits.
         
         Args:
-            dimension_name: Name of the dimension
-            values: Unique values for the dimension
-        """
-        table_name = f"dim_{dimension_name}"
-        
-        # Création de la table si elle n'existe pas
-        create_query = f"""
-            CREATE TABLE IF NOT EXISTS {table_name} (
-                value VARCHAR PRIMARY KEY,
-                label VARCHAR
-            )
-        """
-        self.conn.execute(create_query)
-        
-        # Préparation des données
-        dim_df = pd.DataFrame({
-            'value': values,
-            'label': values
-        })
-        dim_df = dim_df.dropna().drop_duplicates()
-        
-        # Insertion des nouvelles valeurs uniquement
-        for _, row in dim_df.iterrows():
-            try:
-                insert_query = f"""
-                    INSERT INTO {table_name} (value, label) 
-                    VALUES (?, ?)
-                    ON CONFLICT (value) DO NOTHING
-                """
-                self.conn.execute(insert_query, [str(row['value']), str(row['label'])])
-            except Exception as e:
-                self.logger.warning(f"Could not insert value {row['value']} into {table_name}: {e}")
-        
-        self.logger.info(f"Updated dimension table {table_name}")
-    
-    def merge_data(self, 
-                   new_df: pd.DataFrame, 
-                   merge_keys: Optional[List[str]] = None,
-                   update_mode: str = 'upsert') -> Dict:
-        """
-        Merge new data into existing fact table.
-        
-        Args:
-            new_df: New data to merge
-            merge_keys: Columns to use as merge keys (for identifying duplicates)
-            update_mode: 'append', 'upsert', or 'replace'
+            column: Nom de la colonne
+            df: DataFrame avec le nouveau type
             
         Returns:
-            Dictionary with merge statistics
+            True si le type a été mis à jour
         """
-        stats = {
-            'rows_added': 0,
-            'rows_updated': 0,
-            'rows_unchanged': 0,
-            'new_columns': [],
-            'new_dimension_values': {}
-        }
-        
-        # Détection des changements de schéma
-        schema_changes = self.detect_schema_changes(new_df)
-        
-        # Ajout des nouvelles colonnes si nécessaire
-        if schema_changes['new_columns']:
-            self.add_new_columns(schema_changes['new_columns'], new_df)
-            stats['new_columns'] = schema_changes['new_columns']
-        
-        # Préparation des données pour l'insertion
-        prepared_df = self.prepare_dataframe_for_insert(new_df)
-        
-        if update_mode == 'append':
-            # Simple ajout des données
-            stats['rows_added'] = self.append_to_fact_table(prepared_df)
-            
-        elif update_mode == 'upsert':
-            # Mise à jour ou insertion basée sur les clés
-            if not merge_keys:
-                self.logger.warning("No merge keys specified for upsert, falling back to append")
-                stats['rows_added'] = self.append_to_fact_table(prepared_df)
-            else:
-                stats.update(self.upsert_to_fact_table(prepared_df, merge_keys))
-                
-        elif update_mode == 'replace':
-            # Remplacement complet des données
-            self.conn.execute("DELETE FROM fact_table")
-            stats['rows_added'] = self.append_to_fact_table(prepared_df)
-            
-        # Mise à jour des tables de dimension
-        stats['new_dimension_values'] = self.update_dimension_tables(new_df)
-        
-        # Invalidation du cache
-        self._metadata_cache = None
-        self._dimension_cache = {}
-        
-        return stats
+        # Note: DuckDB ne supporte pas ALTER COLUMN TYPE directement
+        # Cette méthode pourrait être implémentée en recréant la table si nécessaire
+        # Pour l'instant, on log seulement le changement
+        new_type = str(df[column].dtype)
+        # Logging
+        self.logger.info(f"Type de colonne {column} mis à jour vers {new_type}")
+        return True
     
-    def prepare_dataframe_for_insert(self, df: pd.DataFrame) -> pd.DataFrame:
+    # Méthode de création de la table des faits avec les données
+    def _create_fact_table_with_data(self, df: pd.DataFrame) -> int:
         """
-        Prepare DataFrame for insertion by converting categorical values to IDs.
+        Création de la table de faits avec les données.
         
         Args:
-            df: DataFrame to prepare
+            df: DataFrame avec les données
             
         Returns:
-            Prepared DataFrame
+            Nombre de lignes ajoutées
         """
-        prepared_df = df.copy()
-        metadata = self.load_current_metadata()
+        # Enregistrement d'une table temporaires qui recopie le jeu de données
+        self.conn.register('temp_fact_creation', df)
+        # Recopie dans la table des faits
+        self.conn.execute("""
+            CREATE TABLE fact_table AS 
+            SELECT * FROM temp_fact_creation
+        """)
+        # Suppression de la table temporaire
+        self.conn.execute('DROP VIEW temp_fact_creation')
         
-        for _, row in metadata.iterrows():
-            if row['is_categorical'] and row['name'] in prepared_df.columns:
-                # Remplacement des valeurs par les IDs (dans ce cas, on garde les valeurs)
-                # car DuckDB gère bien les jointures sur les strings
-                pass
-        
-        return prepared_df
-    
-    def append_to_fact_table(self, df: pd.DataFrame) -> int:
-        """
-        Append data to fact table.
-        
-        Args:
-            df: DataFrame to append
-            
-        Returns:
-            Number of rows added
-        """
-        initial_count = self.conn.execute("SELECT COUNT(*) FROM fact_table").fetchone()[0]
-        
-        # Utilisation de la méthode register pour insérer efficacement
-        self.conn.register('temp_insert', df)
-        
-        # Récupération des colonnes existantes dans fact_table
-        existing_columns = [col[0] for col in self.conn.execute("DESCRIBE fact_table").fetchall()]
-        
-        # Sélection uniquement des colonnes existantes
-        columns_to_insert = [col for col in df.columns if col in existing_columns]
-        columns_str = ", ".join(columns_to_insert)
-        
-        insert_query = f"""
-            INSERT INTO fact_table ({columns_str})
-            SELECT {columns_str} FROM temp_insert
-        """
-        
-        self.conn.execute(insert_query)
-        self.conn.execute("DROP VIEW temp_insert")
-        
-        final_count = self.conn.execute("SELECT COUNT(*) FROM fact_table").fetchone()[0]
-        rows_added = final_count - initial_count
-        
-        self.logger.info(f"Added {rows_added} rows to fact_table")
+        # Logging du nombre de lignes ajoutées
+        rows_added = len(df)
+        self.logger.info(f"Création de la table de faits avec {rows_added} lignes")
         return rows_added
     
-    def upsert_to_fact_table(self, df: pd.DataFrame, merge_keys: List[str]) -> Dict:
+    # Méthode d'insertion et de mise à jour de données dans la table des faits
+    def _upsert_to_fact_table(self, df: pd.DataFrame, merge_keys: List[str]) -> Dict:
         """
-        Perform upsert operation on fact table.
+        Upsert des données dans la table de faits.
         
         Args:
-            df: DataFrame to upsert
-            merge_keys: Columns to use as merge keys
+            df: DataFrame à insérer/mettre à jour
+            merge_keys: Colonnes utilisées pour identifier les doublons
             
         Returns:
-            Dictionary with upsert statistics
+            Dictionnaire avec les statistiques d'upsert
         """
-        stats = {'rows_added': 0, 'rows_updated': 0}
-        
-        # Création d'une table temporaire
+        # Enregistrement d'une vue temporaire du jeu de données
         self.conn.register('temp_upsert', df)
         
-        # Identification des lignes existantes
+        # Construction des conditions de jointure
         merge_condition = " AND ".join([f"f.{key} = t.{key}" for key in merge_keys])
         
-        # Comptage des lignes qui seront mises à jour
+        # Comptage des mises à jour
         update_count_query = f"""
             SELECT COUNT(*) FROM fact_table f
             WHERE EXISTS (
@@ -1006,24 +809,26 @@ class DatabaseUpdater:
                 WHERE {merge_condition}
             )
         """
-        stats['rows_updated'] = self.conn.execute(update_count_query).fetchone()[0]
+        rows_updated = self.conn.execute(update_count_query).fetchone()[0]
         
         # Mise à jour des lignes existantes
-        if stats['rows_updated'] > 0:
-            # Construction de la clause SET
+        if rows_updated > 0:
             existing_columns = [col[0] for col in self.conn.execute("DESCRIBE fact_table").fetchall()]
             update_columns = [col for col in df.columns if col in existing_columns and col not in merge_keys]
-            set_clause = ", ".join([f"f.{col} = t.{col}" for col in update_columns])
             
-            update_query = f"""
-                UPDATE fact_table f
-                SET {set_clause}
-                FROM temp_upsert t
-                WHERE {merge_condition}
-            """
-            self.conn.execute(update_query)
+            if update_columns:
+                set_clause = ", ".join([f"f.{col} = t.{col}" for col in update_columns])
+                update_query = f"""
+                    UPDATE fact_table f
+                    SET {set_clause}
+                    FROM temp_upsert t
+                    WHERE {merge_condition}
+                """
+                self.conn.execute(update_query)
         
         # Insertion des nouvelles lignes
+        initial_count = self.conn.execute("SELECT COUNT(*) FROM fact_table").fetchone()[0]
+        
         insert_query = f"""
             INSERT INTO fact_table
             SELECT t.* FROM temp_upsert t
@@ -1032,99 +837,73 @@ class DatabaseUpdater:
                 WHERE {merge_condition}
             )
         """
-        
-        initial_count = self.conn.execute("SELECT COUNT(*) FROM fact_table").fetchone()[0]
         self.conn.execute(insert_query)
+        
         final_count = self.conn.execute("SELECT COUNT(*) FROM fact_table").fetchone()[0]
+        rows_added = final_count - initial_count
         
-        stats['rows_added'] = final_count - initial_count - stats['rows_updated']
-        
+        # Suppression de la vue temporaire
         self.conn.execute("DROP VIEW temp_upsert")
         
-        self.logger.info(f"Upsert complete: {stats['rows_added']} added, {stats['rows_updated']} updated")
-        return stats
+        # Logging
+        self.logger.info(f"Upsert terminé: {rows_added} lignes ajoutées, {rows_updated} lignes mises à jour")
+        
+        return {
+            'rows_added': rows_added,
+            'rows_updated': rows_updated
+        }
     
-    def update_dimension_tables(self, df: pd.DataFrame) -> Dict:
+    # Méthode de mise à jour d'une table de dimension
+    def _update_dimension_values(self, dimension_name: str, values: pd.Series) -> int:
         """
-        Update dimension tables with new values from DataFrame.
+        Mise à jour des valeurs d'une table de dimension.
         
         Args:
-            df: DataFrame containing potential new dimension values
+            dimension_name: Nom de la dimension
+            values: Série avec les nouvelles valeurs
             
         Returns:
-            Dictionary mapping dimension names to number of new values added
+            Nombre de nouvelles valeurs ajoutées
         """
-        new_values = {}
-        metadata = self.load_current_metadata()
-        
-        for _, row in metadata.iterrows():
-            if row['is_categorical'] and row['name'] in df.columns:
-                dimension_name = row['name']
-                table_name = f"dim_{dimension_name}"
-                
-                # Récupération des valeurs actuelles
+        with self._lock:
+            table_name = f"dim_{dimension_name}"
+            
+            # Création de la table si elle n'existe pas
+            self.conn.execute(f"""
+                CREATE TABLE IF NOT EXISTS {table_name} (
+                    value VARCHAR PRIMARY KEY,
+                    label VARCHAR
+                )
+            """)
+            
+            # Récupération des valeurs existantes
+            try:
+                existing_values = set(
+                    self.conn.execute(f"SELECT value FROM {table_name}").fetchdf()['value']
+                )
+            except:
+                existing_values = set()
+            
+            # Identification des nouvelles valeurs
+            unique_values = set(values.dropna().unique())
+            new_values = unique_values - existing_values
+            
+            # Insertion des nouvelles valeurs
+            values_added = 0
+            for value in new_values:
                 try:
-                    current_values = set(
-                        self.conn.execute(f"SELECT value FROM {table_name}").fetchdf()['value']
-                    )
-                except:
-                    current_values = set()
-                
-                # Nouvelles valeurs uniques
-                new_unique = set(df[dimension_name].dropna().unique())
-                values_to_add = new_unique - current_values
-                
-                if values_to_add:
-                    # Création ou mise à jour de la table de dimension
-                    self.create_dimension_table(dimension_name, list(values_to_add))
-                    new_values[dimension_name] = len(values_to_add)
-        
-        return new_values
-    
-    def compute_data_hash(self, df: pd.DataFrame) -> str:
-        """
-        Compute hash of DataFrame for change detection.
-        
-        Args:
-            df: DataFrame to hash
+                    self.conn.execute(f"""
+                        INSERT INTO {table_name} (value, label) 
+                        VALUES (?, ?)
+                        ON CONFLICT (value) DO NOTHING
+                    """, [str(value), str(value)])
+                    values_added += 1
+                except Exception as e:
+                    # Logging
+                    self.logger.warning(f"Impossible d'insérer {value} dans {table_name}: {e}")
             
-        Returns:
-            SHA256 hash of the data
-        """
-        # Conversion du DataFrame en bytes pour le hashing
-        df_bytes = pd.util.hash_pandas_object(df, index=False).values.tobytes()
-        return hashlib.sha256(df_bytes).hexdigest()
-    
-    def track_update_history(self, operation: str, stats: Dict) -> None:
-        """
-        Track update history in a dedicated table.
-        
-        Args:
-            operation: Type of operation performed
-            stats: Statistics from the operation
-        """
-        # Création de la table d'historique si elle n'existe pas
-        create_history_query = """
-            CREATE TABLE IF NOT EXISTS update_history (
-                update_id INTEGER PRIMARY KEY,
-                timestamp TIMESTAMP,
-                operation VARCHAR,
-                stats JSON,
-                user VARCHAR,
-                description VARCHAR
-            )
-        """
-        self.conn.execute(create_history_query)
-        
-        # Insertion de l'historique
-        insert_query = """
-            INSERT INTO update_history (timestamp, operation, stats)
-            VALUES (?, ?, ?)
-        """
-        self.conn.execute(insert_query, [
-            datetime.now(),
-            operation,
-            json.dumps(stats)
-        ])
-        
-        self.logger.info(f"Tracked update history for operation: {operation}")
+            if values_added > 0:
+                # Logging
+                self.logger.info(f"Ajout de {values_added} nouvelles valeurs à {table_name}")
+            
+            return values_added
