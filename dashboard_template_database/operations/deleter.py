@@ -12,15 +12,6 @@ from ..utils.logger import _init_logger
 # Emplacement du fichier
 FILE_PATH = Path(os.path.abspath(__file__))
 
-class CascadeMode(Enum):
-    """
-    Modes de suppression en cascade.
-    """
-    NO_CASCADE = "no_cascade"
-    RESTRICT = "restrict"  # Empêche la suppression si des dépendances existent
-    CASCADE = "cascade"    # Supprime automatiquement les dépendances
-    SET_NULL = "set_null"  # Met les références à NULL
-
 @dataclass
 class ColumnDependency:
     """
@@ -30,18 +21,6 @@ class ColumnDependency:
     depends_on: List[str]
     dependency_type: str  # 'foreign_key', 'computed', 'index'
     cascade_action: str
-    
-@dataclass
-class DeletionPlan:
-    """
-    Plan d'exécution pour une suppression.
-    """
-    target_table: str
-    target_columns: List[str]
-    affected_tables: List[str]
-    cascade_operations: List[Dict[str, Union[str, List[str]]]]
-    warnings: List[str]
-    estimated_rows_affected: int
 
 class DatabaseDeleter:
     """
@@ -61,6 +40,7 @@ class DatabaseDeleter:
             connection: DuckDB connection object
             log_filename: Path to log file
         """
+        # Initialisation de la connexion
         self.conn = connection
         
         # Initialisation du logger
@@ -102,169 +82,9 @@ class DatabaseDeleter:
             index_deps = self._analyze_index_dependencies(column)
             column_deps.extend(index_deps)
             
-            # Analyse des colonnes calculées
-            computed_deps = self._analyze_computed_dependencies(column)
-            column_deps.extend(computed_deps)
-            
-            # Analyse des contraintes CHECK
-            check_deps = self._analyze_check_constraints(column)
-            column_deps.extend(check_deps)
-            
             dependencies[column] = column_deps
             
         return dependencies
-    
-    def create_deletion_plan(self, 
-                           columns_to_delete: List[str], 
-                           cascade_mode: CascadeMode = CascadeMode.RESTRICT) -> DeletionPlan:
-        """
-        Create a comprehensive deletion plan.
-        
-        Args:
-            columns_to_delete: Columns to delete
-            cascade_mode: How to handle cascading deletions
-            
-        Returns:
-            Detailed deletion plan
-        """
-        self.logger.info(f"Création du plan de suppression pour: {columns_to_delete}")
-        
-        # Analyse des dépendances
-        dependencies = self.analyze_column_dependencies(columns_to_delete)
-        
-        # Construction du plan
-        plan = DeletionPlan(
-            target_table="fact_table",
-            target_columns=columns_to_delete,
-            affected_tables=[],
-            cascade_operations=[],
-            warnings=[],
-            estimated_rows_affected=0
-        )
-        
-        # Estimation du nombre de lignes affectées
-        plan.estimated_rows_affected = self.conn.execute(
-            "SELECT COUNT(*) FROM fact_table"
-        ).fetchone()[0]
-        
-        # Analyse de chaque colonne
-        for column in columns_to_delete:
-            column_deps = dependencies.get(column, [])
-            
-            if not column_deps and cascade_mode == CascadeMode.RESTRICT:
-                continue
-                
-            # Traitement selon le mode cascade
-            for dep in column_deps:
-                if cascade_mode == CascadeMode.RESTRICT:
-                    if dep.dependency_type in ['foreign_key', 'computed']:
-                        plan.warnings.append(
-                            f"Suppression de {column} bloquée par dépendance: {dep.dependency_type}"
-                        )
-                        
-                elif cascade_mode == CascadeMode.CASCADE:
-                    cascade_op = {
-                        'operation': f'cascade_delete_{dep.dependency_type}',
-                        'target': dep.depends_on,
-                        'reason': f'Dépendance de {column}'
-                    }
-                    plan.cascade_operations.append(cascade_op)
-                    
-                elif cascade_mode == CascadeMode.SET_NULL:
-                    if dep.dependency_type == 'foreign_key':
-                        cascade_op = {
-                            'operation': 'set_null',
-                            'target': dep.depends_on,
-                            'reason': f'Référence à {column} supprimée'
-                        }
-                        plan.cascade_operations.append(cascade_op)
-        
-        # Identification des tables affectées
-        affected_tables = set(['fact_table'])
-        for op in plan.cascade_operations:
-            if 'target' in op:
-                if isinstance(op['target'], list):
-                    for target in op['target']:
-                        if target.startswith('dim_'):
-                            affected_tables.add(target)
-                elif op['target'].startswith('dim_'):
-                    affected_tables.add(op['target'])
-        
-        plan.affected_tables = list(affected_tables)
-        
-        return plan
-    
-    def execute_deletion_plan(self, plan: DeletionPlan, confirm: bool = False) -> Dict[str, Any]:
-        """
-        Execute a deletion plan.
-        
-        Args:
-            plan: Deletion plan to execute
-            confirm: Whether to actually execute (dry run if False)
-            
-        Returns:
-            Execution results
-        """
-        if not confirm:
-            return {
-                'dry_run': True,
-                'plan_summary': {
-                    'target_columns': plan.target_columns,
-                    'affected_tables': plan.affected_tables,
-                    'cascade_operations': len(plan.cascade_operations),
-                    'warnings': len(plan.warnings)
-                }
-            }
-        
-        self.logger.info("Exécution du plan de suppression")
-        execution_results = {
-            'success': False,
-            'operations_completed': [],
-            'operations_failed': [],
-            'rollback_info': None
-        }
-        
-        # Début de transaction pour atomicité
-        try:
-            self.conn.execute("BEGIN TRANSACTION")
-            
-            # Exécution des opérations cascade d'abord
-            for cascade_op in plan.cascade_operations:
-                try:
-                    self._execute_cascade_operation(cascade_op)
-                    execution_results['operations_completed'].append(cascade_op)
-                except Exception as e:
-                    execution_results['operations_failed'].append({
-                        'operation': cascade_op,
-                        'error': str(e)
-                    })
-                    raise
-            
-            # Suppression des colonnes principales
-            for column in plan.target_columns:
-                try:
-                    self._delete_column_safe(column)
-                    execution_results['operations_completed'].append(f'delete_column_{column}')
-                except Exception as e:
-                    execution_results['operations_failed'].append({
-                        'operation': f'delete_column_{column}',
-                        'error': str(e)
-                    })
-                    raise
-            
-            # Validation post-suppression
-            self._validate_post_deletion(plan)
-            
-            self.conn.execute("COMMIT")
-            execution_results['success'] = True
-            
-        except Exception as e:
-            self.conn.execute("ROLLBACK")
-            execution_results['rollback_performed'] = True
-            self.logger.error(f"Échec de l'exécution du plan: {e}")
-            raise
-        
-        return execution_results
     
     def _analyze_foreign_key_dependencies(self, column: str) -> List[ColumnDependency]:
         """
@@ -335,112 +155,6 @@ class DatabaseDeleter:
             self.logger.warning(f"Erreur lors de l'analyse des index pour {column}: {e}")
         
         return dependencies
-    
-    def _analyze_computed_dependencies(self, column: str) -> List[ColumnDependency]:
-        """
-        Analyse les dépendances de colonnes calculées.
-        
-        Args:
-            column: Nom de la colonne
-            
-        Returns:
-            Liste des dépendances calculées
-        """
-        dependencies = []
-        
-        # Dans DuckDB, les colonnes calculées peuvent être des vues
-        # Ici on peut étendre pour analyser les vues qui dépendent de cette colonne
-        
-        return dependencies
-    
-    def _analyze_check_constraints(self, column: str) -> List[ColumnDependency]:
-        """
-        Analyse les contraintes CHECK impliquant une colonne.
-        
-        Args:
-            column: Nom de la colonne
-            
-        Returns:
-            Liste des dépendances de contraintes
-        """
-        dependencies = []
-        
-        # DuckDB a un support limité des contraintes CHECK
-        # Cette méthode peut être étendue selon les besoins
-        
-        return dependencies
-    
-    def _execute_cascade_operation(self, operation: Dict[str, Any]) -> None:
-        """
-        Exécute une opération en cascade.
-        
-        Args:
-            operation: Description de l'opération à exécuter
-        """
-        op_type = operation.get('operation', '')
-        
-        if op_type.startswith('cascade_delete_'):
-            dependency_type = op_type.replace('cascade_delete_', '')
-            targets = operation.get('target', [])
-            
-            if dependency_type == 'foreign_key':
-                for target in targets:
-                    if target.startswith('dim_'):
-                        self.conn.execute(f"DROP TABLE IF EXISTS {target}")
-                        self.logger.info(f"Table de dimension supprimée: {target}")
-                        
-            elif dependency_type == 'index':
-                for target in targets:
-                    self.conn.execute(f"DROP INDEX IF EXISTS {target}")
-                    self.logger.info(f"Index supprimé: {target}")
-                    
-        elif op_type == 'set_null':
-            # Mise à NULL des références
-            targets = operation.get('target', [])
-            for target in targets:
-                if target.startswith('dim_'):
-                    # Cette opération dépend de la structure exacte
-                    self.logger.info(f"Mise à NULL des références dans {target}")
-    
-    def _delete_column_safe(self, column: str) -> None:
-        """
-        Supprime une colonne de manière sécurisée.
-        
-        Args:
-            column: Nom de la colonne à supprimer
-        """
-        # Vérification préalable
-        if not self._column_exists(column):
-            self.logger.warning(f"La colonne {column} n'existe pas")
-            return
-        
-        # Suppression des métadonnées
-        self.delete_column_metadata(column)
-        
-        # Suppression de la colonne de la table des faits
-        alter_query = f"ALTER TABLE fact_table DROP COLUMN {column}"
-        self.conn.execute(alter_query)
-        
-        self.logger.info(f"Colonne {column} supprimée avec succès")
-    
-    def _validate_post_deletion(self, plan: DeletionPlan) -> None:
-        """
-        Valide l'état après suppression.
-        
-        Args:
-            plan: Plan de suppression exécuté
-        """
-        # Vérification que les colonnes ont bien été supprimées
-        existing_columns = self._get_fact_table_columns()
-        
-        for column in plan.target_columns:
-            if column in existing_columns:
-                raise ValueError(f"La colonne {column} existe encore après suppression")
-        
-        # Vérification de l'intégrité référentielle restante
-        self._verify_referential_integrity()
-        
-        self.logger.info("Validation post-suppression réussie")
     
     def _column_exists(self, column: str) -> bool:
         """

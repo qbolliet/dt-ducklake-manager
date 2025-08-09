@@ -27,7 +27,7 @@ class SchemaBuilder:
     """
 
     # Initialisation
-    def __init__(self, df: pd.DataFrame, categorical_threshold: Optional[int] = 50, log_filename: Optional[os.PathLike] = os.path.join(FILE_PATH.parents[2], "logs/schema_builder.log")) -> None:
+    def __init__(self, df: pd.DataFrame, categorical_threshold: Optional[int] = 50, log_filename: Optional[os.PathLike] = None) -> None:
         """
         Initialize the SchemaBuilder with a DataFrame and optional parameters.
 
@@ -44,6 +44,8 @@ class SchemaBuilder:
         # Initialisation du seuil au deçà duquel les modalités d'une variable catégorielle ne sont plus exportées dans 
         self.categorical_threshold = categorical_threshold
         # Initialisation du logger
+        if log_filename is None:
+            log_filename = os.path.join(FILE_PATH.parents[2], "logs/schema_builder.log")
         self.logger = _init_logger(filename=log_filename)
     
     # Méthode inférant le type des colonnes du jeu de données 
