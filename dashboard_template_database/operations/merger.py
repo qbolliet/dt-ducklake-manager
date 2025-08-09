@@ -1,4 +1,4 @@
-# Module pour la fusion de bases de données
+# Module pour la fusion de bases de donnÃ©es
 import os
 import pandas as pd
 import numpy as np
@@ -17,21 +17,21 @@ FILE_PATH = Path(os.path.abspath(__file__))
 
 class ConflictResolutionMode(Enum):
     """
-    Enumération des modes de résolution de conflits pour la fusion.
+    EnumÃ©ration des modes de rÃ©solution de conflits pour la fusion.
     """
     UNION = "union"  # Combiner toutes les lignes (permettre les doublons)
-    MERGE = "merge"  # Upsert basé sur les clés de fusion
-    PRIORITIZE_SOURCE = "prioritize_source"  # Priorité à la base source
-    PRIORITIZE_TARGET = "prioritize_target"  # Priorité à la base cible
-    CUSTOM = "custom"  # Fonction personnalisée de résolution
+    MERGE = "merge"  # Upsert basÃ© sur les clÃ©s de fusion
+    PRIORITIZE_SOURCE = "prioritize_source"  # PrioritÃ© Ã© la base source
+    PRIORITIZE_TARGET = "prioritize_target"  # PrioritÃ© Ã© la base cible
+    CUSTOM = "custom"  # Fonction personnalisÃ©e de rÃ©solution
 
 class MergeStrategy(Enum):
     """
-    Stratégies de fusion disponibles.
+    StratÃ©gies de fusion disponibles.
     """
     FAST = "fast"  # Fusion rapide sans validation extensive
-    SAFE = "safe"  # Fusion sécurisée avec validations complètes
-    OPTIMIZED = "optimized"  # Fusion optimisée pour les gros volumes
+    SAFE = "safe"  # Fusion sÃ©curisÃ©e avec validations complÃ©tes
+    OPTIMIZED = "optimized"  # Fusion optimisÃ©e pour les gros volumes
 
 class DatabaseMerger:
     """
@@ -66,12 +66,12 @@ class DatabaseMerger:
             log_filename = os.path.join(FILE_PATH.parents[2], "logs/database_merger.log")
         self.logger = _init_logger(filename=log_filename)
         
-        # Cache pour les métadonnées et schémas
+        # Cache pour les mÃ©tadonnÃ©es et schÃ©mas
         self._source_metadata_cache = None
         self._target_metadata_cache = None
         self._compatibility_cache = None
         
-        # Configuration par défaut
+        # Configuration par dÃ©faut
         self.default_merge_keys = ['id']
         self.batch_size = 10000
         self.max_workers = 4
@@ -87,9 +87,9 @@ class DatabaseMerger:
         Returns:
             Detailed compatibility analysis report
         """
-        self.logger.info("Analyse de compatibilité des bases de données")
+        self.logger.info("Analyse de compatibilitÃ© des bases de donnÃ©es")
         
-        # Chargement des métadonnées des deux bases
+        # Chargement des mÃ©tadonnÃ©es des deux bases
         source_metadata = self._load_database_metadata(self.source_conn, "source")
         target_metadata = self._load_database_metadata(self.target_conn, "target")
         
@@ -107,7 +107,7 @@ class DatabaseMerger:
             'merge_recommendations': self._generate_merge_recommendations()
         }
         
-        self.logger.info(f"Analyse de compatibilité terminée: {compatibility_report['schema_compatibility']['compatibility_score']:.2f}/10")
+        self.logger.info(f"Analyse de compatibilitÃ© terminÃ©e: {compatibility_report['schema_compatibility']['compatibility_score']:.2f}/10")
         return compatibility_report
     
     def merge_databases(self, 
@@ -138,7 +138,7 @@ class DatabaseMerger:
         """
         merge_keys = merge_keys or self.default_merge_keys
         
-        self.logger.info(f"Début de la fusion avec stratégie: {merge_strategy.value}")
+        self.logger.info(f"DÃ©but de la fusion avec stratÃ©gie: {merge_strategy.value}")
         
         # Structure pour les statistiques de fusion
         merge_stats = {
@@ -152,23 +152,23 @@ class DatabaseMerger:
         }
         
         try:
-            # Phase 1: Analyse pré-fusion
+            # Phase 1: Analyse prÃ©-fusion
             if merge_strategy in [MergeStrategy.SAFE, MergeStrategy.OPTIMIZED]:
-                self.logger.info("Phase 1: Analyse pré-fusion")
+                self.logger.info("Phase 1: Analyse prÃ©-fusion")
                 compatibility_report = self.analyze_compatibility("source", "target")
                 merge_stats['compatibility_report'] = compatibility_report
                 merge_stats['phases_completed'].append('pre_analysis')
             
-            # Phase 2: Création de sauvegarde
+            # Phase 2: CrÃ©ation de sauvegarde
             if backup:
-                self.logger.info("Phase 2: Création de sauvegarde")
+                self.logger.info("Phase 2: CrÃ©ation de sauvegarde")
                 backup_info = self._create_backup()
                 merge_stats['backup_info'] = backup_info
                 merge_stats['backup_created'] = True
                 merge_stats['phases_completed'].append('backup')
             
-            # Phase 3: Harmonisation du schéma
-            self.logger.info("Phase 3: Harmonisation du schéma")
+            # Phase 3: Harmonisation du schÃ©ma
+            self.logger.info("Phase 3: Harmonisation du schÃ©ma")
             schema_merge_stats = self._merge_schemas(merge_strategy)
             merge_stats['schema_merge'] = schema_merge_stats
             merge_stats['phases_completed'].append('schema_harmonization')
@@ -205,13 +205,13 @@ class DatabaseMerger:
             merge_stats['duration'] = (merge_stats['end_time'] - merge_stats['start_time']).total_seconds()
             merge_stats['success'] = True
             
-            self.logger.info(f"Fusion terminée avec succès en {merge_stats['duration']:.2f}s")
+            self.logger.info(f"Fusion terminÃ©e avec succÃ©s en {merge_stats['duration']:.2f}s")
             
         except Exception as e:
             merge_stats['success'] = False
             merge_stats['error'] = str(e)
             merge_stats['end_time'] = datetime.now()
-            self.logger.error(f"Échec de la fusion: {e}")
+            self.logger.error(f"Ã©chec de la fusion: {e}")
             
             # Tentative de restauration si sauvegarde disponible
             if backup and merge_stats['backup_created']:
@@ -221,7 +221,7 @@ class DatabaseMerger:
                     merge_stats['restored_from_backup'] = True
                 except Exception as restore_error:
                     merge_stats['restore_error'] = str(restore_error)
-                    self.logger.error(f"Échec de la restauration: {restore_error}")
+                    self.logger.error(f"Ã©chec de la restauration: {restore_error}")
             
             raise
         
@@ -229,14 +229,14 @@ class DatabaseMerger:
     
     def _load_database_metadata(self, connection: duckdb.DuckDBPyConnection, db_name: str) -> Dict[str, Any]:
         """
-        Charge les métadonnées complètes d'une base de données.
+        Charge les mÃ©tadonnÃ©es complÃ©tes d'une base de donnÃ©es.
         
         Args:
-            connection: Connexion à la base de données
+            connection: Connexion Ã© la base de donnÃ©es
             db_name: Nom de la base pour identification
             
         Returns:
-            Dictionnaire des métadonnées complètes
+            Dictionnaire des mÃ©tadonnÃ©es complÃ©tes
         """
         metadata = {
             'info': {
@@ -256,7 +256,7 @@ class DatabaseMerger:
                 for col in fact_table_info
             }
             
-            # Métadonnées depuis la table metadata
+            # MÃ©tadonnÃ©es depuis la table metadata
             metadata_df = connection.execute("SELECT * FROM metadata").fetchdf()
             metadata['schema']['metadata'] = metadata_df.to_dict('records')
             
@@ -274,7 +274,7 @@ class DatabaseMerger:
                     'row_count': row_count
                 }
             
-            # Statistiques générales
+            # Statistiques gÃ©nÃ©rales
             fact_row_count = connection.execute("SELECT COUNT(*) FROM fact_table").fetchone()[0]
             metadata['statistics'] = {
                 'fact_table_rows': fact_row_count,
@@ -283,20 +283,20 @@ class DatabaseMerger:
             }
             
         except Exception as e:
-            self.logger.warning(f"Échec du chargement des métadonnées pour {db_name}: {e}")
+            self.logger.warning(f"Ã©chec du chargement des mÃ©tadonnÃ©es pour {db_name}: {e}")
             
         return metadata
     
     def _analyze_schema_compatibility(self, source_schema: Dict, target_schema: Dict) -> Dict[str, Any]:
         """
-        Analyse la compatibilité des schémas entre source et cible.
+        Analyse la compatibilitÃ© des schÃ©mas entre source et cible.
         
         Args:
-            source_schema: Schéma de la base source
-            target_schema: Schéma de la base cible
+            source_schema: SchÃ©ma de la base source
+            target_schema: SchÃ©ma de la base cible
             
         Returns:
-            Rapport de compatibilité des schémas
+            Rapport de compatibilitÃ© des schÃ©mas
         """
         compatibility = {
             'compatible_columns': [],
@@ -334,7 +334,7 @@ class DatabaseMerger:
                     'target_type': target_type
                 })
         
-        # Calcul du score de compatibilité
+        # Calcul du score de compatibilitÃ©
         total_columns = len(source_columns.union(target_columns))
         if total_columns > 0:
             compatibility['compatibility_score'] = (
@@ -345,14 +345,14 @@ class DatabaseMerger:
     
     def _analyze_dimension_compatibility(self, source_dims: Dict, target_dims: Dict) -> Dict[str, Any]:
         """
-        Analyse la compatibilité des tables de dimension.
+        Analyse la compatibilitÃ© des tables de dimension.
         
         Args:
             source_dims: Dimensions de la base source
             target_dims: Dimensions de la base cible
             
         Returns:
-            Rapport de compatibilité des dimensions
+            Rapport de compatibilitÃ© des dimensions
         """
         compatibility = {
             'common_dimensions': [],
@@ -385,10 +385,10 @@ class DatabaseMerger:
     
     def _analyze_data_overlap(self) -> Dict[str, Any]:
         """
-        Analyse le chevauchement des données entre les bases.
+        Analyse le chevauchement des donnÃ©es entre les bases.
         
         Returns:
-            Rapport de chevauchement des données
+            Rapport de chevauchement des donnÃ©es
         """
         overlap_analysis = {
             'estimated_duplicates': 0,
@@ -398,32 +398,32 @@ class DatabaseMerger:
         }
         
         try:
-            # Échantillonnage pour estimation des doublons
+            # Ã©chantillonnage pour estimation des doublons
             sample_size = min(1000, 
                 self.source_conn.execute("SELECT COUNT(*) FROM fact_table").fetchone()[0],
                 self.target_conn.execute("SELECT COUNT(*) FROM fact_table").fetchone()[0]
             )
             
             if sample_size > 0:
-                # Échantillon de la source
+                # Ã©chantillon de la source
                 source_sample = self.source_conn.execute(
                     f"SELECT * FROM fact_table TABLESAMPLE SYSTEM(10) LIMIT {sample_size}"
                 ).fetchdf()
                 
-                # Estimation des doublons basée sur les colonnes clés
+                # Estimation des doublons basÃ©e sur les colonnes clÃ©s
                 if not source_sample.empty and len(self.default_merge_keys) > 0:
-                    # Estimation approximative (à améliorer avec des techniques plus sophistiquées)
+                    # Estimation approximative (Ã© amÃ©liorer avec des techniques plus sophistiquÃ©es)
                     overlap_analysis['sampling_performed'] = True
                     overlap_analysis['sample_size'] = len(source_sample)
             
         except Exception as e:
-            self.logger.warning(f"Impossible d'analyser le chevauchement des données: {e}")
+            self.logger.warning(f"Impossible d'analyser le chevauchement des donnÃ©es: {e}")
         
         return overlap_analysis
     
     def _generate_merge_recommendations(self) -> List[Dict[str, str]]:
         """
-        Génère des recommandations pour la fusion basées sur l'analyse.
+        GÃ©nÃ©re des recommandations pour la fusion basÃ©es sur l'analyse.
         
         Returns:
             Liste de recommandations
@@ -431,17 +431,17 @@ class DatabaseMerger:
         recommendations = [
             {
                 'type': 'strategy',
-                'message': "Utiliser MergeStrategy.SAFE pour une première fusion",
+                'message': "Utiliser MergeStrategy.SAFE pour une premiÃ©re fusion",
                 'priority': 'high'
             },
             {
                 'type': 'backup',
-                'message': "Toujours créer une sauvegarde avant fusion",
+                'message': "Toujours crÃ©er une sauvegarde avant fusion",
                 'priority': 'high'
             },
             {
                 'type': 'validation',
-                'message': "Effectuer une validation complète après fusion",
+                'message': "Effectuer une validation complÃ©te aprÃ©s fusion",
                 'priority': 'medium'
             }
         ]
@@ -450,10 +450,10 @@ class DatabaseMerger:
     
     def _create_backup(self) -> Dict[str, str]:
         """
-        Crée une sauvegarde de la base cible avant fusion.
+        CrÃ©e une sauvegarde de la base cible avant fusion.
         
         Returns:
-            Informations sur la sauvegarde créée
+            Informations sur la sauvegarde crÃ©e
         """
         backup_info = {
             'timestamp': datetime.now().isoformat(),
@@ -461,7 +461,7 @@ class DatabaseMerger:
         }
         
         try:
-            # Création d'une sauvegarde complète
+            # CrÃ©ation d'une sauvegarde complÃ©te
             backup_conn = duckdb.connect(backup_info['backup_path'])
             
             # Copie de toutes les tables
@@ -479,25 +479,25 @@ class DatabaseMerger:
             backup_conn.close()
             backup_info['success'] = True
             
-            self.logger.info(f"Sauvegarde créée: {backup_info['backup_path']}")
+            self.logger.info(f"Sauvegarde crÃ©e: {backup_info['backup_path']}")
             
         except Exception as e:
             backup_info['success'] = False
             backup_info['error'] = str(e)
-            self.logger.error(f"Échec de la création de sauvegarde: {e}")
+            self.logger.error(f"Ã©chec de la crÃ©ation de sauvegarde: {e}")
             raise
         
         return backup_info
     
     def _merge_schemas(self, strategy: MergeStrategy) -> Dict[str, Any]:
         """
-        Fusionne les schémas des bases de données.
+        Fusionne les schÃ©mas des bases de donnÃ©es.
         
         Args:
-            strategy: Stratégie de fusion
+            strategy: StratÃ©gie de fusion
             
         Returns:
-            Statistiques de fusion des schémas
+            Statistiques de fusion des schÃ©mas
         """
         schema_stats = {
             'columns_added': [],
@@ -507,18 +507,18 @@ class DatabaseMerger:
         }
         
         try:
-            # Chargement des métadonnées
+            # Chargement des mÃ©tadonnÃ©es
             source_metadata = self.source_conn.execute("SELECT * FROM metadata").fetchdf()
             
-            # Fusion des métadonnées dans la cible
+            # Fusion des mÃ©tadonnÃ©es dans la cible
             for _, row in source_metadata.iterrows():
-                # Vérification si la colonne existe déjà dans la cible
+                # VÃ©rification si la colonne existe dÃ©jÃ© dans la cible
                 existing = self.target_conn.execute(
                     "SELECT COUNT(*) FROM metadata WHERE name = ?", [row['name']]
                 ).fetchone()[0]
                 
                 if existing == 0:
-                    # Nouvelle colonne à ajouter
+                    # Nouvelle colonne Ã© ajouter
                     insert_query = """
                         INSERT INTO metadata (name, label, python_type, sql_type, is_categorical)
                         VALUES (?, ?, ?, ?, ?)
@@ -529,33 +529,33 @@ class DatabaseMerger:
                     ])
                     schema_stats['columns_added'].append(row['name'])
                     
-                    # Ajout de la colonne à fact_table si nécessaire
+                    # Ajout de la colonne Ã© fact_table si nÃ©cessaire
                     try:
                         alter_query = f"ALTER TABLE fact_table ADD COLUMN {row['name']} {row['sql_type']}"
                         self.target_conn.execute(alter_query)
                     except Exception as e:
-                        # La colonne existe peut-être déjà
+                        # La colonne existe peut-Ã©tre dÃ©jÃ©
                         self.logger.warning(f"Impossible d'ajouter la colonne {row['name']}: {e}")
                 
                 else:
-                    # Colonne existante - vérification des conflits
+                    # Colonne existante - vÃ©rification des conflits
                     existing_row = self.target_conn.execute(
                         "SELECT * FROM metadata WHERE name = ?", [row['name']]
                     ).fetchone()
                     
-                    if existing_row[3] != row['sql_type']:  # Type différent
+                    if existing_row[3] != row['sql_type']:  # Type diffÃ©rent
                         conflict_resolution = {
                             'column': row['name'],
                             'source_type': row['sql_type'],
                             'target_type': existing_row[3],
-                            'resolution': 'kept_target'  # Par défaut, garder le type cible
+                            'resolution': 'kept_target'  # Par dÃ©faut, garder le type cible
                         }
                         schema_stats['conflicts_resolved'].append(conflict_resolution)
             
             schema_stats['metadata_merged'] = True
             
         except Exception as e:
-            self.logger.error(f"Échec de la fusion des schémas: {e}")
+            self.logger.error(f"Ã©chec de la fusion des schÃ©mas: {e}")
             raise
         
         return schema_stats
@@ -565,7 +565,7 @@ class DatabaseMerger:
         Fusionne les tables de dimension.
         
         Args:
-            conflict_resolution: Mode de résolution des conflits
+            conflict_resolution: Mode de rÃ©solution des conflits
             
         Returns:
             Statistiques de fusion des dimensions
@@ -578,23 +578,23 @@ class DatabaseMerger:
         }
         
         try:
-            # Récupération des tables de dimension de la source
+            # RÃ©cupÃ©ration des tables de dimension de la source
             source_dimensions = self.source_conn.execute(
                 "SELECT table_name FROM information_schema.tables WHERE table_name LIKE 'dim_%'"
             ).fetchall()
             
             for (dim_table,) in source_dimensions:
                 try:
-                    # Chargement des données de dimension depuis la source
+                    # Chargement des donnÃ©es de dimension depuis la source
                     source_dim_data = self.source_conn.execute(f"SELECT * FROM {dim_table}").fetchdf()
                     
-                    # Vérification si la table existe dans la cible
+                    # VÃ©rification si la table existe dans la cible
                     target_table_exists = self.target_conn.execute(
                         f"SELECT COUNT(*) FROM information_schema.tables WHERE table_name = '{dim_table}'"
                     ).fetchone()[0] > 0
                     
                     if not target_table_exists:
-                        # Création de la table de dimension dans la cible
+                        # CrÃ©ation de la table de dimension dans la cible
                         create_query = f"""
                             CREATE TABLE {dim_table} (
                                 value VARCHAR PRIMARY KEY,
@@ -625,7 +625,7 @@ class DatabaseMerger:
                     dimension_stats['errors'].append(f"Erreur lors du traitement de {dim_table}: {e}")
                     
         except Exception as e:
-            self.logger.error(f"Échec de la fusion des dimensions: {e}")
+            self.logger.error(f"Ã©chec de la fusion des dimensions: {e}")
             raise
         
         return dimension_stats
@@ -638,9 +638,9 @@ class DatabaseMerger:
         Fusionne les tables des faits.
         
         Args:
-            conflict_resolution: Mode de résolution des conflits
-            merge_keys: Clés pour identifier les doublons
-            custom_resolution_func: Fonction personnalisée de résolution
+            conflict_resolution: Mode de rÃ©solution des conflits
+            merge_keys: ClÃ©s pour identifier les doublons
+            custom_resolution_func: Fonction personnalisÃ©e de rÃ©solution
             
         Returns:
             Statistiques de fusion de la table des faits
@@ -656,7 +656,7 @@ class DatabaseMerger:
         start_time = datetime.now()
         
         try:
-            # Chargement des données de la source par batches
+            # Chargement des donnÃ©es de la source par batches
             source_row_count = self.source_conn.execute("SELECT COUNT(*) FROM fact_table").fetchone()[0]
             fact_stats['rows_processed'] = source_row_count
             
@@ -664,7 +664,7 @@ class DatabaseMerger:
                 # Union simple - ajout direct de toutes les lignes
                 source_data = self.source_conn.execute("SELECT * FROM fact_table").fetchdf()
                 
-                # Insertion des données dans la cible
+                # Insertion des donnÃ©es dans la cible
                 self.target_conn.register('temp_source_fact', source_data)
                 self.target_conn.execute("INSERT INTO fact_table SELECT * FROM temp_source_fact")
                 self.target_conn.execute("DROP VIEW temp_source_fact")
@@ -676,15 +676,15 @@ class DatabaseMerger:
                 fact_stats.update(self._perform_upsert_merge(merge_keys))
                 
             elif conflict_resolution in [ConflictResolutionMode.PRIORITIZE_SOURCE, ConflictResolutionMode.PRIORITIZE_TARGET]:
-                # Fusion avec priorité
+                # Fusion avec prioritÃ©
                 fact_stats.update(self._perform_priority_merge(conflict_resolution, merge_keys))
                 
             elif conflict_resolution == ConflictResolutionMode.CUSTOM and custom_resolution_func:
-                # Fusion avec fonction personnalisée
+                # Fusion avec fonction personnalisÃ©e
                 fact_stats.update(self._perform_custom_merge(custom_resolution_func, merge_keys))
             
         except Exception as e:
-            self.logger.error(f"Échec de la fusion de la table des faits: {e}")
+            self.logger.error(f"Ã©chec de la fusion de la table des faits: {e}")
             raise
         
         fact_stats['processing_time'] = (datetime.now() - start_time).total_seconds()
@@ -695,18 +695,18 @@ class DatabaseMerger:
         Effectue une fusion de type upsert.
         
         Args:
-            merge_keys: Clés de fusion
+            merge_keys: ClÃ©s de fusion
             
         Returns:
             Statistiques de l'upsert
         """
         stats = {'rows_added': 0, 'rows_updated': 0}
         
-        # Traitement par batches pour optimiser la mémoire
+        # Traitement par batches pour optimiser la mÃ©moire
         offset = 0
         
         while True:
-            # Chargement d'un batch de données source
+            # Chargement d'un batch de donnÃ©es source
             batch_data = self.source_conn.execute(
                 f"SELECT * FROM fact_table LIMIT {self.batch_size} OFFSET {offset}"
             ).fetchdf()
@@ -720,7 +720,7 @@ class DatabaseMerger:
             # Construction des conditions de fusion
             merge_condition = " AND ".join([f"f.{key} = t.{key}" for key in merge_keys])
             
-            # Mise à jour des lignes existantes
+            # Mise Ã© jour des lignes existantes
             existing_columns = [col[0] for col in self.target_conn.execute("DESCRIBE fact_table").fetchall()]
             update_columns = [col for col in batch_data.columns if col in existing_columns and col not in merge_keys]
             
@@ -758,22 +758,22 @@ class DatabaseMerger:
                                conflict_resolution: ConflictResolutionMode,
                                merge_keys: List[str]) -> Dict[str, int]:
         """
-        Effectue une fusion avec priorité source ou cible.
+        Effectue une fusion avec prioritÃ© source ou cible.
         
         Args:
-            conflict_resolution: Mode de résolution (PRIORITIZE_SOURCE/TARGET)
-            merge_keys: Clés de fusion
+            conflict_resolution: Mode de rÃ©solution (PRIORITIZE_SOURCE/TARGET)
+            merge_keys: ClÃ©s de fusion
             
         Returns:
-            Statistiques de la fusion avec priorité
+            Statistiques de la fusion avec prioritÃ©
         """
         stats = {'rows_added': 0, 'rows_updated': 0}
         
         if conflict_resolution == ConflictResolutionMode.PRIORITIZE_SOURCE:
-            # Source a la priorité - remplacer les conflits
+            # Source a la prioritÃ© - remplacer les conflits
             stats.update(self._perform_upsert_merge(merge_keys))
         else:
-            # Cible a la priorité - ignorer les conflits
+            # Cible a la prioritÃ© - ignorer les conflits
             source_data = self.source_conn.execute("SELECT * FROM fact_table").fetchdf()
             self.target_conn.register('temp_source', source_data)
             
@@ -798,20 +798,20 @@ class DatabaseMerger:
                              custom_func: Callable,
                              merge_keys: List[str]) -> Dict[str, int]:
         """
-        Effectue une fusion avec fonction personnalisée.
+        Effectue une fusion avec fonction personnalisÃ©e.
         
         Args:
-            custom_func: Fonction personnalisée de résolution
-            merge_keys: Clés de fusion
+            custom_func: Fonction personnalisÃ©e de rÃ©solution
+            merge_keys: ClÃ©s de fusion
             
         Returns:
-            Statistiques de la fusion personnalisée
+            Statistiques de la fusion personnalisÃ©e
         """
         stats = {'rows_added': 0, 'rows_updated': 0}
         
-        # Implémentation basique - à étendre selon les besoins
-        # La fonction personnalisée devrait prendre deux DataFrames en entrée
-        # et retourner le DataFrame fusionné
+        # ImplÃ©mentation basique - Ã© Ã©tendre selon les besoins
+        # La fonction personnalisÃ©e devrait prendre deux DataFrames en entrÃ©e
+        # et retourner le DataFrame fusionnÃ©
         
         source_data = self.source_conn.execute("SELECT * FROM fact_table").fetchdf()
         target_data = self.target_conn.execute("SELECT * FROM fact_table").fetchdf()
@@ -830,10 +830,10 @@ class DatabaseMerger:
     
     def _validate_merge_integrity(self) -> Dict[str, Any]:
         """
-        Valide l'intégrité après fusion.
+        Valide l'intÃ©gritÃ© aprÃ©s fusion.
         
         Returns:
-            Résultats de validation
+            RÃ©sultats de validation
         """
         validation_results = {
             'referential_integrity': True,
@@ -844,13 +844,13 @@ class DatabaseMerger:
         }
         
         try:
-            # Vérification de l'intégrité référentielle
+            # VÃ©rification de l'intÃ©gritÃ© rÃ©fÃ©rentielle
             validation_results['referential_integrity'] = self._check_referential_integrity()
             
-            # Vérification de la cohérence des dimensions
+            # VÃ©rification de la cohÃ©rence des dimensions
             validation_results['dimension_consistency'] = self._check_dimension_consistency()
             
-            # Vérification de la cohérence des métadonnées
+            # VÃ©rification de la cohÃ©rence des mÃ©tadonnÃ©es
             validation_results['metadata_consistency'] = self._check_metadata_consistency()
             
         except Exception as e:
@@ -861,7 +861,7 @@ class DatabaseMerger:
     
     def _optimize_merged_database(self) -> Dict[str, Any]:
         """
-        Optimise la base de données fusionnée.
+        Optimise la base de donnÃ©es fusionnÃ©e.
         
         Returns:
             Statistiques d'optimisation
@@ -884,7 +884,7 @@ class DatabaseMerger:
             
             optimization_stats['statistics_updated'] = True
             
-            # Ici, on pourrait intégrer avec l'IndexManager pour créer des index optimaux
+            # Ici, on pourrait intÃ©grer avec l'IndexManager pour crÃ©er des index optimaux
             # self._create_optimal_indexes()
             
         except Exception as e:
@@ -906,7 +906,7 @@ class DatabaseMerger:
         if not os.path.exists(backup_path):
             raise FileNotFoundError(f"Fichier de sauvegarde introuvable: {backup_path}")
         
-        # Connexion à la sauvegarde
+        # Connexion Ã© la sauvegarde
         backup_conn = duckdb.connect(backup_path)
         
         try:
@@ -916,7 +916,7 @@ class DatabaseMerger:
             ).fetchall()
             
             for (table_name,) in tables:
-                # Suppression et recréation de la table
+                # Suppression et recrÃ©ation de la table
                 self.target_conn.execute(f"DROP TABLE IF EXISTS {table_name}")
                 
                 backup_data = backup_conn.execute(f"SELECT * FROM {table_name}").fetchdf()
@@ -924,18 +924,18 @@ class DatabaseMerger:
                 self.target_conn.execute(f"CREATE TABLE {table_name} AS SELECT * FROM restore_{table_name}")
                 self.target_conn.execute(f"DROP VIEW restore_{table_name}")
             
-            self.logger.info("Restauration depuis sauvegarde réussie")
+            self.logger.info("Restauration depuis sauvegarde rÃ©ussie")
             
         finally:
             backup_conn.close()
     
     def _are_types_compatible(self, type1: str, type2: str) -> bool:
         """
-        Vérifie si deux types de données sont compatibles.
+        VÃ©rifie si deux types de donnÃ©es sont compatibles.
         
         Args:
             type1: Premier type
-            type2: Deuxième type
+            type2: DeuxiÃ©me type
             
         Returns:
             True si les types sont compatibles
@@ -956,13 +956,13 @@ class DatabaseMerger:
     
     def _check_referential_integrity(self) -> bool:
         """
-        Vérifie l'intégrité référentielle après fusion.
+        VÃ©rifie l'intÃ©gritÃ© rÃ©fÃ©rentielle aprÃ©s fusion.
         
         Returns:
-            True si l'intégrité référentielle est respectée
+            True si l'intÃ©gritÃ© rÃ©fÃ©rentielle est respectÃ©e
         """
         try:
-            # Vérification que toutes les valeurs de dimension existent
+            # VÃ©rification que toutes les valeurs de dimension existent
             metadata = self.target_conn.execute(
                 "SELECT name FROM metadata WHERE is_categorical = true"
             ).fetchall()
@@ -970,7 +970,7 @@ class DatabaseMerger:
             for (column_name,) in metadata:
                 dim_table = f"dim_{column_name}"
                 
-                # Vérification des valeurs orphelines
+                # VÃ©rification des valeurs orphelines
                 orphaned = self.target_conn.execute(f"""
                     SELECT COUNT(*) FROM fact_table f
                     WHERE f.{column_name} IS NOT NULL
@@ -978,53 +978,53 @@ class DatabaseMerger:
                 """).fetchone()[0]
                 
                 if orphaned > 0:
-                    self.logger.warning(f"Valeurs orphelines détectées dans {column_name}: {orphaned}")
+                    self.logger.warning(f"Valeurs orphelines dÃ©tectÃ©es dans {column_name}: {orphaned}")
                     return False
             
             return True
             
         except Exception as e:
-            self.logger.error(f"Erreur lors de la vérification de l'intégrité référentielle: {e}")
+            self.logger.error(f"Erreur lors de la vÃ©rification de l'intÃ©gritÃ© rÃ©fÃ©rentielle: {e}")
             return False
     
     def _check_dimension_consistency(self) -> bool:
         """
-        Vérifie la cohérence des tables de dimension.
+        VÃ©rifie la cohÃ©rence des tables de dimension.
         
         Returns:
-            True si les dimensions sont cohérentes
+            True si les dimensions sont cohÃ©rentes
         """
         try:
-            # Vérification que toutes les tables de dimension sont cohérentes
+            # VÃ©rification que toutes les tables de dimension sont cohÃ©rentes
             dimensions = self.target_conn.execute(
                 "SELECT table_name FROM information_schema.tables WHERE table_name LIKE 'dim_%'"
             ).fetchall()
             
             for (dim_table,) in dimensions:
-                # Vérification des doublons
+                # VÃ©rification des doublons
                 duplicates = self.target_conn.execute(f"""
                     SELECT COUNT(*) - COUNT(DISTINCT value) FROM {dim_table}
                 """).fetchone()[0]
                 
                 if duplicates > 0:
-                    self.logger.warning(f"Doublons détectés dans {dim_table}: {duplicates}")
+                    self.logger.warning(f"Doublons dÃ©tectÃ©s dans {dim_table}: {duplicates}")
                     return False
             
             return True
             
         except Exception as e:
-            self.logger.error(f"Erreur lors de la vérification de la cohérence des dimensions: {e}")
+            self.logger.error(f"Erreur lors de la vÃ©rification de la cohÃ©rence des dimensions: {e}")
             return False
     
     def _check_metadata_consistency(self) -> bool:
         """
-        Vérifie la cohérence des métadonnées.
+        VÃ©rifie la cohÃ©rence des mÃ©tadonnÃ©es.
         
         Returns:
-            True si les métadonnées sont cohérentes
+            True si les mÃ©tadonnÃ©es sont cohÃ©rentes
         """
         try:
-            # Vérification que tous les colonnes de fact_table ont des métadonnées
+            # VÃ©rification que tous les colonnes de fact_table ont des mÃ©tadonnÃ©es
             fact_columns = set([
                 col[0] for col in self.target_conn.execute("DESCRIBE fact_table").fetchall()
             ])
@@ -1035,11 +1035,11 @@ class DatabaseMerger:
             
             missing_metadata = fact_columns - metadata_columns
             if missing_metadata:
-                self.logger.warning(f"Métadonnées manquantes pour les colonnes: {missing_metadata}")
+                self.logger.warning(f"MÃ©tadonnÃ©es manquantes pour les colonnes: {missing_metadata}")
                 return False
             
             return True
             
         except Exception as e:
-            self.logger.error(f"Erreur lors de la vérification de la cohérence des métadonnées: {e}")
+            self.logger.error(f"Erreur lors de la vÃ©rification de la cohÃ©rence des mÃ©tadonnÃ©es: {e}")
             return False
