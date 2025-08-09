@@ -40,6 +40,12 @@ default-groups = [
     "docs",
 ]
 
+[project.scripts]
+test = "pytest tests/"
+test-unit = "pytest tests/unit/"
+test-integration = "pytest tests/integration/"
+test-verbose = "pytest tests/ -v"
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
