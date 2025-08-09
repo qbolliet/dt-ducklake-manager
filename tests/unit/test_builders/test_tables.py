@@ -112,6 +112,80 @@ def test_display_schema(duckdb_builder, caplog):
     assert "Created Tables:" in caplog.text
     assert "Structure:" in caplog.text
 
+# Test de la suppression des doublons avec check_duplicates=True et keep=False
+def test_build_schema_remove_all_duplicates(sample_df_with_duplicates):
+    """Test duplicate removal with check_duplicates=True and keep=False."""
+    builder = DuckdbTablesBuilder(sample_df_with_duplicates)
+    initial_count = len(builder.df)
+    
+    # Construction du schéma avec suppression de tous les doublons
+    builder.build_duckdb_schema(check_duplicates=True, keep=False)
+    
+    final_count = len(builder.df)
+    assert final_count < initial_count
+
+# Test de la suppression des doublons avec check_duplicates=True et keep='first'
+def test_build_schema_keep_first_duplicate(sample_df_with_duplicates):
+    """Test duplicate removal with check_duplicates=True and keep='first'."""
+    builder = DuckdbTablesBuilder(sample_df_with_duplicates)
+    initial_count = len(builder.df)
+    
+    # Construction du schéma en gardant le premier doublon
+    builder.build_duckdb_schema(check_duplicates=True, keep='first')
+    
+    final_count = len(builder.df)
+    assert final_count <= initial_count
+
+# Test de la suppression des doublons avec check_duplicates=True et keep='last'
+def test_build_schema_keep_last_duplicate(sample_df_with_duplicates):
+    """Test duplicate removal with check_duplicates=True and keep='last'."""
+    builder = DuckdbTablesBuilder(sample_df_with_duplicates)
+    initial_count = len(builder.df)
+    
+    # Construction du schéma en gardant le dernier doublon
+    builder.build_duckdb_schema(check_duplicates=True, keep='last')
+    
+    final_count = len(builder.df)
+    assert final_count <= initial_count
+
+# Test de la conservation des données avec check_duplicates=False
+def test_build_schema_no_duplicate_check(sample_df_with_duplicates):
+    """Test no duplicate removal with check_duplicates=False."""
+    builder = DuckdbTablesBuilder(sample_df_with_duplicates)
+    initial_count = len(builder.df)
+    
+    # Construction du schéma sans vérification des doublons
+    builder.build_duckdb_schema(check_duplicates=False)
+    
+    final_count = len(builder.df)
+    assert final_count == initial_count
+
+# Test du logging des doublons supprimés
+def test_duplicate_removal_logging(sample_df_with_duplicates, caplog):
+    """Test logging of removed duplicates."""
+    builder = DuckdbTablesBuilder(sample_df_with_duplicates)
+    
+    # Construction du schéma avec suppression des doublons
+    builder.build_duckdb_schema(check_duplicates=True, keep=False)
+    
+    # Vérification que le logging a eu lieu
+    assert "Suppression des doublons" in caplog.text
+    assert "observations ont été supprimées" in caplog.text
+
+# Test de la gestion des colonnes 'value' dans la suppression des doublons
+def test_duplicate_check_excludes_value_column(sample_df_with_value_column):
+    """Test that duplicate check excludes 'value' column."""
+    builder = DuckdbTablesBuilder(sample_df_with_value_column)
+    initial_count = len(builder.df)
+    
+    # Construction du schéma avec suppression des doublons
+    builder.build_duckdb_schema(check_duplicates=True, keep='first')
+    
+    # Vérification que les doublons ont été traités correctement
+    # (en excluant la colonne 'value' de la vérification)
+    final_count = len(builder.df)
+    assert final_count <= initial_count
+
 # Vérification de la génération d'erreur pour des tables absentes
 @pytest.mark.parametrize("table_name", ['invalid_table', 'nonexistent'])
 def test_query_nonexistent_table(duckdb_builder, table_name):

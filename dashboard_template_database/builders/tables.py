@@ -3,7 +3,7 @@
 import os
 import pandas as pd
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Dict, Optional, Literal
 # Duckdb
 import duckdb
 
@@ -120,7 +120,6 @@ class DuckdbTablesBuilder(SchemaBuilder):
             table_name (Optional[str]): Name of the fact table in DuckDB. Defaults to 'fact_table'.
             table_prefix (Optional[str]): Prefix for dimension table names. Defaults to 'dim_'.
             column_labels (Optional[Dict[str, str]]): Optional mapping of column names to labels.
-
         """
         # Création de la table d'informations si elle n'existe pas déjà
         if not hasattr(self, 'df_fact'):
@@ -149,7 +148,7 @@ class DuckdbTablesBuilder(SchemaBuilder):
         self.logger.info(f"Successfully registered duckdb fact table")
     
     # Méthode de construction du schéma
-    def build_duckdb_schema(self, metadata_table: Optional[str] = 'metadata', fact_table: Optional[str] = 'fact_table', dim_table_prefix: Optional[str] = 'dim_', column_labels: Optional[Dict[str, str]] = None) -> None:
+    def build_duckdb_schema(self, metadata_table: Optional[str] = 'metadata', fact_table: Optional[str] = 'fact_table', dim_table_prefix: Optional[str] = 'dim_', column_labels: Optional[Dict[str, str]] = None, check_duplicates: bool = True, keep: Literal[False, 'first', 'last'] = False) -> None:
         """
         Build the entire schema in DuckDB, including metadata, dimension, and fact tables.
 
@@ -158,8 +157,30 @@ class DuckdbTablesBuilder(SchemaBuilder):
             fact_table (Optional[str]): Name of the fact table. Defaults to 'fact_table'.
             dim_table_prefix (Optional[str]): Prefix for dimension tables. Defaults to 'dim_'.
             column_labels (Optional[Dict[str, str]]): Optional mapping of column names to labels.
+            check_duplicates (bool): Whether to check and remove duplicates. Defaults to True.
+            keep (Literal[False, 'first', 'last']): Which duplicates to keep. Defaults to False.
 
         """
+        # Vérification et suppression des doublons sur self.df si demandé
+        if check_duplicates:
+            initial_count = len(self.df)
+            
+            # Identification des colonnes à vérifier (toutes sauf 'value' si elle existe)
+            columns_to_check = [col for col in self.df.columns if col != 'value']
+            
+            if keep == False:
+                # Suppression de tous les doublons
+                self.df = self.df.drop_duplicates(subset=columns_to_check, keep=False)
+            else:
+                # Conservation du premier ou dernier doublon
+                self.df = self.df.drop_duplicates(subset=columns_to_check, keep=keep)
+            
+            final_count = len(self.df)
+            removed_count = initial_count - final_count
+            
+            if removed_count > 0:
+                self.logger.warning(f"Suppression des doublons : {removed_count} observations ont été supprimées du DataFrame principal")
+        
         # Création de la table des méta-données
         self.create_duckdb_metadata_table(
             table_name=metadata_table, 

@@ -132,3 +132,25 @@ def temp_files(sample_df, tmp_path):
     files['parquet'] = parquet_path
     
     return files
+
+# Fixture pour DataFrame avec doublons
+@pytest.fixture
+def sample_df_with_duplicates():
+    """Create a sample DataFrame with duplicates for testing."""
+    return pd.DataFrame({
+        'id': [1, 2, 3, 1, 2],  # Doublons sur id 1 et 2
+        'category': ['A', 'B', 'A', 'A', 'B'],
+        'status': ['active', 'inactive', 'active', 'active', 'inactive'],
+        'value': [10.0, 20.0, 30.0, 40.0, 50.0]
+    })
+
+# Fixture pour DataFrame avec colonne 'value'
+@pytest.fixture
+def sample_df_with_value_column():
+    """Create a sample DataFrame with a 'value' column for testing."""
+    return pd.DataFrame({
+        'id': [1, 2, 3, 1],  # Doublons sur id 1
+        'category': ['A', 'B', 'A', 'A'],
+        'status': ['active', 'inactive', 'active', 'active'],
+        'value': [10.0, 20.0, 30.0, 40.0]  # Valeurs différentes pour les doublons
+    })
