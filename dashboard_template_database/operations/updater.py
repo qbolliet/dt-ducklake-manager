@@ -3,17 +3,244 @@ import os
 import pandas as pd
 import numpy as np
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple, Union
+from typing import Dict, List, Optional, Tuple, Union, Callable, Any
 import duckdb
 import hashlib
 import json
 from datetime import datetime
+from enum import Enum
+from dataclasses import dataclass
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import threading
 
 from ..builders.schema import SchemaBuilder
 from ..utils.logger import _init_logger
 
 # Emplacement du fichier
 FILE_PATH = Path(os.path.abspath(__file__))
+
+class ConflictResolutionStrategy(Enum):
+    """
+    Stratégies de résolution de conflits de types.
+    """
+    PROMOTE_TYPES = "promote_types"  # Promotion automatique des types (int -> float, etc.)
+    STRICT_VALIDATION = "strict_validation"  # Validation stricte, échec si conflit
+    COERCE_TO_STRING = "coerce_to_string"  # Conversion forcée vers string
+    USER_DEFINED = "user_defined"  # Fonction personnalisée de résolution
+
+class DataValidationLevel(Enum):
+    """
+    Niveaux de validation des données.
+    """
+    NONE = "none"
+    BASIC = "basic"      # Validation des types et NULL
+    STRICT = "strict"    # Validation complète avec contraintes
+    CUSTOM = "custom"    # Validation personnalisée
+
+@dataclass
+class ValidationRule:
+    """
+    Règle de validation pour une colonne.
+    """
+    column_name: str
+    rule_type: str  # 'not_null', 'range', 'regex', 'custom'
+    parameters: Dict[str, Any]
+    error_message: str
+    severity: str  # 'error', 'warning'
+
+@dataclass
+class ConflictResolution:
+    """
+    Configuration de résolution de conflit.
+    """
+    column_name: str
+    source_type: str
+    target_type: str
+    resolution_strategy: str
+    custom_function: Optional[Callable] = None
+
+class DataQualityChecker:
+    """
+    Composant de vérification de qualité des données.
+    """
+    
+    def __init__(self, validation_rules: List[ValidationRule] = None):
+        self.validation_rules = validation_rules or []
+        self.default_rules = self._create_default_rules()
+    
+    def validate_dataframe(self, df: pd.DataFrame, 
+                          validation_level: DataValidationLevel = DataValidationLevel.BASIC) -> Dict[str, Any]:
+        """
+        Valide un DataFrame selon les règles définies.
+        
+        Args:
+            df: DataFrame à valider
+            validation_level: Niveau de validation
+            
+        Returns:
+            Résultats de validation
+        """
+        validation_results = {
+            'is_valid': True,
+            'errors': [],
+            'warnings': [],
+            'column_stats': {},
+            'quality_score': 0.0
+        }
+        
+        if validation_level == DataValidationLevel.NONE:
+            validation_results['quality_score'] = 1.0
+            return validation_results
+        
+        # Validation basique
+        if validation_level in [DataValidationLevel.BASIC, DataValidationLevel.STRICT]:
+            validation_results.update(self._basic_validation(df))
+        
+        # Validation stricte
+        if validation_level == DataValidationLevel.STRICT:
+            validation_results.update(self._strict_validation(df))
+        
+        # Validation personnalisée
+        if validation_level == DataValidationLevel.CUSTOM:
+            validation_results.update(self._custom_validation(df))
+        
+        # Calcul du score de qualité
+        validation_results['quality_score'] = self._calculate_quality_score(validation_results)
+        
+        return validation_results
+    
+    def _create_default_rules(self) -> List[ValidationRule]:
+        """
+        Crée des règles de validation par défaut.
+        
+        Returns:
+            Liste des règles par défaut
+        """
+        return [
+            ValidationRule(
+                column_name="*",
+                rule_type="excessive_nulls",
+                parameters={"max_null_ratio": 0.8},
+                error_message="Trop de valeurs NULL dans la colonne",
+                severity="warning"
+            )
+        ]
+    
+    def _basic_validation(self, df: pd.DataFrame) -> Dict[str, Any]:
+        """
+        Validation basique du DataFrame.
+        
+        Args:
+            df: DataFrame à valider
+            
+        Returns:
+            Résultats de validation basique
+        """
+        results = {'errors': [], 'warnings': [], 'column_stats': {}}
+        
+        for column in df.columns:
+            null_count = df[column].isnull().sum()
+            null_ratio = null_count / len(df)
+            
+            results['column_stats'][column] = {
+                'null_count': null_count,
+                'null_ratio': null_ratio,
+                'dtype': str(df[column].dtype),
+                'unique_count': df[column].nunique()
+            }
+            
+            # Vérification du ratio de NULL
+            if null_ratio > 0.8:
+                results['warnings'].append(
+                    f"Colonne {column}: {null_ratio:.1%} de valeurs NULL"
+                )
+        
+        return results
+    
+    def _strict_validation(self, df: pd.DataFrame) -> Dict[str, Any]:
+        """
+        Validation stricte du DataFrame.
+        
+        Args:
+            df: DataFrame à valider
+            
+        Returns:
+            Résultats de validation stricte
+        """
+        results = {'errors': [], 'warnings': []}
+        
+        # Application des règles personnalisées
+        for rule in self.validation_rules:
+            if rule.column_name == "*" or rule.column_name in df.columns:
+                columns_to_check = df.columns if rule.column_name == "*" else [rule.column_name]
+                
+                for column in columns_to_check:
+                    if not self._apply_validation_rule(df[column], rule):
+                        if rule.severity == "error":
+                            results['errors'].append(f"{column}: {rule.error_message}")
+                        else:
+                            results['warnings'].append(f"{column}: {rule.error_message}")
+        
+        return results
+    
+    def _custom_validation(self, df: pd.DataFrame) -> Dict[str, Any]:
+        """
+        Validation personnalisée du DataFrame.
+        
+        Args:
+            df: DataFrame à valider
+            
+        Returns:
+            Résultats de validation personnalisée
+        """
+        # À implémenter selon les besoins spécifiques
+        return {'errors': [], 'warnings': []}
+    
+    def _apply_validation_rule(self, series: pd.Series, rule: ValidationRule) -> bool:
+        """
+        Applique une règle de validation à une série.
+        
+        Args:
+            series: Série à valider
+            rule: Règle à appliquer
+            
+        Returns:
+            True si la règle est respectée
+        """
+        if rule.rule_type == "not_null":
+            return series.isnull().sum() == 0
+        
+        elif rule.rule_type == "excessive_nulls":
+            max_ratio = rule.parameters.get("max_null_ratio", 0.5)
+            null_ratio = series.isnull().sum() / len(series)
+            return null_ratio <= max_ratio
+        
+        elif rule.rule_type == "range":
+            min_val = rule.parameters.get("min")
+            max_val = rule.parameters.get("max")
+            if min_val is not None and max_val is not None:
+                return series.between(min_val, max_val, inclusive="both").all()
+        
+        return True
+    
+    def _calculate_quality_score(self, validation_results: Dict[str, Any]) -> float:
+        """
+        Calcule un score de qualité basé sur les résultats de validation.
+        
+        Args:
+            validation_results: Résultats de validation
+            
+        Returns:
+            Score entre 0.0 et 1.0
+        """
+        error_count = len(validation_results['errors'])
+        warning_count = len(validation_results['warnings'])
+        
+        # Score basé sur le nombre d'erreurs et avertissements
+        penalty = error_count * 0.2 + warning_count * 0.1
+        score = max(0.0, 1.0 - penalty)
+        
+        return score
 
 class DatabaseUpdater:
     """
@@ -26,7 +253,11 @@ class DatabaseUpdater:
     def __init__(self, 
                  connection: duckdb.DuckDBPyConnection,
                  categorical_threshold: Optional[int] = 50,
-                 log_filename: Optional[os.PathLike] = None):
+                 log_filename: Optional[os.PathLike] = None,
+                 conflict_resolution_strategy: ConflictResolutionStrategy = ConflictResolutionStrategy.PROMOTE_TYPES,
+                 validation_level: DataValidationLevel = DataValidationLevel.BASIC,
+                 max_workers: int = 4,
+                 batch_size: int = 10000):
         """
         Initialize the DatabaseUpdater.
         
@@ -34,9 +265,17 @@ class DatabaseUpdater:
             connection: DuckDB connection object
             categorical_threshold: Maximum unique values for categorical columns
             log_filename: Path to log file
+            conflict_resolution_strategy: Strategy for resolving type conflicts
+            validation_level: Level of data validation
+            max_workers: Maximum number of parallel workers
+            batch_size: Size of batches for processing
         """
         self.conn = connection
         self.categorical_threshold = categorical_threshold
+        self.conflict_resolution_strategy = conflict_resolution_strategy
+        self.validation_level = validation_level
+        self.max_workers = max_workers
+        self.batch_size = batch_size
         
         # Initialisation du logger
         if log_filename is None:
@@ -46,6 +285,13 @@ class DatabaseUpdater:
         # Cache pour les métadonnées
         self._metadata_cache = None
         self._dimension_cache = {}
+        
+        # Composants de validation et résolution de conflits
+        self.data_quality_checker = DataQualityChecker()
+        self.conflict_resolutions = {}
+        
+        # Verrou pour les opérations thread-safe
+        self._lock = threading.Lock()
     
     def load_current_metadata(self) -> pd.DataFrame:
         """
@@ -63,6 +309,385 @@ class DatabaseUpdater:
         
         return self._metadata_cache
     
+    def validate_and_cleanse_data(self, df: pd.DataFrame) -> Tuple[pd.DataFrame, Dict[str, Any]]:
+        """
+        Validate and cleanse incoming data.
+        
+        Args:
+            df: DataFrame to validate and cleanse
+            
+        Returns:
+            Tuple of (cleansed_df, validation_results)
+            
+        Example:
+            >>> updater = DatabaseUpdater(connection)
+            >>> clean_df, results = updater.validate_and_cleanse_data(raw_df)
+            >>> if results['quality_score'] < 0.8:
+            ...     print("Data quality issues detected")
+        """
+        self.logger.info("Validation et nettoyage des données")
+        
+        # Validation initiale
+        validation_results = self.data_quality_checker.validate_dataframe(df, self.validation_level)
+        
+        # Nettoyage des données
+        cleansed_df = df.copy()
+        
+        # Nettoyage basique
+        cleansed_df = self._basic_data_cleansing(cleansed_df)
+        
+        # Nettoyage avancé si validation stricte
+        if self.validation_level == DataValidationLevel.STRICT:
+            cleansed_df = self._advanced_data_cleansing(cleansed_df, validation_results)
+        
+        # Re-validation après nettoyage
+        final_validation = self.data_quality_checker.validate_dataframe(
+            cleansed_df, DataValidationLevel.BASIC
+        )
+        
+        validation_results['post_cleansing'] = final_validation
+        validation_results['improvement'] = (
+            final_validation['quality_score'] - validation_results['quality_score']
+        )
+        
+        return cleansed_df, validation_results
+    
+    def resolve_type_conflicts(self, df: pd.DataFrame, 
+                              schema_changes: Dict) -> Tuple[pd.DataFrame, Dict[str, ConflictResolution]]:
+        """
+        Resolve type conflicts between new data and existing schema.
+        
+        Args:
+            df: DataFrame with potential type conflicts
+            schema_changes: Detected schema changes
+            
+        Returns:
+            Tuple of (resolved_df, conflict_resolutions)
+        """
+        self.logger.info("Résolution des conflits de types")
+        
+        resolved_df = df.copy()
+        conflict_resolutions = {}
+        
+        for type_change in schema_changes.get('type_changes', []):
+            column = type_change['column']
+            old_type = type_change['old_type']
+            new_type = type_change['new_type']
+            
+            resolution = ConflictResolution(
+                column_name=column,
+                source_type=new_type,
+                target_type=old_type,
+                resolution_strategy=self.conflict_resolution_strategy.value
+            )
+            
+            # Application de la stratégie de résolution
+            if self.conflict_resolution_strategy == ConflictResolutionStrategy.PROMOTE_TYPES:
+                resolved_df[column] = self._promote_types(resolved_df[column], old_type, new_type)
+                
+            elif self.conflict_resolution_strategy == ConflictResolutionStrategy.COERCE_TO_STRING:
+                resolved_df[column] = resolved_df[column].astype(str)
+                
+            elif self.conflict_resolution_strategy == ConflictResolutionStrategy.STRICT_VALIDATION:
+                # Validation stricte - échec si conflit non résolvable
+                if not self._can_convert_type(resolved_df[column], old_type):
+                    raise ValueError(f"Conflit de type non résolvable pour {column}: {new_type} -> {old_type}")
+                    
+            elif self.conflict_resolution_strategy == ConflictResolutionStrategy.USER_DEFINED:
+                if column in self.conflict_resolutions:
+                    custom_func = self.conflict_resolutions[column].custom_function
+                    if custom_func:
+                        resolved_df[column] = custom_func(resolved_df[column], old_type, new_type)
+            
+            conflict_resolutions[column] = resolution
+        
+        return resolved_df, conflict_resolutions
+    
+    def parallel_dimension_update(self, df: pd.DataFrame) -> Dict[str, int]:
+        """
+        Update dimension tables in parallel for better performance.
+        
+        Args:
+            df: DataFrame containing dimension values
+            
+        Returns:
+            Statistics of dimension updates
+        """
+        self.logger.info("Mise à jour parallèle des dimensions")
+        
+        metadata = self.load_current_metadata()
+        categorical_columns = metadata[metadata['is_categorical'] == True]['name'].tolist()
+        
+        # Filtrage des colonnes catégorielles présentes dans le DataFrame
+        dimensions_to_update = [col for col in categorical_columns if col in df.columns]
+        
+        if not dimensions_to_update:
+            return {}
+        
+        update_stats = {}
+        
+        # Traitement parallèle des dimensions
+        with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
+            # Soumission des tâches
+            future_to_dimension = {
+                executor.submit(self._update_single_dimension, df[dim].unique(), dim): dim 
+                for dim in dimensions_to_update
+            }
+            
+            # Récupération des résultats
+            for future in as_completed(future_to_dimension):
+                dimension = future_to_dimension[future]
+                try:
+                    values_added = future.result()
+                    update_stats[dimension] = values_added
+                except Exception as e:
+                    self.logger.error(f"Erreur lors de la mise à jour de {dimension}: {e}")
+                    update_stats[dimension] = 0
+        
+        return update_stats
+    
+    def memory_efficient_merge(self, df: pd.DataFrame, 
+                              merge_keys: List[str],
+                              chunk_size: Optional[int] = None) -> Dict[str, Any]:
+        """
+        Perform memory-efficient merge for large DataFrames.
+        
+        Args:
+            df: Large DataFrame to merge
+            merge_keys: Keys for merging
+            chunk_size: Size of chunks for processing
+            
+        Returns:
+            Merge statistics
+        """
+        chunk_size = chunk_size or self.batch_size
+        
+        self.logger.info(f"Fusion optimisée mémoire par chunks de {chunk_size}")
+        
+        merge_stats = {
+            'total_rows': len(df),
+            'chunks_processed': 0,
+            'rows_added': 0,
+            'rows_updated': 0,
+            'memory_usage': []
+        }
+        
+        # Traitement par chunks
+        for chunk_start in range(0, len(df), chunk_size):
+            chunk_end = min(chunk_start + chunk_size, len(df))
+            chunk_df = df.iloc[chunk_start:chunk_end].copy()
+            
+            # Mesure de l'utilisation mémoire
+            memory_before = chunk_df.memory_usage(deep=True).sum()
+            
+            # Traitement du chunk
+            chunk_stats = self._process_chunk(chunk_df, merge_keys)
+            
+            # Mise à jour des statistiques
+            merge_stats['chunks_processed'] += 1
+            merge_stats['rows_added'] += chunk_stats.get('rows_added', 0)
+            merge_stats['rows_updated'] += chunk_stats.get('rows_updated', 0)
+            merge_stats['memory_usage'].append(memory_before)
+            
+            # Nettoyage explicite
+            del chunk_df
+            
+        # Statistiques finales
+        merge_stats['avg_memory_per_chunk'] = np.mean(merge_stats['memory_usage'])
+        merge_stats['peak_memory'] = max(merge_stats['memory_usage'])
+        
+        return merge_stats
+    
+    def _basic_data_cleansing(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Nettoyage basique des données.
+        
+        Args:
+            df: DataFrame à nettoyer
+            
+        Returns:
+            DataFrame nettoyé
+        """
+        cleansed_df = df.copy()
+        
+        # Suppression des doublons
+        initial_count = len(cleansed_df)
+        cleansed_df = cleansed_df.drop_duplicates()
+        if len(cleansed_df) != initial_count:
+            self.logger.info(f"Suppression de {initial_count - len(cleansed_df)} doublons")
+        
+        # Nettoyage des chaînes de caractères
+        for column in cleansed_df.columns:
+            if cleansed_df[column].dtype == 'object':
+                # Suppression des espaces en début/fin
+                cleansed_df[column] = cleansed_df[column].astype(str).str.strip()
+                
+                # Remplacement des chaînes vides par NaN
+                cleansed_df[column] = cleansed_df[column].replace('', np.nan)
+                
+                # Normalisation de la casse (optionnel)
+                # cleansed_df[column] = cleansed_df[column].str.lower()
+        
+        return cleansed_df
+    
+    def _advanced_data_cleansing(self, df: pd.DataFrame, 
+                               validation_results: Dict[str, Any]) -> pd.DataFrame:
+        """
+        Nettoyage avancé basé sur les résultats de validation.
+        
+        Args:
+            df: DataFrame à nettoyer
+            validation_results: Résultats de validation
+            
+        Returns:
+            DataFrame nettoyé
+        """
+        cleansed_df = df.copy()
+        
+        # Traitement des colonnes avec trop de NULL
+        for column, stats in validation_results.get('column_stats', {}).items():
+            if stats['null_ratio'] > 0.8:
+                self.logger.warning(f"Suppression de la colonne {column} (trop de NULL)")
+                cleansed_df = cleansed_df.drop(columns=[column])
+        
+        return cleansed_df
+    
+    def _promote_types(self, series: pd.Series, old_type: str, new_type: str) -> pd.Series:
+        """
+        Promeut les types selon une hiérarchie logique.
+        
+        Args:
+            series: Série à convertir
+            old_type: Type actuel
+            new_type: Nouveau type
+            
+        Returns:
+            Série avec type promu
+        """
+        # Hiérarchie de promotion: int -> float -> str
+        type_hierarchy = {
+            'int64': 1,
+            'float64': 2,
+            'object': 3
+        }
+        
+        old_level = type_hierarchy.get(old_type, 0)
+        new_level = type_hierarchy.get(new_type, 0)
+        
+        if new_level > old_level:
+            # Promotion vers un type plus général
+            if new_level == 2:  # float
+                return pd.to_numeric(series, errors='coerce')
+            elif new_level == 3:  # string
+                return series.astype(str)
+        
+        # Si pas de promotion possible, retourner la série originale
+        return series
+    
+    def _can_convert_type(self, series: pd.Series, target_type: str) -> bool:
+        """
+        Vérifie si une série peut être convertie vers un type cible.
+        
+        Args:
+            series: Série à tester
+            target_type: Type cible
+            
+        Returns:
+            True si la conversion est possible
+        """
+        try:
+            if 'int' in target_type:
+                pd.to_numeric(series, errors='raise')
+            elif 'float' in target_type:
+                pd.to_numeric(series, errors='raise')
+            elif target_type == 'object':
+                series.astype(str)
+            return True
+        except (ValueError, TypeError):
+            return False
+    
+    def _update_single_dimension(self, unique_values: np.ndarray, dimension_name: str) -> int:
+        """
+        Met à jour une table de dimension spécifique (thread-safe).
+        
+        Args:
+            unique_values: Valeurs uniques de la dimension
+            dimension_name: Nom de la dimension
+            
+        Returns:
+            Nombre de nouvelles valeurs ajoutées
+        """
+        with self._lock:
+            try:
+                return self._create_dimension_table_values(dimension_name, unique_values)
+            except Exception as e:
+                self.logger.error(f"Erreur lors de la mise à jour de {dimension_name}: {e}")
+                return 0
+    
+    def _create_dimension_table_values(self, dimension_name: str, values: np.ndarray) -> int:
+        """
+        Crée ou met à jour les valeurs d'une table de dimension.
+        
+        Args:
+            dimension_name: Nom de la dimension
+            values: Valeurs à ajouter
+            
+        Returns:
+            Nombre de valeurs ajoutées
+        """
+        table_name = f"dim_{dimension_name}"
+        
+        # Création de la table si elle n'existe pas
+        create_query = f"""
+            CREATE TABLE IF NOT EXISTS {table_name} (
+                value VARCHAR PRIMARY KEY,
+                label VARCHAR
+            )
+        """
+        self.conn.execute(create_query)
+        
+        values_added = 0
+        
+        # Insertion des nouvelles valeurs
+        for value in values:
+            if pd.notna(value):
+                try:
+                    insert_query = f"""
+                        INSERT INTO {table_name} (value, label) 
+                        VALUES (?, ?)
+                        ON CONFLICT (value) DO NOTHING
+                    """
+                    self.conn.execute(insert_query, [str(value), str(value)])
+                    if self.conn.execute("SELECT changes()").fetchone()[0] > 0:
+                        values_added += 1
+                except Exception as e:
+                    self.logger.warning(f"Impossible d'insérer la valeur {value} dans {table_name}: {e}")
+        
+        return values_added
+    
+    def _process_chunk(self, chunk_df: pd.DataFrame, merge_keys: List[str]) -> Dict[str, int]:
+        """
+        Traite un chunk de données.
+        
+        Args:
+            chunk_df: Chunk à traiter
+            merge_keys: Clés de fusion
+            
+        Returns:
+            Statistiques du traitement du chunk
+        """
+        # Validation du chunk
+        validation_results = self.data_quality_checker.validate_dataframe(
+            chunk_df, DataValidationLevel.BASIC
+        )
+        
+        if validation_results['quality_score'] < 0.5:
+            self.logger.warning("Qualité de données faible dans le chunk, nettoyage appliqué")
+            chunk_df = self._basic_data_cleansing(chunk_df)
+        
+        # Insertion du chunk
+        return self.append_to_fact_table(chunk_df)
+
     def detect_schema_changes(self, new_df: pd.DataFrame) -> Dict:
         """
         Detect schema changes between new data and existing database.
