@@ -1001,7 +1001,7 @@ class DatabaseUpdater:
                         INSERT INTO {table_name} (value, label) 
                         VALUES (?, ?)
                         ON CONFLICT (value) DO NOTHING
-                    """, [value, str(label)])
+                    """, [str(value), str(label)])
                     values_added += 1
                 except Exception as e:
                     # Logging
