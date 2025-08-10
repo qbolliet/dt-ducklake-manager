@@ -341,7 +341,7 @@ class DatabaseUpdater:
         table_name = f"dim_{col_name}"
         
         # Remplacement des valeurs par les labels dans la fact table
-        self._convert_dimension_to_labels_in_fact_table(col_name)
+        self._convert_fact_table_dimension_mapping(col_name, values_to_labels=True)
         
         # Suppression de la table de dimension
         self.conn.execute(f"DROP TABLE IF EXISTS {table_name}")
@@ -367,43 +367,61 @@ class DatabaseUpdater:
             [is_categorical, col_name]
         )
     
-    # Méthode convertissant les index en labels dans la table des faits
-    def _convert_dimension_to_labels_in_fact_table(self, col_name: str) -> None:
+    # Méthode générique de conversion entre valeurs et labels dans la table des faits
+    def _convert_fact_table_dimension_mapping(self, col_name: str, values_to_labels: bool = True) -> None:
         """
-        Convert dimension values back to labels in the fact table.
+        Convert between dimension values and labels in the fact table.
         
         Args:
             col_name: Column name
+            values_to_labels: If True, converts values→labels; if False, converts labels→values
         """
         # Nom de la table de dimension
         table_name = f"dim_{col_name}"
         
         try:
-            # Récupération du mapping value -> label de la table de dimension
+            # Récupération du mapping de la table de dimension
             dim_result = self.conn.execute(f"SELECT value, label FROM {table_name}").fetchdf()
             
             if len(dim_result) > 0:
                 # Création d'une vue temporaire pour le mapping
                 self.conn.register('temp_dim_mapping', dim_result)
                 
-                # Mise à jour de la fact table en remplaçant les values par les labels
-                self.conn.execute(f"""
-                    UPDATE fact_table 
-                    SET {col_name} = (
-                        SELECT label FROM temp_dim_mapping 
-                        WHERE temp_dim_mapping.value = fact_table.{col_name}
-                    )
-                    WHERE {col_name} IS NOT NULL
-                """)
+                if values_to_labels:
+                    # Conversion values → labels (pour revenir aux données originales)
+                    update_query = f"""
+                        UPDATE fact_table 
+                        SET {col_name} = (
+                            SELECT label FROM temp_dim_mapping 
+                            WHERE temp_dim_mapping.value = fact_table.{col_name}
+                        )
+                        WHERE {col_name} IS NOT NULL
+                    """
+                    operation = "values to labels"
+                else:
+                    # Conversion labels → values (pour utiliser les index de dimension)
+                    update_query = f"""
+                        UPDATE fact_table 
+                        SET {col_name} = (
+                            SELECT value FROM temp_dim_mapping 
+                            WHERE temp_dim_mapping.label = fact_table.{col_name}
+                        )
+                        WHERE {col_name} IS NOT NULL
+                    """
+                    operation = "labels to values"
+                
+                # Exécution de la mise à jour
+                self.conn.execute(update_query)
                 
                 # Suppression de la vue temporaire
                 self.conn.execute('DROP VIEW temp_dim_mapping')
+                
                 # Logging
-                self.logger.info(f"Converted values to labels for {col_name} in fact table")
+                self.logger.info(f"Converted {operation} for {col_name} in fact table")
                 
         except Exception as e:
             # Logging
-            self.logger.error(f"Error converting dimension to labels for {col_name}: {e}")
+            self.logger.error(f"Error converting dimension mapping for {col_name}: {e}")
     
     # Méthode de détection des variables devenues catégorielles après l'upsert
     def _detect_new_categorical_variables_after_upsert(self) -> None:
@@ -450,51 +468,13 @@ class DatabaseUpdater:
                         )
                         
                         # Remplacement des labels par les valeurs de la table de dimension dans la fact table
-                        self._replace_labels_with_values_in_fact_table(col_name)
+                        self._convert_fact_table_dimension_mapping(col_name, values_to_labels=False)
                         # Logging
                         self.logger.info(f"Converted {col_name} to categorical after upsert ({unique_count} unique values)")
                         
             except Exception as e:
                 # Logging
                 self.logger.error(f"Error detecting categorical status for {col_name} after upsert: {e}")
-    
-    # Méthode de remplacement des labels dans la table des faits par leur valeur dans la table de dimension correspondante
-    def _replace_labels_with_values_in_fact_table(self, col_name: str) -> None:
-        """
-        Replace labels with values in the fact table using the dimension table.
-        
-        Args:
-            col_name: Column name
-        """
-        # Nom de la table de dimension
-        table_name = f"dim_{col_name}"
-        
-        try:
-            # Récupération du mapping label -> value de la table de dimension
-            dim_result = self.conn.execute(f"SELECT value, label FROM {table_name}").fetchdf()
-            
-            if len(dim_result) > 0:
-                # Création d'une vue temporaire pour le mapping
-                self.conn.register('temp_label_to_value', dim_result)
-                
-                # Mise à jour de la fact table en remplaçant les labels par les values
-                self.conn.execute(f"""
-                    UPDATE fact_table 
-                    SET {col_name} = (
-                        SELECT value FROM temp_label_to_value 
-                        WHERE temp_label_to_value.label = fact_table.{col_name}
-                    )
-                    WHERE {col_name} IS NOT NULL
-                """)
-                
-                # Suppression de la vue temporaire
-                self.conn.execute('DROP VIEW temp_label_to_value')
-                # Logging
-                self.logger.info(f"Replaced labels with values for {col_name} in fact table")
-                
-        except Exception as e:
-            # Logging
-            self.logger.error(f"Error replacing labels with values for {col_name}: {e}")
     
     # Méthode de mise à jour des index
     def update_indexes(self, index_config: Dict) -> None:
@@ -902,17 +882,8 @@ class DatabaseUpdater:
         # Conversion du type en SQL
         sql_type = SchemaBuilder._map_python_to_sql_type(dtype)
         
-        # Valeur par défaut selon le type
-        if 'int' in dtype:
-            default_value = "0"
-        elif 'float' in dtype:
-            default_value = "0.0"
-        elif dtype == 'bool':
-            default_value = "FALSE"
-        else:
-            default_value = "''"
-        # Requête d'ajout de la colonne
-        alter_query = f"ALTER TABLE fact_table ADD COLUMN {column} {sql_type} DEFAULT {default_value}"
+        # Ajout de la colonne avec des valeurs NULL (seront remplacées dans l'upsert)
+        alter_query = f"ALTER TABLE fact_table ADD COLUMN {column} {sql_type} DEFAULT NULL"
         # Exécution de la requête
         self.conn.execute(alter_query)
         # Logging
