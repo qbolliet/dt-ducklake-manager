@@ -9,6 +9,8 @@ import duckdb
 
 # Modules ad hoc
 from .schema import SchemaBuilder
+# Utilitaires de traitement des données
+from ..utils.data_processing import remove_dataframe_duplicates
 
 # Emplacement du fichier
 FILE_PATH = Path(os.path.abspath(__file__))
@@ -163,23 +165,7 @@ class DuckdbTablesBuilder(SchemaBuilder):
         """
         # Vérification et suppression des doublons sur self.df si demandé
         if check_duplicates:
-            initial_count = len(self.df)
-            
-            # Identification des colonnes à vérifier (toutes sauf 'value' si elle existe)
-            columns_to_check = [col for col in self.df.columns if col != 'value']
-            
-            if keep == False:
-                # Suppression de tous les doublons
-                self.df = self.df.drop_duplicates(subset=columns_to_check, keep=False)
-            else:
-                # Conservation du premier ou dernier doublon
-                self.df = self.df.drop_duplicates(subset=columns_to_check, keep=keep)
-            
-            final_count = len(self.df)
-            removed_count = initial_count - final_count
-            
-            if removed_count > 0:
-                self.logger.warning(f"Suppression des doublons : {removed_count} observations ont été supprimées du DataFrame principal")
+            self.df = remove_dataframe_duplicates(self.df, keep, self.logger, "DataFrame principal")
         
         # Création de la table des méta-données
         self.create_duckdb_metadata_table(

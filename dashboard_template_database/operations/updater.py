@@ -19,6 +19,9 @@ from ..builders.schema import SchemaBuilder
 from ..builders.indexer import IndexManager
 # Import de l'utilitaire de logging
 from ..utils.logger import _init_logger
+# Utilitaires de traitement des données
+from ..utils.data_processing import (map_python_to_sql_type, remove_dataframe_duplicates, 
+                                      build_database_duplicate_removal_query, check_categorical_threshold)
 
 # Emplacement du fichier
 FILE_PATH = Path(os.path.abspath(__file__))
@@ -90,7 +93,7 @@ class DatabaseUpdater:
         
         # Étape 1: Suppression des doublons dans les données de mise à jour si demandée
         if check_duplicates_update:
-            update_df = self._remove_duplicates_from_dataframe(update_df, keep, 'update')
+            update_df = remove_dataframe_duplicates(update_df, keep, self.logger, 'update')
         
         # Étape 2: Suppression des doublons dans la base de données existante si demandée
         if check_duplicates_db:
@@ -289,8 +292,7 @@ class DatabaseUpdater:
             col_name: Column name
             values: Series with column values
         """
-        if (str(values.dtype) == 'object' and 
-            values.nunique() <= self.categorical_threshold):
+        if check_categorical_threshold(values, self.categorical_threshold):
             
             # Création de la table de dimension via _update_dimension_values
             self._update_dimension_values(col_name, values)
@@ -590,39 +592,6 @@ class DatabaseUpdater:
         
         return self._metadata_cache
     
-    # Méthode de suppression des doublons d'un jeu de données
-    def _remove_duplicates_from_dataframe(self, df: pd.DataFrame, 
-                                        keep: Literal[False, 'first', 'last'],
-                                        source: str) -> pd.DataFrame:
-        """
-        Remove duplicates from a DataFrame excluding the 'value' column.
-        
-        Args:
-            df: DataFrame to process
-            keep: Strategy for keeping duplicates
-            source: Data source for logging
-            
-        Returns:
-            DataFrame without duplicates
-        """
-        # Comptage du nombre d'observations
-        initial_count = len(df)
-        
-        # Identification des colonnes à vérifier (toutes sauf 'value' si elle existe)
-        columns_to_check = [col for col in df.columns if col != 'value']
-        
-        # Suppression des duplicats
-        if keep == False:
-            df_cleaned = df.drop_duplicates(subset=columns_to_check, keep=False)
-        else:
-            df_cleaned = df.drop_duplicates(subset=columns_to_check, keep=keep)
-        
-        # Comptage du nombre d'obserabtion supprimées
-        removed_count = initial_count - len(df_cleaned)
-        if removed_count > 0:
-            self.logger.warning(f"Duplicate removal ({source}): {removed_count} observations removed")
-        
-        return df_cleaned
     
     # Méthode de préparation du DataFrame pour la fact table
     def _prepare_dataframe_for_fact_table(self, df: pd.DataFrame) -> pd.DataFrame:
@@ -734,34 +703,7 @@ class DatabaseUpdater:
                 return 0
             
             # Construction de la requête de suppression des doublons
-            columns_str = ', '.join(columns_to_check)
-            
-            if keep == False:
-                # Suppression de tous les doublons
-                delete_query = f"""
-                DELETE FROM fact_table 
-                WHERE rowid NOT IN (
-                    SELECT MIN(rowid) 
-                    FROM fact_table 
-                    GROUP BY {columns_str}
-                    HAVING COUNT(*) = 1
-                )
-                """
-            else:
-                # Conservation du premier ou dernier
-                order_clause = "ASC" if keep == 'first' else "DESC"
-                delete_query = f"""
-                DELETE FROM fact_table 
-                WHERE rowid NOT IN (
-                    SELECT rowid FROM (
-                        SELECT rowid, ROW_NUMBER() OVER (
-                            PARTITION BY {columns_str} 
-                            ORDER BY rowid {order_clause}
-                        ) as rn
-                        FROM fact_table
-                    ) WHERE rn = 1
-                )
-                """
+            delete_query = build_database_duplicate_removal_query(columns_to_check, keep, 'fact_table')
             
             self.conn.execute(delete_query)
             
@@ -791,7 +733,7 @@ class DatabaseUpdater:
         # Identification du type de la colonne
         dtype = str(df[column].dtype)
         # Conversion du type en SQL
-        sql_type = SchemaBuilder._map_python_to_sql_type(dtype)
+        sql_type = map_python_to_sql_type(dtype)
         # Définition si la variable est catégorielle
         is_categorical = (
             dtype == 'object' and 
@@ -857,7 +799,7 @@ class DatabaseUpdater:
             resolved_type = current_type
         
         # Conversion en type SQL
-        sql_type = SchemaBuilder._map_python_to_sql_type(resolved_type)
+        sql_type = map_python_to_sql_type(resolved_type)
         # Mise à jour des métadonnées
         self.conn.execute("""
             UPDATE metadata 
@@ -880,7 +822,7 @@ class DatabaseUpdater:
         # Identification du type de la colonne
         dtype = str(df[column].dtype)
         # Conversion du type en SQL
-        sql_type = SchemaBuilder._map_python_to_sql_type(dtype)
+        sql_type = map_python_to_sql_type(dtype)
         
         # Ajout de la colonne avec des valeurs NULL (seront remplacées dans l'upsert)
         alter_query = f"ALTER TABLE fact_table ADD COLUMN {column} {sql_type} DEFAULT NULL"
@@ -909,7 +851,7 @@ class DatabaseUpdater:
             
             # Détermination du nouveau type SQL
             new_dtype = str(df[column].dtype)
-            new_sql_type = SchemaBuilder._map_python_to_sql_type(new_dtype)
+            new_sql_type = map_python_to_sql_type(new_dtype)
             
             # Mise à jour du type si nécessaire
             if current_type and current_type.upper() != new_sql_type.upper():
@@ -1046,8 +988,13 @@ class DatabaseUpdater:
             unique_labels = set(labels.dropna().unique()) if isinstance(labels, pd.Series) else set(labels)
             new_labels = unique_labels - existing_labels
             # Construction des nouvelles valeurs 
-            new_values = (np.setdiff1d(np.arange(max(existing_values)), existing_values)+np.arrange(existing_values+1, existing_values+1+len(new_labels)))[:len(new_labels)].tolist()
+            if len(existing_values) > 0:
+                max_value = max(existing_values)
+                new_values = list(range(max_value + 1, max_value + 1 + len(new_labels)))
+            else:
+                new_values = list(range(len(new_labels)))
             # Insertion des nouvelles valeurs et labels
+            values_added = 0
             for value, label in zip(new_values, new_labels):
                 try:
                     self.conn.execute(f"""

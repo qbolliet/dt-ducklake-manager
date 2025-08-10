@@ -6,6 +6,8 @@ from pathlib import Path
 from typing import Dict, Optional, Tuple, Union
 # Module d'initialisation du logger
 from ..utils.logger import _init_logger
+# Utilitaires de traitement des données
+from ..utils.data_processing import map_python_to_sql_type
 
 # Emplacement du fichier
 FILE_PATH = Path(os.path.abspath(__file__))
@@ -73,7 +75,7 @@ class SchemaBuilder:
                     'name': col,
                     'label': column_labels[col] if col in column_labels.keys() else col.replace('_', ' ').title(),
                     'python_type': dtype,
-                    'sql_type': self._map_python_to_sql_type(dtype),
+                    'sql_type': map_python_to_sql_type(dtype),
                     'is_categorical': False,
                     # 'modalities': None
                 }
@@ -82,7 +84,7 @@ class SchemaBuilder:
                     'name': col,
                     'label': col.replace('_', ' ').title(),
                     'python_type': dtype,
-                    'sql_type': self._map_python_to_sql_type(dtype),
+                    'sql_type': map_python_to_sql_type(dtype),
                     'is_categorical': False,
                     # 'modalities': None
                 }
@@ -117,28 +119,6 @@ class SchemaBuilder:
         
         return self.df_metadata
 
-    # Correspondance entre les types "python" et "SQL"
-    @staticmethod
-    def _map_python_to_sql_type(dtype: str) -> str:
-        """
-        Map Python data types to SQL-compatible data types.
-
-        Args:
-            dtype (str): The Python data type as a string.
-
-        Returns:
-            str: The corresponding SQL data type.
-        """
-        # /!\ Peut être mis dans un json de paramètres
-        # Dictionnaire des correspondance entre les types Python et SQL
-        type_mapping = {
-            'object': 'VARCHAR',
-            'int64': 'INTEGER',
-            'float64': 'DOUBLE',
-            'datetime64[ns]': 'TIMESTAMP',
-            'bool': 'BOOLEAN'
-        }
-        return type_mapping.get(dtype, 'VARCHAR')
     
     # Méthode créant la dimension table
     def create_dimension_tables(self, column_labels : Optional[Union[Dict[str, str], None]]= None) -> Dict[str, pd.DataFrame] :
