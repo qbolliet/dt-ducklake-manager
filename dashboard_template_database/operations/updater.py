@@ -150,21 +150,8 @@ class DatabaseUpdater:
         # Étape 3: Mise à jour des métadonnées
         self.update_metadata(update_df)
         
-        # Étape 4: Mise à jour des tables de dimensions avec parallélisation si possible
-        current_metadata = self._load_current_metadata()
-        categorical_columns = current_metadata[current_metadata['is_categorical'] == True]['name'].values
-        categorical_columns_in_update = [col for col in categorical_columns if col in update_df.columns]
-        
-        if len(categorical_columns_in_update) > 1 and self.max_workers > 1:
-            # Utilisation du traitement parallèle pour les dimensions multiples
-            columns_and_values = [(col, update_df[col]) for col in categorical_columns_in_update]
-            self._parallel_dimension_update(columns_and_values)
-            
-            # Traitement des colonnes non-catégorielles et nouvelles colonnes catégorielles
-            self._update_non_categorical_dimensions(update_df, categorical_columns_in_update)
-        else:
-            # Traitement standard des dimensions
-            self.update_dimension_tables(update_df)
+        # Étape 4: Mise à jour des tables de dimensions (avec parallélisation interne si applicable)
+        self.update_dimension_tables(update_df)
         
         # Étape 5: Mise à jour de la table de faits
         self.update_fact_table(update_df)
@@ -173,45 +160,6 @@ class DatabaseUpdater:
         if index_config is not None:
             self.update_indexes(index_config)
     
-    # Méthode vérifiant que des variables non catégorielles ne sont pas devenues catégorielle après la mise à jour de la table
-    def _update_non_categorical_dimensions(self, update_df: pd.DataFrame, 
-                                         already_processed_cols: List[str]) -> None:
-        """
-        Update dimensions for non-categorical columns and handle categorical status changes.
-        
-        Args:
-            update_df: DataFrame containing update data
-            already_processed_cols: Columns already processed in parallel
-        """
-        # Chargement des métadonnées
-        current_metadata = self._load_current_metadata()
-        
-        # Traitement des colonnes non encore traitées
-        for _, row in current_metadata.iterrows():
-            # Nom 
-            col_name = row['name']
-            was_categorical = row['is_categorical']
-            
-            if col_name in update_df.columns and col_name not in already_processed_cols:
-                if was_categorical:
-                    self._handle_previously_categorical_column(col_name, update_df)
-                else:
-                    # Vérifier si elle devient catégorielle
-                    unique_count = update_df[col_name].nunique()
-                    is_now_categorical = (
-                        str(update_df[col_name].dtype) == 'object' and 
-                        unique_count <= self.categorical_threshold
-                    )
-                    
-                    if is_now_categorical:
-                        # Création d'une nouvelle table de dimension
-                        self._create_new_dimension_table(col_name, update_df[col_name])
-                        # Mise à jour du statut catégoriel dans les métadonnées
-                        self.conn.execute(
-                            "UPDATE metadata SET is_categorical = ? WHERE name = ?",
-                            [True, col_name]
-                        )
-                        self.logger.info(f"Created new dimension table dim_{col_name}")
     
     # Méthode de mise à jour des métadonnées
     def update_metadata(self, update_df: pd.DataFrame, column_labels: Optional[Dict[str, str]] = None) -> None:
@@ -272,7 +220,7 @@ class DatabaseUpdater:
             self._add_column_to_fact_table(col, prepared_df)
         
         # Mise à jour des types de colonnes si nécessaire
-        for col in set(prepared_df.columns).intersection(set(current_columns)):
+        for col in prepared_df.columns:
             self._update_column_type_in_fact_table(col, prepared_df)
         
         # Ajout/mise à jour des lignes
@@ -290,8 +238,8 @@ class DatabaseUpdater:
     # Méthode de mise à jour des tables de dimension
     def update_dimension_tables(self, update_df: pd.DataFrame) -> None:
         """
-        Update dimension tables with improved categorical logic.
-        Handles transitions between categorical and non-categorical status.
+        Update dimension tables using unified logic with internal parallelization.
+        Leverages _update_dimension_values for robust table management.
         
         Args:
             update_df: DataFrame containing update data
@@ -302,117 +250,124 @@ class DatabaseUpdater:
         # Chargement des métadonnées actuelles
         current_metadata = self._load_current_metadata()
         
-        # Parcours des colonnes référencées dans les méta-données
+        # Classification des colonnes par statut catégoriel
+        categorical_columns = []
+        non_categorical_columns = []
+        
         for _, row in current_metadata.iterrows():
-            # Nom de la colonne
             col_name = row['name']
-            # Statut catégoriel
-            was_categorical = row['is_categorical']
-            
             if col_name in update_df.columns:
-                # Si la variable était catégorielle, compter les modalités uniques dans la dimension et l'update
-                if was_categorical:
-                    self._handle_previously_categorical_column(col_name, update_df)
-                else:
-                    # Vérification si la variable devient catégorielle
-                    unique_count = update_df[col_name].nunique()
-                    is_now_categorical = (
-                        str(update_df[col_name].dtype) == 'object' and 
-                        unique_count <= self.categorical_threshold
-                    )
-                    
-                    if is_now_categorical:
-                        # Création d'une nouvelle table de dimension
-                        self._create_new_dimension_table(col_name, update_df[col_name])
-                        # Mise à jour du statut catégoriel dans les métadonnées
-                        self.conn.execute(
-                            "UPDATE metadata SET is_categorical = ? WHERE name = ?",
-                            [True, col_name]
-                        )
-                        # Logging
-                        self.logger.info(f"Created new dimension table dim_{col_name}")
+                if row['is_categorical']:
+                    categorical_columns.append(col_name)
+                elif row['python_type'] == 'object':
+                    non_categorical_columns.append(col_name)
+        
+        # Traitement des colonnes catégorielles existantes avec parallélisation si possible
+        if len(categorical_columns) > 1 and self.max_workers > 1:
+            # Traitement parallèle
+            columns_and_values = [(col, update_df[col]) for col in categorical_columns]
+            self._parallel_dimension_update(columns_and_values)
+        else:
+            # Traitement séquentiel
+            for col_name in categorical_columns:
+                self._update_dimension_values(col_name, update_df[col_name])
+        
+        # Traitement des colonnes non-catégorielles (vérification si elles deviennent catégorielles)
+        for col_name in non_categorical_columns:
+            self._check_and_convert_to_categorical(col_name, update_df[col_name])
+        
+        # Vérification des colonnes catégorielles qui pourraient dépasser le seuil
+        for col_name in categorical_columns:
+            self._check_categorical_threshold(col_name, update_df[col_name])
     
-    # Méthode auxiliaire vérifiant que les variables catégorielles le sont toujours après la mise à jour
-    def _handle_previously_categorical_column(self, col_name: str, update_df: pd.DataFrame) -> None:
+    # Méthodes auxilaire convertissant une variable en catégorielle si elle en satisfait les conditions
+    def _check_and_convert_to_categorical(self, col_name: str, values: pd.Series) -> None:
         """
-        Handle a column that was previously categorical.
-        
-        Args:
-            col_name: Name of the column
-            update_df: DataFrame containing update data
-        """
-        # Nom de la table de dimension
-        table_name = f"dim_{col_name}"
-        
-        try:
-            # Récupération des labels existantss de la dimension
-            existing_labels = set()
-            try:
-                existing_result = self.conn.execute(f"SELECT label FROM {table_name}").fetchdf()
-                existing_labels = set(existing_result['label']) if len(existing_result) > 0 else set()
-            except:
-                existing_labels = set()
-            
-            # Récupération des nouvelles valeurs uniques
-            new_labels = set(update_df[col_name].dropna().unique())
-            
-            # Comptage total des modalités uniques (existantes + nouvelles)
-            total_unique_values = existing_labels.union(new_labels)
-            total_count = len(total_unique_values)
-            # Si les variables sont toujours catégorielles
-            if total_count <= self.categorical_threshold:
-                # Ajout es valeurs manquantes à la table de dimension
-                missing_labels = new_labels - existing_labels
-                if missing_labels:
-                    self._add_values_to_dimension_table(col_name, missing_labels)
-                    # Logging
-                    self.logger.info(f"Added {len(missing_labels)} new values to {table_name}")
-            else:
-                # Remplacer les index par les labels dans la fact table et supprimer la dimension
-                self._convert_dimension_to_labels_in_fact_table(col_name)
-                # Suppression de la table de dimension
-                self.conn.execute(f"DROP TABLE IF EXISTS {table_name}")
-                # Mise à jour du statut catégoriel dans les métadonnées
-                self.conn.execute(
-                    "UPDATE metadata SET is_categorical = ? WHERE name = ?",
-                    [False, col_name]
-                )
-                # Logging
-                self.logger.info(f"Converted {table_name} to non-categorical (exceeded threshold)")
-        
-        except Exception as e:
-            # Logging
-            self.logger.error(f"Error handling previously categorical column {col_name}: {e}")
-    
-    # Méthode ajoutant de nouvelles valeurs à une table de dimension
-    def _add_values_to_dimension_table(self, col_name: str, labels: set) -> None:
-        """
-        Add new labels to an existing dimension table.
+        Check if a non-categorical column should become categorical and convert if needed.
         
         Args:
             col_name: Column name
-            labels: Set of new labels to add
+            values: Series with column values
+        """
+        if (str(values.dtype) == 'object' and 
+            values.nunique() <= self.categorical_threshold):
+            
+            # Création de la table de dimension via _update_dimension_values
+            self._update_dimension_values(col_name, values)
+            
+            # Mise à jour du statut catégoriel
+            self._update_categorical_status(col_name, True)
+            
+            # Logging
+            self.logger.info(f"Converted {col_name} to categorical with dim_{col_name}")
+    
+    # Méthode auxiliaire convertissant une variable catégorielle en variable non catégorielle si elle excède un certain seuil
+    def _check_categorical_threshold(self, col_name: str, values: pd.Series) -> None:
+        """
+        Check if a categorical column exceeds threshold and convert to non-categorical if needed.
+        
+        Args:
+            col_name: Column name
+            values: Series with column values
         """
         # Nom de la table de dimension
         table_name = f"dim_{col_name}"
-        # Compte du nombre de dimensions dans la table
-        existing_result = self.conn.execute(f"SELECT value FROM {table_name}").fetchdf()
-        existing_values = set(existing_result['value']) if len(existing_result) > 0 else set()
-        new_values = np.setdiff1d(np.arange(len(existing_values)+len(labels)), existing_values).tolist()
-        # Parcours des valeurs à jouter
-        for value, label in zip(new_values, labels):
-            try:
-                # Ajout de la valeur à la table
-                self.conn.execute(f"""
-                    INSERT INTO {table_name} (value, label) 
-                    VALUES (?, ?)
-                    ON CONFLICT (value) DO NOTHING
-                """, [value, label])
-            except Exception as e:
-                # Logging
-                self.logger.warning(f"Cannot insert {value} into {table_name}: {e}")
+        
+        # Récupération des valeurs existantes
+        try:
+            existing_result = self.conn.execute(f"SELECT label FROM {table_name}").fetchdf()
+            existing_values = set(existing_result['label']) if len(existing_result) > 0 else set()
+        except:
+            existing_values = set()
+        
+        # Calcul du nombre total de valeurs uniques
+        new_values = set(values.dropna().unique())
+        total_count = len(existing_values.union(new_values))
+        
+        # Vérification du seuil
+        if total_count > self.categorical_threshold:
+            # Conversion vers non-catégoriel
+            self._convert_to_non_categorical(col_name)
     
-    # Méthode convertissant les index an labels dans la table des faits
+    # Méthode de conversion vers le statut non-catégoriel
+    def _convert_to_non_categorical(self, col_name: str) -> None:
+        """
+        Convert a column from categorical to non-categorical status.
+        
+        Args:
+            col_name: Column name
+        """
+        # Nom de la table de dimension
+        table_name = f"dim_{col_name}"
+        
+        # Remplacement des valeurs par les labels dans la fact table
+        self._convert_dimension_to_labels_in_fact_table(col_name)
+        
+        # Suppression de la table de dimension
+        self.conn.execute(f"DROP TABLE IF EXISTS {table_name}")
+        
+        # Mise à jour du statut dans les métadonnées
+        self._update_categorical_status(col_name, False)
+        
+        self.logger.info(f"Converted {col_name} to non-categorical - dropped {table_name}")  
+    
+    
+    # Méthode auxiliaire de mise à jour du statut catégoriel dans les méta-données
+    def _update_categorical_status(self, col_name: str, is_categorical: bool) -> None:
+        """
+        Update categorical status in metadata.
+        
+        Args:
+            col_name: Column name
+            is_categorical: New categorical status
+        """
+        # Exécution de la requête de mise à jour
+        self.conn.execute(
+            "UPDATE metadata SET is_categorical = ? WHERE name = ?",
+            [is_categorical, col_name]
+        )
+    
+    # Méthode convertissant les index en labels dans la table des faits
     def _convert_dimension_to_labels_in_fact_table(self, col_name: str) -> None:
         """
         Convert dimension values back to labels in the fact table.
@@ -455,6 +410,7 @@ class DatabaseUpdater:
         """
         Detect variables that became categorical after the upsert and create dimension tables.
         """
+        # Chargement des méta-données
         current_metadata = self._load_current_metadata()
         
         # Parcours des colonnes non-catégorielles dans les métadonnées
@@ -464,6 +420,7 @@ class DatabaseUpdater:
         ]
         # Parcours des colonnes
         for _, row in non_categorical_cols.iterrows():
+            # Nom de la colonne
             col_name = row['name']
             
             try:
@@ -484,7 +441,7 @@ class DatabaseUpdater:
                     
                     if len(unique_labels_result) > 0:
                         # Création de la table de dimension
-                        self._create_dimension_table_from_fact_labels(col_name, unique_labels_result['label'])
+                        self._update_dimension_values(col_name, unique_labels_result['label'])
                         
                         # Mise à jour du statut catégoriel dans les métadonnées
                         self.conn.execute(
@@ -498,45 +455,8 @@ class DatabaseUpdater:
                         self.logger.info(f"Converted {col_name} to categorical after upsert ({unique_count} unique values)")
                         
             except Exception as e:
+                # Logging
                 self.logger.error(f"Error detecting categorical status for {col_name} after upsert: {e}")
-    
-    # Création d'une table de dimension à partir des valeurs de la table des faits
-    def _create_dimension_table_from_fact_labels(self, col_name: str, labels: pd.Series) -> None:
-        """
-        Create a dimension table from fact table values.
-        
-        Args:
-            col_name: Column name
-            labels: Series with unique values from fact table
-        """
-        # Nom de la table de dimension
-        table_name = f"dim_{col_name}"
-        
-        try:
-            # Création d'un DataFrame pour la dimension avec les valeurs triées
-            dim_df = pd.Series(labels, name='label').to_frame().reset_index(names='value').sort_values(by='label', ascending=True, ignore_index=True)
-            
-            # Enregistrement comme vue temporaire
-            self.conn.register('temp_fact_dim', dim_df)
-            
-            # Suppression de l'ancienne table si elle existe
-            self.conn.execute(f"DROP TABLE IF EXISTS {table_name}")
-            
-            # Création de la table de dimension
-            self.conn.execute(f"""
-                CREATE TABLE {table_name} AS 
-                SELECT value, label FROM temp_fact_dim
-            """)
-            
-            # Suppression de la vue temporaire
-            self.conn.execute('DROP VIEW temp_fact_dim')
-            
-            # Logging
-            self.logger.info(f"Created dimension table {table_name} from fact table values")
-            
-        except Exception as e:
-            # Logging
-            self.logger.error(f"Error creating dimension table {table_name} from fact values: {e}")
     
     # Méthode de remplacement des labels dans la table des faits par leur valeur dans la table de dimension correspondante
     def _replace_labels_with_values_in_fact_table(self, col_name: str) -> None:
@@ -569,10 +489,11 @@ class DatabaseUpdater:
                 
                 # Suppression de la vue temporaire
                 self.conn.execute('DROP VIEW temp_label_to_value')
-                
+                # Logging
                 self.logger.info(f"Replaced labels with values for {col_name} in fact table")
                 
         except Exception as e:
+            # Logging
             self.logger.error(f"Error replacing labels with values for {col_name}: {e}")
     
     # Méthode de mise à jour des index
@@ -795,57 +716,20 @@ class DatabaseUpdater:
         Args:
             df: DataFrame containing the data to be inserted
         """
+        # Extraction des métadonnées
         current_metadata = self._load_current_metadata()
         
         # Parcours des colonnes catégorielles
         for _, row in current_metadata.iterrows():
+            # Extraction du nom de la colonne
             col_name = row['name']
+            # Extraction du statut catégoriel
             is_categorical = row['is_categorical']
             
             if is_categorical and col_name in df.columns:
                 # Mise à jour des valeurs de dimension avec les nouvelles valeurs
                 self._update_dimension_values(col_name, df[col_name])
     
-    # Méthode de création d'une nouvelle table de dimension
-    def _create_new_dimension_table(self, column_name: str, values: pd.Series) -> None:
-        """
-        Create a new dimension table for a column that became categorical.
-        
-        Args:
-            column_name: Name of the column
-            values: Series with the categorical values
-        """
-        # Nom de la table de dimension
-        table_name = f"dim_{column_name}"
-        
-        try:
-            # Récupération des valeurs uniques non nulles
-            unique_values = values.dropna().unique()
-            
-            # Création d'un DataFrame pour la dimension
-            dim_df = pd.DataFrame({
-                'value': unique_values,
-                'label': unique_values.astype(str)
-            })
-            
-            # Enregistrement comme vue temporaire
-            self.conn.register('temp_new_dim', dim_df)
-            
-            # Création de la table de dimension
-            self.conn.execute(f"""
-                CREATE TABLE {table_name} AS 
-                SELECT value, label FROM temp_new_dim
-            """)
-            
-            # Suppression de la vue temporaire
-            self.conn.execute('DROP VIEW temp_new_dim')
-            
-            # Logging
-            self.logger.info(f"Created new dimension table {table_name} with {len(unique_values)} values")
-            
-        except Exception as e:
-            # Logging
-            self.logger.error(f"Error creating dimension table {table_name}: {e}")
     
     # Méthode de déduplication de la base de données
     def _remove_duplicates_from_database(self, keep: Literal[False, 'first', 'last']) -> int:
@@ -948,6 +832,7 @@ class DatabaseUpdater:
         # Insertion de la nouvelle colonne
         if label is None:
             label = column.replace('_', ' ').title()
+        # Exécution de la requête
         self.conn.execute("""
             INSERT INTO metadata (name, label, python_type, sql_type, is_categorical)
             VALUES (?, ?, ?, ?, ?)
@@ -1002,38 +887,6 @@ class DatabaseUpdater:
         # Logging
         self.logger.info(f"Type conflict resolution for {column}: {current_type} -> {resolved_type}")
     
-    # Méthode de mise à jour du statut de variable catégorielle
-    def _update_categorical_status(self, df: pd.DataFrame, 
-                                 current_metadata: pd.DataFrame) -> None:
-        """
-        Update categorical status of columns.
-        
-        Args:
-            df: DataFrame with new data
-            current_metadata: Current metadata
-        """
-        # Parcours des colonnes
-        for col in df.columns:
-            if col in current_metadata['name'].values:
-                # Identification si la variable dans la base de données est actuellement catégorielle
-                current_is_cat = current_metadata[current_metadata['name'] == col]['is_categorical'].values[0]
-                # Comptage du nombre de modalités pour savoir si après la mise à jour la variable est catégorielle
-                new_unique_count = df[col].nunique()
-                new_is_cat = (
-                    str(df[col].dtype) == 'object' and 
-                    new_unique_count <= self.categorical_threshold
-                )
-                
-                if current_is_cat != new_is_cat:
-                    # Mise à jour du statut dans les métadonnées
-                    self.conn.execute("""
-                        UPDATE metadata 
-                        SET is_categorical = ?
-                        WHERE name = ?
-                    """, [new_is_cat, col])
-                    
-                    # Logging
-                    self.logger.info(f"Categorical status change for {col}: {current_is_cat} -> {new_is_cat}")
     
     # Méthode d'ajout d'une nouvelle colonne à la table des faits
     def _add_column_to_fact_table(self, column: str, df: pd.DataFrame) -> None:
@@ -1075,7 +928,7 @@ class DatabaseUpdater:
             df: DataFrame with the new data type
         """
         try:
-            # Récupération du type actuel
+            # Récupération du type actuel de la colonne
             current_columns = self.conn.execute("DESCRIBE fact_table").fetchall()
             current_type = None
             for col_info in current_columns:
@@ -1085,15 +938,18 @@ class DatabaseUpdater:
             
             # Détermination du nouveau type SQL
             new_dtype = str(df[column].dtype)
-            from ..builders.schema import SchemaBuilder
             new_sql_type = SchemaBuilder._map_python_to_sql_type(new_dtype)
             
             # Mise à jour du type si nécessaire
             if current_type and current_type.upper() != new_sql_type.upper():
+                # Création de la requête
                 alter_query = f"ALTER TABLE fact_table ALTER {column} SET DATA TYPE {new_sql_type}"
+                # Exécution de la requête
                 self.conn.execute(alter_query)
+                # Logging
                 self.logger.info(f"Updated column {column} type from {current_type} to {new_sql_type}")
         except Exception as e:
+            # Logging
             self.logger.warning(f"Could not update column type for {column}: {e}")
     
     # Méthode de création de la table des faits avec les données
@@ -1150,17 +1006,19 @@ class DatabaseUpdater:
             
             if update_columns:
                 set_clause = ", ".join([f"f.{col} = t.{col}" for col in update_columns])
+                # Construction de la requête
                 update_query = f"""
                     UPDATE fact_table f
                     SET {set_clause}
                     FROM temp_upsert t
                     WHERE {merge_condition}
                 """
+                # Exécution de la requête
                 self.conn.execute(update_query)
         
         # Insertion des nouvelles lignes
         initial_count = self.conn.execute("SELECT COUNT(*) FROM fact_table").fetchone()[0]
-        
+        # Construction de la requête
         insert_query = f"""
             INSERT INTO fact_table
             SELECT t.* FROM temp_upsert t
@@ -1169,6 +1027,7 @@ class DatabaseUpdater:
                 WHERE {merge_condition}
             )
         """
+        # Exécution de la requête
         self.conn.execute(insert_query)
         
         # Comptage du nombre de lignes ajoutées
@@ -1182,16 +1041,13 @@ class DatabaseUpdater:
         self.logger.info(f"Upsert completed: {rows_added} rows added, {rows_updated} rows updated")
     
     # Méthode de mise à jour d'une table de dimension
-    def _update_dimension_values(self, dimension_name: str, values: pd.Series) -> int:
+    def _update_dimension_values(self, dimension_name: str, labels: pd.Series) -> None:
         """
         Update values of a dimension table.
         
         Args:
             dimension_name: Dimension name
-            values: Series with new values
-            
-        Returns:
-            Number of new values added
+            labels: Series with new labels
         """
         with self._lock:
             # Nom de la table de dimension
@@ -1207,25 +1063,27 @@ class DatabaseUpdater:
             
             # Récupération des valeurs existantes
             try:
-                existing_values = set(
-                    self.conn.execute(f"SELECT value FROM {table_name}").fetchdf()['value']
-                )
+                # Exécution de la requête
+                dim_result = self.conn.execute(f"SELECT value, label FROM {table_name}").fetchdf()
+                existing_labels = set(dim_result['label'])
+                existing_values = set(dim_result['value'])
             except:
+                existing_labels = set()
                 existing_values = set()
             
             # Identification des nouvelles valeurs
-            unique_values = set(values.dropna().unique())
-            new_values = unique_values - existing_values
-            
-            # Insertion des nouvelles valeurs
-            values_added = 0
-            for value in new_values:
+            unique_labels = set(labels.dropna().unique()) if isinstance(labels, pd.Series) else set(labels)
+            new_labels = unique_labels - existing_labels
+            # Construction des nouvelles valeurs 
+            new_values = (np.setdiff1d(np.arange(max(existing_values)), existing_values)+np.arrange(existing_values+1, existing_values+1+len(new_labels)))[:len(new_labels)].tolist()
+            # Insertion des nouvelles valeurs et labels
+            for value, label in zip(new_values, new_labels):
                 try:
                     self.conn.execute(f"""
                         INSERT INTO {table_name} (value, label) 
                         VALUES (?, ?)
                         ON CONFLICT (value) DO NOTHING
-                    """, [str(value), str(value)])
+                    """, [value, str(label)])
                     values_added += 1
                 except Exception as e:
                     # Logging
@@ -1234,5 +1092,4 @@ class DatabaseUpdater:
             if values_added > 0:
                 # Logging
                 self.logger.info(f"Added {values_added} new values to {table_name}")
-            
-            return values_added
+        
