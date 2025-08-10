@@ -66,10 +66,21 @@ class DuckdbTablesBuilder(SchemaBuilder):
         if not hasattr(self, 'df_metadata'):
             _ = self.create_metadata_table(column_labels)
         
-        # Conversion DataFrame en table DuckDB
+        # Création de la table avec contraintes explicites et clé primaire
         self.conn.register('temp_metadata', self.df_metadata)
         self.conn.execute(f"""
-            CREATE TABLE {table_name} AS 
+            CREATE TABLE {table_name} (
+                name VARCHAR PRIMARY KEY,
+                label VARCHAR,
+                python_type VARCHAR,
+                sql_type VARCHAR,
+                is_categorical BOOLEAN
+            )
+        """)
+        
+        # Insertion des données depuis la vue temporaire
+        self.conn.execute(f"""
+            INSERT INTO {table_name}
             SELECT * FROM temp_metadata
         """)
         self.conn.execute('DROP VIEW temp_metadata')
@@ -98,13 +109,18 @@ class DuckdbTablesBuilder(SchemaBuilder):
             # Enregistrement d'une vue temporaire
             self.conn.register('temp_dim', dim_df)
             
-            # Création d'une table avec "value" comme clé primaire
+            # Création d'une table avec contraintes explicites et "value" comme clé primaire
             self.conn.execute(f"""
-                CREATE TABLE {table_name} AS 
-                SELECT
-                    value,
-                    label 
-                FROM temp_dim
+                CREATE TABLE {table_name} (
+                    value VARCHAR PRIMARY KEY,
+                    label VARCHAR
+                )
+            """)
+            
+            # Insertion des données depuis la vue temporaire
+            self.conn.execute(f"""
+                INSERT INTO {table_name}
+                SELECT value, label FROM temp_dim
             """)
             
             # Ajout de la vue correspondante
