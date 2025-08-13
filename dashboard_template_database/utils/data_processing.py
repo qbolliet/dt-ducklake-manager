@@ -1,10 +1,11 @@
 # Importation des modules
 # Modules de base
 import pandas as pd
-from typing import Dict, Literal, Optional
+from typing import Any, Tuple, List, Literal, Optional, Union
 # Logging
 import logging
 
+# Fonction associant ls types python à leur équivalent SQL
 def map_python_to_sql_type(dtype: str) -> str:
     """
     Map Python data types to SQL-compatible data types.
@@ -33,7 +34,7 @@ def map_python_to_sql_type(dtype: str) -> str:
     }
     return type_mapping.get(dtype, 'VARCHAR')
 
-
+# Fonction de suppression des duplicats d'un jeu de donnéess
 def remove_dataframe_duplicates(df: pd.DataFrame, 
                                keep: Literal[False, 'first', 'last'],
                                logger: Optional[logging.Logger] = None,
@@ -75,7 +76,7 @@ def remove_dataframe_duplicates(df: pd.DataFrame,
     
     return df_cleaned
 
-
+# Fonction de construction de la requête de suppression des duplicats
 def build_database_duplicate_removal_query(columns_to_check: list, 
                                          keep: Literal[False, 'first', 'last'],
                                          table_name: str = 'fact_table') -> str:
@@ -128,24 +129,111 @@ def build_database_duplicate_removal_query(columns_to_check: list,
         )
         """
 
+# Méthode auxiliaire de création d'un filtre de conjonction
+def _build_conjonction_filter(filters: List[Tuple[str, str, Any]]) -> str:
+    """Constructs a SQL 'AND' filter condition from a list of filter tuples.
 
-def check_categorical_threshold(values: pd.Series, threshold: int) -> bool:
-    """
-    Check if a pandas Series should be considered categorical based on unique value count.
-    
     Args:
-        values (pd.Series): Series to evaluate
-        threshold (int): Maximum number of unique values for categorical classification
-        
+        filters (List[Tuple[str, str, Any]]): A list of filter conditions, where each filter is represented as a tuple (column, operator, value).
+        The operator can be comparison operators like '=', '!=', '<', '>', or set operators like 'in', 'not in'.
+
     Returns:
-        bool: True if series should be categorical, False otherwise
-        
-    Examples:
-        >>> series = pd.Series(['A', 'B', 'A', 'C'])
-        >>> check_categorical_threshold(series, 5)
-        True
-        >>> check_categorical_threshold(series, 2)
-        False
+        str: A string representing the conjunction of all the filter conditions, joined with 'AND'.
     """
-    return (str(values.dtype) == 'object' and 
-            values.nunique() <= threshold)
+    # Initialisation de la condition
+    conditions = []
+    # Parcours des filtres
+    for column, operator, value in filters:
+        # Distinction suivant le type d'opération
+        if operator in ["in", "not in"]:
+            value = "(" + ", ".join(map(str, value)) + ")"
+            # Ajout des filtres
+            conditions.append(f"{column} {operator.upper()} {value}")
+        else:
+            # value = str(value)
+            # Ajout des filtres
+            conditions.append(f"{column} {operator.upper()} '{value}'")
+        # Ajout des filtres
+        # conditions.append(f"{column} {operator.upper()} {value}")
+
+    # Retourne la conjonction des conditions
+    return " AND ".join(conditions)
+
+
+# Méthode de création des filtres
+def _build_sql_filter(
+    filters: Union[List[Tuple[str, str, Any]], List[List[Tuple[str, str, Any]]]],
+) -> str:
+    """Constructs a SQL filter condition from a list of filter tuples or a list of lists of filter tuples.
+
+    Args:
+        filters (Union[List[Tuple[str, str, Any]], List[List[Tuple[str, str, Any]]]]): Filter syntax: [[(column, op, val), …],…] where op is [==, =, >, >=, <, <=, !=, in, not in].
+        The innermost tuples are transposed into a set of filters applied through an AND operation.
+        The outer list combines these sets of filters through an OR operation.
+        A single list of tuples can also be used, meaning that no OR operation between set of filters is to be conducted.
+
+    Raises:
+        TypeError: If the filters are not provided in the expected format.
+
+    Returns:
+        str: A string representing the complete filter condition for the SQL query, either as a conjunction (AND) or
+        a disjunction (OR) of filter conditions.
+    """
+
+    # Disjonction de cas suivant le type de l'argument "filters"
+    # Si filters est une liste de tuples
+    if all(isinstance(i, tuple) for i in filters) and isinstance(filters, list):
+        return _build_conjonction_filter(filters=filters)
+    # Si filters est une liste de liste de tuples
+    elif all(
+        isinstance(i, list) and all(isinstance(j, tuple) for j in i) for i in filters
+    ) and isinstance(filters, list):
+        # Calul indépendant de chaque filtre de conjonction
+        conditions = [
+            _build_conjonction_filter(filters=conjonction_filter)
+            for conjonction_filter in filters
+        ]
+        return " OR ".join(conditions)
+    # Cas d'erreur de typage
+    else:
+        raise TypeError(
+            f"Invalid type for 'filters' : {filters}. Shoud be in [List[Tuple], List[List[Tuple]]]"
+        )
+
+# Méthode de construction d'une requête SQL
+def _build_where_clause(
+    filters: Optional[
+        Union[List[Tuple[str, str, Any]], List[List[Tuple[str, str, Any]]], str, None]
+    ] = None,
+) -> str:
+    """Constructs a SQL SELECT WHERE clause based on the given filters.
+
+    Args:
+        filters (Optional[ Union[List[Tuple[str, str, Any]], List[List[Tuple[str, str, Any]]], str, None] ], optional): A filter condition for the rows. Filter syntax: [[(column, op, val), …],…] where op is [=, >, >=, <, <=, !=, in, not in].
+        The innermost tuples are transposed into a set of filters applied through an AND operation.
+        The outer list combines these sets of filters through an OR operation.
+        A single list of tuples can also be used, meaning that no OR operation between set of filters is to be conducted. Defaults to None.
+
+    Raises:
+        TypeError: If the filters are not provided in the expected format.
+
+    Returns:
+        str: A SQL SELECT query string with optional row filters.
+    """
+    # Computation de la requête SQL
+    if filters is None:
+        return ""
+    elif isinstance(filters, str):
+        # Computation de la commande
+        sql_request = f"WHERE {filters}"
+    elif isinstance(filters, list):
+        # Computation du filtre sur les lignes
+        sql_filters = _build_sql_filter(filters=filters)
+        # Computation de la commande
+        sql_request = (
+            f"WHERE {sql_filters}"
+        )
+    else :
+        raise TypeError("Invalid type for 'filters'. Should be in [list, str, None]")
+
+    return sql_request
