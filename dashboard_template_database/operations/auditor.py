@@ -1,0 +1,1121 @@
+# Importation des modules
+# Modules de base
+import os
+import pandas as pd
+from pathlib import Path
+from typing import Dict, List, Optional, Set, Tuple, Any, Union
+from dataclasses import dataclass, field
+from enum import Enum
+import time
+# DuckDB
+import duckdb
+
+# Import des utilitaires
+from ..utils.logger import _init_logger
+
+# Emplacement du fichier
+FILE_PATH = Path(os.path.abspath(__file__))
+
+
+class ValidationLevel(Enum):
+    """Niveaux de validation pour l'audit de la base de données."""
+    BASIC = "basic"
+    STANDARD = "standard"
+    COMPREHENSIVE = "comprehensive"
+
+
+class IssueType(Enum):
+    """Types d'issues détectées lors de l'audit."""
+    SCHEMA_INCONSISTENCY = "schema_inconsistency"
+    DATA_INTEGRITY = "data_integrity"
+    ORPHANED_REFERENCE = "orphaned_reference"
+    TYPE_MISMATCH = "type_mismatch"
+    MISSING_METADATA = "missing_metadata"
+    INVALID_DIMENSION = "invalid_dimension"
+    PERFORMANCE_ISSUE = "performance_issue"
+    CONSTRAINT_VIOLATION = "constraint_violation"
+
+
+class IssueSeverity(Enum):
+    """Niveaux de sévérité des issues."""
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"
+    CRITICAL = "critical"
+
+
+@dataclass
+class ValidationIssue:
+    """
+    Represents a validation issue found during database audit.
+    
+    Attributes:
+        issue_type (IssueType): Type of the issue
+        severity (IssueSeverity): Severity level of the issue
+        table_name (str): Name of the affected table
+        column_name (Optional[str]): Name of the affected column (if applicable)
+        description (str): Detailed description of the issue
+        suggested_fix (str): Suggested fix for the issue
+        affected_rows (Optional[int]): Number of affected rows (if applicable)
+        detected_at (float): Timestamp when issue was detected
+        additional_info (dict): Additional information about the issue
+    """
+    issue_type: IssueType
+    severity: IssueSeverity
+    table_name: str
+    column_name: Optional[str] = None
+    description: str = ""
+    suggested_fix: str = ""
+    affected_rows: Optional[int] = None
+    detected_at: float = field(default_factory=time.time)
+    additional_info: dict = field(default_factory=dict)
+
+
+@dataclass 
+class ValidationReport:
+    """
+    Contains the results of a database validation audit.
+    
+    Attributes:
+        validation_level (ValidationLevel): Level of validation performed
+        start_time (float): Timestamp when validation started
+        end_time (Optional[float]): Timestamp when validation ended
+        issues (List[ValidationIssue]): List of issues found
+        tables_validated (Set[str]): Set of tables that were validated
+        validation_summary (dict): Summary statistics of the validation
+        recommendations (List[str]): General recommendations for database health
+    """
+    validation_level: ValidationLevel
+    start_time: float = field(default_factory=time.time)
+    end_time: Optional[float] = None
+    issues: List[ValidationIssue] = field(default_factory=list)
+    tables_validated: Set[str] = field(default_factory=set)
+    validation_summary: dict = field(default_factory=dict)
+    recommendations: List[str] = field(default_factory=list)
+    
+    def add_issue(self, issue: ValidationIssue) -> None:
+        """Ajouter une issue au rapport."""
+        self.issues.append(issue)
+    
+    def get_issues_by_severity(self, severity: IssueSeverity) -> List[ValidationIssue]:
+        """Obtenir les issues par niveau de sévérité."""
+        return [issue for issue in self.issues if issue.severity == severity]
+    
+    def get_issues_by_type(self, issue_type: IssueType) -> List[ValidationIssue]:
+        """Obtenir les issues par type."""
+        return [issue for issue in self.issues if issue.issue_type == issue_type]
+    
+    def get_critical_issues_count(self) -> int:
+        """Obtenir le nombre d'issues critiques."""
+        return len(self.get_issues_by_severity(IssueSeverity.CRITICAL))
+    
+    def finalize(self) -> None:
+        """Finaliser le rapport avec les statistiques."""
+        self.end_time = time.time()
+        
+        # Calcul des statistiques
+        self.validation_summary = {
+            'total_issues': len(self.issues),
+            'critical_issues': len(self.get_issues_by_severity(IssueSeverity.CRITICAL)),
+            'high_issues': len(self.get_issues_by_severity(IssueSeverity.HIGH)),
+            'medium_issues': len(self.get_issues_by_severity(IssueSeverity.MEDIUM)),
+            'low_issues': len(self.get_issues_by_severity(IssueSeverity.LOW)),
+            'tables_validated': len(self.tables_validated),
+            'validation_duration': self.end_time - self.start_time if self.end_time else 0
+        }
+        
+        # Génération des recommandations
+        self._generate_recommendations()
+    
+    def _generate_recommendations(self) -> None:
+        """Générer des recommandations basées sur les issues trouvées."""
+        critical_count = self.get_critical_issues_count()
+        
+        if critical_count > 0:
+            self.recommendations.append(f"Adresser immédiatement les {critical_count} issues critiques détectées")
+        
+        schema_issues = self.get_issues_by_type(IssueType.SCHEMA_INCONSISTENCY)
+        if schema_issues:
+            self.recommendations.append("Réviser la cohérence du schéma de base de données")
+        
+        orphaned_issues = self.get_issues_by_type(IssueType.ORPHANED_REFERENCE)
+        if orphaned_issues:
+            self.recommendations.append("Nettoyer les références orphelines dans les tables de dimension")
+        
+        performance_issues = self.get_issues_by_type(IssueType.PERFORMANCE_ISSUE)
+        if performance_issues:
+            self.recommendations.append("Optimiser les index et la structure des tables pour améliorer les performances")
+
+
+class DatabaseAuditor:
+    """
+    Provides comprehensive database validation and state checking capabilities.
+    
+    Validates schema consistency, data integrity, referential integrity between
+    fact and dimension tables, and identifies potential performance issues.
+    
+    Attributes:
+        conn (duckdb.DuckDBPyConnection): Database connection
+        categorical_threshold (int): Threshold for categorical determination
+        logger: Logger instance for audit tracking
+    """
+    
+    def __init__(self, 
+                 connection: duckdb.DuckDBPyConnection,
+                 categorical_threshold: Optional[int] = 50,
+                 log_filename: Optional[os.PathLike] = None):
+        """
+        Initialize the database auditor.
+        
+        Args:
+            connection: DuckDB connection object
+            categorical_threshold: Threshold for determining categorical variables
+            log_filename: Path to log file
+            
+        Example:
+            >>> conn = duckdb.connect('database.db')
+            >>> auditor = DatabaseAuditor(conn)
+            >>> report = auditor.validate_database(ValidationLevel.COMPREHENSIVE)
+        """
+        # Initialisation de la connexion à la base de données
+        self.conn = connection
+        
+        # Seuil pour déterminer si une variable est catégorielle
+        self.categorical_threshold = categorical_threshold
+        
+        # Initialisation du logger pour traçabilité des audits
+        if log_filename is None:
+            log_filename = os.path.join(FILE_PATH.parents[2], "logs/database_auditor.log")
+        self.logger = _init_logger(filename=log_filename)
+    
+    # Méthodes principales de validation
+    def validate_database(self, validation_level: ValidationLevel = ValidationLevel.STANDARD) -> ValidationReport:
+        """
+        Perform comprehensive database validation.
+        
+        Args:
+            validation_level: Level of validation to perform
+            
+        Returns:
+            ValidationReport containing all detected issues
+            
+        Example:
+            >>> report = auditor.validate_database(ValidationLevel.COMPREHENSIVE)
+            >>> if report.get_critical_issues_count() > 0:
+            ...     print("Critical issues found!")
+            >>> for issue in report.issues:
+            ...     print(f"{issue.severity.value}: {issue.description}")
+        """
+        # Création du rapport
+        report = ValidationReport(validation_level=validation_level)
+        
+        self.logger.info(f"Starting database validation at level: {validation_level.value}")
+        
+        try:
+            # Validation de base (toujours effectuée)
+            self._validate_schema_existence(report)
+            self._validate_metadata_consistency(report)
+            
+            if validation_level in [ValidationLevel.STANDARD, ValidationLevel.COMPREHENSIVE]:
+                # Validation standard
+                self._validate_fact_dimension_consistency(report)
+                self._validate_data_types_consistency(report)
+                self._validate_orphaned_references(report)
+                
+            if validation_level == ValidationLevel.COMPREHENSIVE:
+                # Validation complète
+                self._validate_categorical_thresholds(report)
+                self._validate_index_efficiency(report)
+                self._validate_data_quality(report)
+                self._validate_constraint_violations(report)
+            
+            # Finalisation du rapport
+            report.finalize()
+            
+            self.logger.info(f"Database validation completed. Found {len(report.issues)} issues.")
+            return report
+            
+        except Exception as e:
+            self.logger.error(f"Error during database validation: {e}")
+            
+            # Ajout d'une issue critique pour l'erreur de validation
+            error_issue = ValidationIssue(
+                issue_type=IssueType.SCHEMA_INCONSISTENCY,
+                severity=IssueSeverity.CRITICAL,
+                table_name="VALIDATION_SYSTEM",
+                description=f"Validation process failed: {str(e)}",
+                suggested_fix="Check database connection and schema structure"
+            )
+            report.add_issue(error_issue)
+            report.finalize()
+            
+            return report
+    
+    def validate_operation_preconditions(self, operation_type: str, **kwargs) -> ValidationReport:
+        """
+        Validate preconditions before executing specific operations.
+        
+        Args:
+            operation_type: Type of operation ('insert', 'update', 'delete', 'schema_change')
+            **kwargs: Operation-specific parameters
+            
+        Returns:
+            ValidationReport with precondition validation results
+            
+        Example:
+            >>> # Before inserting data
+            >>> report = auditor.validate_operation_preconditions('insert', df=new_data)
+            >>> if report.get_critical_issues_count() == 0:
+            ...     # Safe to proceed with insertion
+            ...     pass
+        """
+        report = ValidationReport(validation_level=ValidationLevel.BASIC)
+        
+        self.logger.info(f"Validating preconditions for operation: {operation_type}")
+        
+        try:
+            if operation_type == 'insert':
+                self._validate_insert_preconditions(report, **kwargs)
+            elif operation_type == 'update':
+                self._validate_update_preconditions(report, **kwargs)
+            elif operation_type == 'delete':
+                self._validate_delete_preconditions(report, **kwargs)
+            elif operation_type == 'schema_change':
+                self._validate_schema_change_preconditions(report, **kwargs)
+            else:
+                issue = ValidationIssue(
+                    issue_type=IssueType.SCHEMA_INCONSISTENCY,
+                    severity=IssueSeverity.MEDIUM,
+                    table_name="OPERATION_VALIDATION",
+                    description=f"Unknown operation type: {operation_type}",
+                    suggested_fix="Use a supported operation type"
+                )
+                report.add_issue(issue)
+            
+            report.finalize()
+            return report
+            
+        except Exception as e:
+            self.logger.error(f"Error validating operation preconditions: {e}")
+            
+            error_issue = ValidationIssue(
+                issue_type=IssueType.SCHEMA_INCONSISTENCY,
+                severity=IssueSeverity.HIGH,
+                table_name="OPERATION_VALIDATION",
+                description=f"Precondition validation failed: {str(e)}",
+                suggested_fix="Check operation parameters and database state"
+            )
+            report.add_issue(error_issue)
+            report.finalize()
+            
+            return report
+    
+    # Méthodes de validation spécifiques
+    def _validate_schema_existence(self, report: ValidationReport) -> None:
+        """Valider l'existence des tables de schéma essentielles."""
+        try:
+            # Vérification des tables essentielles
+            essential_tables = ['metadata']
+            existing_tables = self._get_existing_tables()
+            
+            for table in essential_tables:
+                if table not in existing_tables:
+                    issue = ValidationIssue(
+                        issue_type=IssueType.SCHEMA_INCONSISTENCY,
+                        severity=IssueSeverity.CRITICAL,
+                        table_name=table,
+                        description=f"Essential table '{table}' is missing",
+                        suggested_fix=f"Create the '{table}' table with proper structure"
+                    )
+                    report.add_issue(issue)
+                else:
+                    report.tables_validated.add(table)
+            
+            # Vérification de la table fact_table
+            if 'fact_table' not in existing_tables:
+                issue = ValidationIssue(
+                    issue_type=IssueType.SCHEMA_INCONSISTENCY,
+                    severity=IssueSeverity.HIGH,
+                    table_name='fact_table',
+                    description="Fact table is missing",
+                    suggested_fix="Create the fact table or check if database is properly initialized"
+                )
+                report.add_issue(issue)
+            else:
+                report.tables_validated.add('fact_table')
+            
+        except Exception as e:
+            issue = ValidationIssue(
+                issue_type=IssueType.SCHEMA_INCONSISTENCY,
+                severity=IssueSeverity.CRITICAL,
+                table_name="SCHEMA_VALIDATION",
+                description=f"Error validating schema existence: {str(e)}",
+                suggested_fix="Check database connection and permissions"
+            )
+            report.add_issue(issue)
+    
+    def _validate_metadata_consistency(self, report: ValidationReport) -> None:
+        """Valider la cohérence des métadonnées."""
+        try:
+            # Chargement des métadonnées
+            metadata_df = self._get_metadata()
+            
+            if len(metadata_df) == 0:
+                issue = ValidationIssue(
+                    issue_type=IssueType.MISSING_METADATA,
+                    severity=IssueSeverity.HIGH,
+                    table_name='metadata',
+                    description="Metadata table is empty",
+                    suggested_fix="Populate metadata table with column information"
+                )
+                report.add_issue(issue)
+                return
+            
+            # Vérification des colonnes requises dans metadata
+            required_columns = ['name', 'label', 'python_type', 'sql_type', 'is_categorical']
+            missing_columns = [col for col in required_columns if col not in metadata_df.columns]
+            
+            if missing_columns:
+                issue = ValidationIssue(
+                    issue_type=IssueType.SCHEMA_INCONSISTENCY,
+                    severity=IssueSeverity.HIGH,
+                    table_name='metadata',
+                    description=f"Missing required columns in metadata: {missing_columns}",
+                    suggested_fix="Add missing columns to metadata table"
+                )
+                report.add_issue(issue)
+            
+            # Vérification des valeurs nulles dans les colonnes critiques
+            for col in ['name', 'python_type', 'sql_type']:
+                if col in metadata_df.columns:
+                    null_count = metadata_df[col].isna().sum()
+                    if null_count > 0:
+                        issue = ValidationIssue(
+                            issue_type=IssueType.DATA_INTEGRITY,
+                            severity=IssueSeverity.MEDIUM,
+                            table_name='metadata',
+                            column_name=col,
+                            description=f"Found {null_count} null values in critical metadata column '{col}'",
+                            suggested_fix=f"Update null values in metadata.{col}",
+                            affected_rows=null_count
+                        )
+                        report.add_issue(issue)
+            
+            # Vérification des doublons dans les noms de colonnes
+            if 'name' in metadata_df.columns:
+                duplicate_names = metadata_df[metadata_df['name'].duplicated()]['name'].tolist()
+                if duplicate_names:
+                    issue = ValidationIssue(
+                        issue_type=IssueType.DATA_INTEGRITY,
+                        severity=IssueSeverity.HIGH,
+                        table_name='metadata',
+                        column_name='name',
+                        description=f"Duplicate column names in metadata: {duplicate_names}",
+                        suggested_fix="Remove or rename duplicate entries in metadata",
+                        affected_rows=len(duplicate_names)
+                    )
+                    report.add_issue(issue)
+            
+        except Exception as e:
+            issue = ValidationIssue(
+                issue_type=IssueType.SCHEMA_INCONSISTENCY,
+                severity=IssueSeverity.HIGH,
+                table_name='metadata',
+                description=f"Error validating metadata consistency: {str(e)}",
+                suggested_fix="Check metadata table structure and content"
+            )
+            report.add_issue(issue)
+    
+    def _validate_fact_dimension_consistency(self, report: ValidationReport) -> None:
+        """Valider la cohérence entre la fact table et les tables de dimension."""
+        try:
+            if not self._table_exists('fact_table'):
+                return  # Déjà signalé dans _validate_schema_existence
+            
+            # Récupération des métadonnées
+            metadata_df = self._get_metadata()
+            
+            if len(metadata_df) == 0:
+                return  # Déjà signalé dans _validate_metadata_consistency
+            
+            # Récupération des colonnes de la fact table
+            fact_columns = set(self._get_fact_table_columns())
+            
+            # Vérification des colonnes catégorielles
+            categorical_columns = metadata_df[metadata_df['is_categorical'] == True]['name'].tolist()
+            
+            for col_name in categorical_columns:
+                dim_table_name = f"dim_{col_name}"
+                
+                # Vérification de l'existence de la table de dimension
+                if not self._table_exists(dim_table_name):
+                    issue = ValidationIssue(
+                        issue_type=IssueType.INVALID_DIMENSION,
+                        severity=IssueSeverity.HIGH,
+                        table_name=dim_table_name,
+                        column_name=col_name,
+                        description=f"Dimension table '{dim_table_name}' missing for categorical column '{col_name}'",
+                        suggested_fix=f"Create dimension table for '{col_name}' or update metadata"
+                    )
+                    report.add_issue(issue)
+                    continue
+                
+                report.tables_validated.add(dim_table_name)
+                
+                # Vérification de la structure de la table de dimension
+                dim_columns = set(self._get_table_columns(dim_table_name))
+                required_dim_columns = {'value', 'label'}
+                
+                missing_dim_columns = required_dim_columns - dim_columns
+                if missing_dim_columns:
+                    issue = ValidationIssue(
+                        issue_type=IssueType.SCHEMA_INCONSISTENCY,
+                        severity=IssueSeverity.HIGH,
+                        table_name=dim_table_name,
+                        description=f"Missing required columns in dimension table: {missing_dim_columns}",
+                        suggested_fix=f"Add missing columns to {dim_table_name}"
+                    )
+                    report.add_issue(issue)
+                
+                # Vérification de la cohérence référentielle si la colonne existe dans fact_table
+                if col_name in fact_columns:
+                    self._validate_referential_integrity(report, col_name, dim_table_name)
+            
+            # Vérification des colonnes dans fact_table qui ne sont pas dans metadata
+            metadata_columns = set(metadata_df['name'].tolist())
+            missing_metadata = fact_columns - metadata_columns
+            
+            if missing_metadata:
+                issue = ValidationIssue(
+                    issue_type=IssueType.MISSING_METADATA,
+                    severity=IssueSeverity.MEDIUM,
+                    table_name='fact_table',
+                    description=f"Columns in fact_table missing from metadata: {list(missing_metadata)}",
+                    suggested_fix="Add missing columns to metadata table"
+                )
+                report.add_issue(issue)
+            
+        except Exception as e:
+            issue = ValidationIssue(
+                issue_type=IssueType.SCHEMA_INCONSISTENCY,
+                severity=IssueSeverity.HIGH,
+                table_name='fact_table',
+                description=f"Error validating fact-dimension consistency: {str(e)}",
+                suggested_fix="Check fact table and dimension tables structure"
+            )
+            report.add_issue(issue)
+    
+    def _validate_referential_integrity(self, report: ValidationReport, col_name: str, dim_table_name: str) -> None:
+        """Valider l'intégrité référentielle entre fact table et dimension."""
+        try:
+            # Vérification des valeurs orphelines dans fact_table
+            orphaned_query = f"""
+                SELECT COUNT(DISTINCT f.{col_name}) as orphaned_count
+                FROM fact_table f
+                LEFT JOIN {dim_table_name} d ON f.{col_name} = d.value
+                WHERE f.{col_name} IS NOT NULL AND d.value IS NULL
+            """
+            
+            result = self.conn.execute(orphaned_query).fetchone()
+            orphaned_count = result[0] if result else 0
+            
+            if orphaned_count > 0:
+                issue = ValidationIssue(
+                    issue_type=IssueType.ORPHANED_REFERENCE,
+                    severity=IssueSeverity.MEDIUM,
+                    table_name='fact_table',
+                    column_name=col_name,
+                    description=f"Found {orphaned_count} orphaned references in fact_table.{col_name}",
+                    suggested_fix=f"Update dimension table {dim_table_name} or clean orphaned references",
+                    affected_rows=orphaned_count
+                )
+                report.add_issue(issue)
+            
+            # Vérification des valeurs inutilisées dans dimension
+            unused_query = f"""
+                SELECT COUNT(*) as unused_count
+                FROM {dim_table_name} d
+                LEFT JOIN fact_table f ON d.value = f.{col_name}
+                WHERE f.{col_name} IS NULL
+            """
+            
+            result = self.conn.execute(unused_query).fetchone()
+            unused_count = result[0] if result else 0
+            
+            if unused_count > 0:
+                issue = ValidationIssue(
+                    issue_type=IssueType.ORPHANED_REFERENCE,
+                    severity=IssueSeverity.LOW,
+                    table_name=dim_table_name,
+                    description=f"Found {unused_count} unused dimension values in {dim_table_name}",
+                    suggested_fix=f"Clean unused values from {dim_table_name}",
+                    affected_rows=unused_count
+                )
+                report.add_issue(issue)
+            
+        except Exception as e:
+            issue = ValidationIssue(
+                issue_type=IssueType.DATA_INTEGRITY,
+                severity=IssueSeverity.MEDIUM,
+                table_name=dim_table_name,
+                column_name=col_name,
+                description=f"Error validating referential integrity for {col_name}: {str(e)}",
+                suggested_fix="Check column and table structure"
+            )
+            report.add_issue(issue)
+    
+    def _validate_data_types_consistency(self, report: ValidationReport) -> None:
+        """Valider la cohérence des types de données."""
+        try:
+            if not self._table_exists('fact_table'):
+                return
+            
+            # Récupération des métadonnées et de la structure de fact_table
+            metadata_df = self._get_metadata()
+            fact_structure = self._get_table_structure('fact_table')
+            
+            for _, metadata_row in metadata_df.iterrows():
+                col_name = metadata_row['name']
+                expected_sql_type = metadata_row['sql_type']
+                
+                # Recherche du type actuel dans fact_table
+                actual_sql_type = None
+                for col_info in fact_structure:
+                    if col_info[0] == col_name:
+                        actual_sql_type = col_info[1]
+                        break
+                
+                if actual_sql_type is None:
+                    # Colonne manquante dans fact_table (déjà signalé ailleurs)
+                    continue
+                
+                # Comparaison des types (normalisation pour éviter les faux positifs)
+                if not self._types_are_compatible(expected_sql_type, actual_sql_type):
+                    issue = ValidationIssue(
+                        issue_type=IssueType.TYPE_MISMATCH,
+                        severity=IssueSeverity.MEDIUM,
+                        table_name='fact_table',
+                        column_name=col_name,
+                        description=f"Type mismatch for column '{col_name}': expected {expected_sql_type}, got {actual_sql_type}",
+                        suggested_fix="Update metadata or alter column type in fact_table",
+                        additional_info={
+                            'expected_type': expected_sql_type,
+                            'actual_type': actual_sql_type
+                        }
+                    )
+                    report.add_issue(issue)
+            
+        except Exception as e:
+            issue = ValidationIssue(
+                issue_type=IssueType.TYPE_MISMATCH,
+                severity=IssueSeverity.MEDIUM,
+                table_name='fact_table',
+                description=f"Error validating data types consistency: {str(e)}",
+                suggested_fix="Check metadata and fact_table structure"
+            )
+            report.add_issue(issue)
+    
+    def _validate_categorical_thresholds(self, report: ValidationReport) -> None:
+        """Valider les seuils catégoriels."""
+        try:
+            metadata_df = self._get_metadata()
+            
+            # Vérification des colonnes marquées comme catégorielles
+            categorical_columns = metadata_df[metadata_df['is_categorical'] == True]['name'].tolist()
+            
+            for col_name in categorical_columns:
+                if not self._column_exists_in_fact_table(col_name):
+                    continue
+                
+                # Comptage des valeurs uniques
+                unique_count_query = f"SELECT COUNT(DISTINCT {col_name}) FROM fact_table WHERE {col_name} IS NOT NULL"
+                result = self.conn.execute(unique_count_query).fetchone()
+                unique_count = result[0] if result else 0
+                
+                if unique_count > self.categorical_threshold:
+                    issue = ValidationIssue(
+                        issue_type=IssueType.INVALID_DIMENSION,
+                        severity=IssueSeverity.MEDIUM,
+                        table_name='fact_table',
+                        column_name=col_name,
+                        description=f"Column '{col_name}' marked as categorical but has {unique_count} unique values (threshold: {self.categorical_threshold})",
+                        suggested_fix=f"Consider converting '{col_name}' to non-categorical or increase threshold",
+                        additional_info={'unique_count': unique_count, 'threshold': self.categorical_threshold}
+                    )
+                    report.add_issue(issue)
+            
+            # Vérification des colonnes non-catégorielles qui pourraient l'être
+            non_categorical_columns = metadata_df[
+                (metadata_df['is_categorical'] == False) & 
+                (metadata_df['python_type'] == 'object')
+            ]['name'].tolist()
+            
+            for col_name in non_categorical_columns:
+                if not self._column_exists_in_fact_table(col_name):
+                    continue
+                
+                # Comptage des valeurs uniques
+                unique_count_query = f"SELECT COUNT(DISTINCT {col_name}) FROM fact_table WHERE {col_name} IS NOT NULL"
+                result = self.conn.execute(unique_count_query).fetchone()
+                unique_count = result[0] if result else 0
+                
+                if unique_count <= self.categorical_threshold:
+                    issue = ValidationIssue(
+                        issue_type=IssueType.PERFORMANCE_ISSUE,
+                        severity=IssueSeverity.LOW,
+                        table_name='fact_table',
+                        column_name=col_name,
+                        description=f"Column '{col_name}' could be categorical (only {unique_count} unique values)",
+                        suggested_fix=f"Consider converting '{col_name}' to categorical for better performance",
+                        additional_info={'unique_count': unique_count, 'threshold': self.categorical_threshold}
+                    )
+                    report.add_issue(issue)
+            
+        except Exception as e:
+            issue = ValidationIssue(
+                issue_type=IssueType.PERFORMANCE_ISSUE,
+                severity=IssueSeverity.LOW,
+                table_name='metadata',
+                description=f"Error validating categorical thresholds: {str(e)}",
+                suggested_fix="Check categorical column configuration"
+            )
+            report.add_issue(issue)
+    
+    def _validate_orphaned_references(self, report: ValidationReport) -> None:
+        """Valider et détecter les références orphelines."""
+        try:
+            # Recherche des tables de dimension orphelines
+            existing_tables = self._get_existing_tables()
+            dimension_tables = [table for table in existing_tables if table.startswith('dim_')]
+            
+            metadata_df = self._get_metadata()
+            expected_dimensions = set(f"dim_{row['name']}" for _, row in metadata_df.iterrows() if row['is_categorical'])
+            
+            # Tables de dimension sans métadonnées correspondantes
+            orphaned_dimension_tables = set(dimension_tables) - expected_dimensions
+            
+            for table_name in orphaned_dimension_tables:
+                issue = ValidationIssue(
+                    issue_type=IssueType.ORPHANED_REFERENCE,
+                    severity=IssueSeverity.MEDIUM,
+                    table_name=table_name,
+                    description=f"Orphaned dimension table '{table_name}' found",
+                    suggested_fix=f"Remove '{table_name}' or add corresponding metadata entry"
+                )
+                report.add_issue(issue)
+            
+            # Vérification des entrées orphelines dans les dimensions existantes
+            for _, metadata_row in metadata_df.iterrows():
+                if metadata_row['is_categorical']:
+                    col_name = metadata_row['name']
+                    dim_table_name = f"dim_{col_name}"
+                    
+                    if self._table_exists(dim_table_name) and self._column_exists_in_fact_table(col_name):
+                        self._validate_referential_integrity(report, col_name, dim_table_name)
+            
+        except Exception as e:
+            issue = ValidationIssue(
+                issue_type=IssueType.ORPHANED_REFERENCE,
+                severity=IssueSeverity.MEDIUM,
+                table_name='SYSTEM',
+                description=f"Error validating orphaned references: {str(e)}",
+                suggested_fix="Check dimension tables and metadata consistency"
+            )
+            report.add_issue(issue)
+    
+    def _validate_index_efficiency(self, report: ValidationReport) -> None:
+        """Valider l'efficacité des index."""
+        try:
+            # Récupération des index existants
+            indexes = self._get_existing_indexes()
+            
+            if len(indexes) == 0:
+                issue = ValidationIssue(
+                    issue_type=IssueType.PERFORMANCE_ISSUE,
+                    severity=IssueSeverity.LOW,
+                    table_name='fact_table',
+                    description="No indexes found on fact_table",
+                    suggested_fix="Consider adding indexes on frequently queried columns"
+                )
+                report.add_issue(issue)
+                return
+            
+            # Vérification des index sur des colonnes inexistantes
+            fact_columns = set(self._get_fact_table_columns())
+            
+            for index_info in indexes:
+                index_name = index_info.get('index_name', '')
+                expressions = index_info.get('expressions', '')
+                
+                # Analyse simplifiée pour détecter les colonnes référencées
+                referenced_columns = []
+                for col in fact_columns:
+                    if col in expressions or f"fact_table.{col}" in expressions:
+                        referenced_columns.append(col)
+                
+                # Si aucune colonne valide n'est trouvée mais que l'index référence fact_table
+                if not referenced_columns and "fact_table" in expressions:
+                    issue = ValidationIssue(
+                        issue_type=IssueType.ORPHANED_REFERENCE,
+                        severity=IssueSeverity.LOW,
+                        table_name='fact_table',
+                        description=f"Potentially orphaned index '{index_name}'",
+                        suggested_fix=f"Review and possibly drop index '{index_name}'",
+                        additional_info={'index_expression': expressions}
+                    )
+                    report.add_issue(issue)
+            
+        except Exception as e:
+            issue = ValidationIssue(
+                issue_type=IssueType.PERFORMANCE_ISSUE,
+                severity=IssueSeverity.LOW,
+                table_name='fact_table',
+                description=f"Error validating index efficiency: {str(e)}",
+                suggested_fix="Check index configuration and structure"
+            )
+            report.add_issue(issue)
+    
+    def _validate_data_quality(self, report: ValidationReport) -> None:
+        """Valider la qualité des données."""
+        try:
+            if not self._table_exists('fact_table'):
+                return
+            
+            # Comptage total des lignes
+            total_rows = self.conn.execute("SELECT COUNT(*) FROM fact_table").fetchone()[0]
+            
+            if total_rows == 0:
+                issue = ValidationIssue(
+                    issue_type=IssueType.DATA_INTEGRITY,
+                    severity=IssueSeverity.MEDIUM,
+                    table_name='fact_table',
+                    description="Fact table is empty",
+                    suggested_fix="Check if data has been loaded properly"
+                )
+                report.add_issue(issue)
+                return
+            
+            # Vérification des colonnes avec beaucoup de valeurs nulles
+            fact_columns = self._get_fact_table_columns()
+            
+            for col_name in fact_columns:
+                null_count_query = f"SELECT COUNT(*) FROM fact_table WHERE {col_name} IS NULL"
+                null_count = self.conn.execute(null_count_query).fetchone()[0]
+                null_percentage = (null_count / total_rows) * 100
+                
+                if null_percentage > 50:  # Plus de 50% de valeurs nulles
+                    issue = ValidationIssue(
+                        issue_type=IssueType.DATA_INTEGRITY,
+                        severity=IssueSeverity.MEDIUM,
+                        table_name='fact_table',
+                        column_name=col_name,
+                        description=f"Column '{col_name}' has {null_percentage:.1f}% null values",
+                        suggested_fix=f"Review data quality for column '{col_name}' or consider dropping it",
+                        affected_rows=null_count,
+                        additional_info={'null_percentage': null_percentage}
+                    )
+                    report.add_issue(issue)
+                elif null_percentage == 100:  # Colonne entièrement nulle
+                    issue = ValidationIssue(
+                        issue_type=IssueType.DATA_INTEGRITY,
+                        severity=IssueSeverity.HIGH,
+                        table_name='fact_table',
+                        column_name=col_name,
+                        description=f"Column '{col_name}' contains only null values",
+                        suggested_fix=f"Consider dropping column '{col_name}' or investigate data loading",
+                        affected_rows=null_count
+                    )
+                    report.add_issue(issue)
+            
+        except Exception as e:
+            issue = ValidationIssue(
+                issue_type=IssueType.DATA_INTEGRITY,
+                severity=IssueSeverity.MEDIUM,
+                table_name='fact_table',
+                description=f"Error validating data quality: {str(e)}",
+                suggested_fix="Check fact table structure and data"
+            )
+            report.add_issue(issue)
+    
+    def _validate_constraint_violations(self, report: ValidationReport) -> None:
+        """Valider les violations de contraintes."""
+        try:
+            # Vérification des contraintes de clé primaire dans les tables de dimension
+            existing_tables = self._get_existing_tables()
+            dimension_tables = [table for table in existing_tables if table.startswith('dim_')]
+            
+            for dim_table in dimension_tables:
+                # Vérification des doublons dans la colonne 'value' (clé primaire)
+                duplicates_query = f"""
+                    SELECT value, COUNT(*) as count 
+                    FROM {dim_table} 
+                    GROUP BY value 
+                    HAVING COUNT(*) > 1
+                """
+                
+                duplicates_result = self.conn.execute(duplicates_query).fetchall()
+                
+                if duplicates_result:
+                    duplicate_count = len(duplicates_result)
+                    issue = ValidationIssue(
+                        issue_type=IssueType.CONSTRAINT_VIOLATION,
+                        severity=IssueSeverity.HIGH,
+                        table_name=dim_table,
+                        column_name='value',
+                        description=f"Primary key constraint violation: {duplicate_count} duplicate values in {dim_table}.value",
+                        suggested_fix=f"Remove duplicate values from {dim_table}",
+                        affected_rows=duplicate_count,
+                        additional_info={'duplicate_values': [row[0] for row in duplicates_result[:5]]}  # Première 5 valeurs
+                    )
+                    report.add_issue(issue)
+            
+        except Exception as e:
+            issue = ValidationIssue(
+                issue_type=IssueType.CONSTRAINT_VIOLATION,
+                severity=IssueSeverity.MEDIUM,
+                table_name='SYSTEM',
+                description=f"Error validating constraint violations: {str(e)}",
+                suggested_fix="Check table constraints and data integrity"
+            )
+            report.add_issue(issue)
+    
+    # Méthodes de validation des préconditions d'opération
+    def _validate_insert_preconditions(self, report: ValidationReport, df: pd.DataFrame = None, **kwargs) -> None:
+        """Valider les préconditions d'insertion."""
+        if df is None:
+            issue = ValidationIssue(
+                issue_type=IssueType.DATA_INTEGRITY,
+                severity=IssueSeverity.CRITICAL,
+                table_name='fact_table',
+                description="DataFrame is None for insert operation",
+                suggested_fix="Provide a valid DataFrame for insertion"
+            )
+            report.add_issue(issue)
+            return
+        
+        if len(df) == 0:
+            issue = ValidationIssue(
+                issue_type=IssueType.DATA_INTEGRITY,
+                severity=IssueSeverity.MEDIUM,
+                table_name='fact_table',
+                description="DataFrame is empty for insert operation",
+                suggested_fix="Provide DataFrame with data for insertion"
+            )
+            report.add_issue(issue)
+        
+        # Vérification des noms de colonnes valides
+        invalid_columns = [col for col in df.columns if not col.replace('_', '').replace(' ', '').isalnum()]
+        if invalid_columns:
+            issue = ValidationIssue(
+                issue_type=IssueType.SCHEMA_INCONSISTENCY,
+                severity=IssueSeverity.HIGH,
+                table_name='fact_table',
+                description=f"Invalid column names detected: {invalid_columns}",
+                suggested_fix="Use valid column names (alphanumeric and underscores only)"
+            )
+            report.add_issue(issue)
+    
+    def _validate_update_preconditions(self, report: ValidationReport, df: pd.DataFrame = None, merge_keys: List[str] = None, **kwargs) -> None:
+        """Valider les préconditions de mise à jour."""
+        self._validate_insert_preconditions(report, df, **kwargs)
+        
+        if merge_keys is None or len(merge_keys) == 0:
+            issue = ValidationIssue(
+                issue_type=IssueType.DATA_INTEGRITY,
+                severity=IssueSeverity.CRITICAL,
+                table_name='fact_table',
+                description="No merge keys provided for update operation",
+                suggested_fix="Provide valid merge keys for update operation"
+            )
+            report.add_issue(issue)
+            return
+        
+        if df is not None:
+            missing_keys = [key for key in merge_keys if key not in df.columns]
+            if missing_keys:
+                issue = ValidationIssue(
+                    issue_type=IssueType.SCHEMA_INCONSISTENCY,
+                    severity=IssueSeverity.HIGH,
+                    table_name='fact_table',
+                    description=f"Merge keys not found in DataFrame: {missing_keys}",
+                    suggested_fix="Ensure all merge keys are present in the DataFrame"
+                )
+                report.add_issue(issue)
+    
+    def _validate_delete_preconditions(self, report: ValidationReport, filters: Any = None, **kwargs) -> None:
+        """Valider les préconditions de suppression."""
+        if filters is None:
+            issue = ValidationIssue(
+                issue_type=IssueType.DATA_INTEGRITY,
+                severity=IssueSeverity.CRITICAL,
+                table_name='fact_table',
+                description="No filters provided for delete operation",
+                suggested_fix="Provide valid filters for delete operation to avoid deleting all data"
+            )
+            report.add_issue(issue)
+    
+    def _validate_schema_change_preconditions(self, report: ValidationReport, **kwargs) -> None:
+        """Valider les préconditions de changement de schéma."""
+        # Vérification de l'existence des tables avant modification
+        if not self._table_exists('fact_table'):
+            issue = ValidationIssue(
+                issue_type=IssueType.SCHEMA_INCONSISTENCY,
+                severity=IssueSeverity.HIGH,
+                table_name='fact_table',
+                description="Fact table does not exist for schema change operation",
+                suggested_fix="Create fact table before attempting schema changes"
+            )
+            report.add_issue(issue)
+    
+    # Méthodes utilitaires privées
+    def _get_existing_tables(self) -> List[str]:
+        """Obtenir la liste des tables existantes."""
+        try:
+            result = self.conn.execute("SHOW TABLES").fetchall()
+            return [row[0] for row in result]
+        except:
+            return []
+    
+    def _get_fact_table_columns(self) -> List[str]:
+        """Obtenir les colonnes de la fact table."""
+        try:
+            result = self.conn.execute("DESCRIBE fact_table").fetchall()
+            return [row[0] for row in result]
+        except:
+            return []
+    
+    def _get_table_columns(self, table_name: str) -> List[str]:
+        """Obtenir les colonnes d'une table spécifique."""
+        try:
+            result = self.conn.execute(f"DESCRIBE {table_name}").fetchall()
+            return [row[0] for row in result]
+        except:
+            return []
+    
+    def _get_table_structure(self, table_name: str) -> List[Tuple]:
+        """Obtenir la structure complète d'une table."""
+        try:
+            return self.conn.execute(f"DESCRIBE {table_name}").fetchall()
+        except:
+            return []
+    
+    def _get_metadata(self) -> pd.DataFrame:
+        """Obtenir les métadonnées."""
+        try:
+            return self.conn.execute("SELECT * FROM metadata").fetchdf()
+        except:
+            return pd.DataFrame()
+    
+    def _get_existing_indexes(self) -> List[Dict[str, str]]:
+        """Obtenir la liste des index existants."""
+        try:
+            result = self.conn.execute("SELECT index_name, expressions FROM duckdb_indexes()").fetchall()
+            return [{'index_name': row[0], 'expressions': row[1]} for row in result]
+        except:
+            return []
+    
+    def _table_exists(self, table_name: str) -> bool:
+        """Vérifier si une table existe."""
+        try:
+            self.conn.execute(f"SELECT 1 FROM {table_name} LIMIT 1")
+            return True
+        except:
+            return False
+    
+    def _column_exists_in_fact_table(self, column_name: str) -> bool:
+        """Vérifier si une colonne existe dans fact_table."""
+        fact_columns = self._get_fact_table_columns()
+        return column_name in fact_columns
+    
+    def _types_are_compatible(self, expected_type: str, actual_type: str) -> bool:
+        """Vérifier si deux types SQL sont compatibles."""
+        # Normalisation des types pour comparaison
+        expected_normalized = expected_type.upper().strip()
+        actual_normalized = actual_type.upper().strip()
+        
+        # Mapping des types équivalents
+        type_equivalents = {
+            'VARCHAR': ['TEXT', 'STRING', 'CHAR'],
+            'INTEGER': ['INT', 'INT64', 'BIGINT'],
+            'DOUBLE': ['FLOAT', 'FLOAT64', 'REAL'],
+            'BOOLEAN': ['BOOL']
+        }
+        
+        if expected_normalized == actual_normalized:
+            return True
+        
+        # Vérification des équivalences
+        for base_type, equivalents in type_equivalents.items():
+            if expected_normalized == base_type and actual_normalized in equivalents:
+                return True
+            if actual_normalized == base_type and expected_normalized in equivalents:
+                return True
+            if expected_normalized in equivalents and actual_normalized in equivalents:
+                return True
+        
+        return False
+    
+    # Méthodes publiques pour obtenir des rapports spécialisés
+    def get_quick_health_check(self) -> Dict[str, Any]:
+        """
+        Perform a quick health check of the database.
+        
+        Returns:
+            Dictionary with basic health metrics
+            
+        Example:
+            >>> health = auditor.get_quick_health_check()
+            >>> if health['status'] == 'healthy':
+            ...     print("Database is healthy")
+        """
+        try:
+            health_info = {
+                'status': 'unknown',
+                'timestamp': time.time(),
+                'tables_count': 0,
+                'fact_table_rows': 0,
+                'dimension_tables_count': 0,
+                'metadata_entries': 0,
+                'critical_issues': 0
+            }
+            
+            # Comptage des tables
+            tables = self._get_existing_tables()
+            health_info['tables_count'] = len(tables)
+            
+            # Comptage des lignes de fact_table
+            if 'fact_table' in tables:
+                result = self.conn.execute("SELECT COUNT(*) FROM fact_table").fetchone()
+                health_info['fact_table_rows'] = result[0] if result else 0
+            
+            # Comptage des tables de dimension
+            health_info['dimension_tables_count'] = len([t for t in tables if t.startswith('dim_')])
+            
+            # Comptage des entrées de métadonnées
+            if 'metadata' in tables:
+                result = self.conn.execute("SELECT COUNT(*) FROM metadata").fetchone()
+                health_info['metadata_entries'] = result[0] if result else 0
+            
+            # Validation rapide pour les issues critiques
+            quick_report = self.validate_database(ValidationLevel.BASIC)
+            health_info['critical_issues'] = quick_report.get_critical_issues_count()
+            
+            # Détermination du statut global
+            if health_info['critical_issues'] > 0:
+                health_info['status'] = 'critical'
+            elif len(quick_report.issues) > 0:
+                health_info['status'] = 'warning'
+            elif health_info['fact_table_rows'] > 0 and health_info['metadata_entries'] > 0:
+                health_info['status'] = 'healthy'
+            else:
+                health_info['status'] = 'empty'
+            
+            return health_info
+            
+        except Exception as e:
+            self.logger.error(f"Error during quick health check: {e}")
+            return {
+                'status': 'error',
+                'timestamp': time.time(),
+                'error': str(e)
+            }
