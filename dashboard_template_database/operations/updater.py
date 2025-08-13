@@ -21,7 +21,7 @@ from ..builders.indexer import IndexManager
 from ..utils.logger import _init_logger
 # Utilitaires de traitement des données
 from ..utils.data_processing import (map_python_to_sql_type, remove_dataframe_duplicates, 
-                                      build_database_duplicate_removal_query, check_categorical_threshold)
+                                      build_database_duplicate_removal_query)
 
 # Emplacement du fichier
 FILE_PATH = Path(os.path.abspath(__file__))
@@ -103,6 +103,7 @@ class DatabaseUpdater:
         should_use_batches = use_batch_processing and len(update_df) > self.batch_size
         
         if should_use_batches:
+            # Logging
             self.logger.info(f"Using batch processing with batch size {self.batch_size}")
             # Traitement par lots
             self._process_database_update_in_batches(update_df, index_config)
@@ -235,6 +236,14 @@ class DatabaseUpdater:
             # Création de la table avec les données
             self._create_fact_table_with_data(prepared_df)
         
+        # Suppression des colonnes ne contenant que des nulles, des index et des tables de dimension associées
+        null_only_columns = self._get_null_only_columns()
+        if null_only_columns:
+            self.delete_columns(null_only_columns)
+        
+        # Nettoyage des entrées orphelines dans les tables de dimension
+        self._cleanup_dimension_orphaned_entries()
+
         # Détection post-upsert des variables devenues catégorielles
         self._detect_new_categorical_variables_after_upsert()
     
@@ -266,8 +275,10 @@ class DatabaseUpdater:
                     non_categorical_columns.append(col_name)
         
         # Traitement des colonnes catégorielles existantes avec parallélisation si possible
+        # Note: La parallélisation n'est utilisée que pour les mises à jour pures des dimensions
+        # qui n'affectent pas la fact table pour éviter les conflits de concurrence
         if len(categorical_columns) > 1 and self.max_workers > 1:
-            # Traitement parallèle
+            # Traitement parallèle (uniquement pour les dimensions existantes)
             columns_and_values = [(col, update_df[col]) for col in categorical_columns]
             self._parallel_dimension_update(columns_and_values)
         else:
@@ -281,7 +292,7 @@ class DatabaseUpdater:
         
         # Vérification des colonnes catégorielles qui pourraient dépasser le seuil
         for col_name in categorical_columns:
-            self._check_categorical_threshold(col_name, update_df[col_name])
+            self._check_convert_to_non_categorical(col_name, update_df[col_name])
     
     # Méthodes auxilaire convertissant une variable en catégorielle si elle en satisfait les conditions
     def _check_and_convert_to_categorical(self, col_name: str, values: pd.Series) -> None:
@@ -292,17 +303,44 @@ class DatabaseUpdater:
             col_name: Column name
             values: Series with column values
         """
-        if check_categorical_threshold(values, self.categorical_threshold):
+        if self._check_categorical_threshold(values, self.categorical_threshold):
             
             # Création de la table de dimension via _update_dimension_values
             self._update_dimension_values(col_name, values)
             
             # Mise à jour du statut catégoriel
             self._update_categorical_status(col_name, True)
+
+            # Remplacement des labels par les valeurs de la table de dimension dans la fact table
+            self._convert_fact_table_dimension_mapping(col_name, values_to_labels=False)  
             
             # Logging
             self.logger.info(f"Converted {col_name} to categorical with dim_{col_name}")
     
+    # Méthode de conversion vers le statut non-catégoriel
+    def _check_convert_to_non_categorical(self, col_name: str, values: pd.Series) -> None:
+        """
+        Check if a categorical column should become non-categorical and convert if needed.
+        
+        Args:
+            col_name: Column name
+            values: Series with column values
+        """
+        if not self._check_categorical_threshold(values, self.categorical_threshold):
+            # Nom de la table de dimension
+            table_name = f"dim_{col_name}"
+            
+            # Remplacement des valeurs par les labels dans la fact table
+            self._convert_fact_table_dimension_mapping(col_name, values_to_labels=True)
+            
+            # Suppression de la table de dimension
+            self.conn.execute(f"DROP TABLE IF EXISTS {table_name}")
+            
+            # Mise à jour du statut dans les métadonnées
+            self._update_categorical_status(col_name, False)
+            
+            self.logger.info(f"Converted {col_name} to non-categorical - dropped {table_name}") 
+
     # Méthode auxiliaire convertissant une variable catégorielle en variable non catégorielle si elle excède un certain seuil
     def _check_categorical_threshold(self, col_name: str, values: pd.Series) -> None:
         """
@@ -328,30 +366,9 @@ class DatabaseUpdater:
         
         # Vérification du seuil
         if total_count > self.categorical_threshold:
-            # Conversion vers non-catégoriel
-            self._convert_to_non_categorical(col_name)
-    
-    # Méthode de conversion vers le statut non-catégoriel
-    def _convert_to_non_categorical(self, col_name: str) -> None:
-        """
-        Convert a column from categorical to non-categorical status.
-        
-        Args:
-            col_name: Column name
-        """
-        # Nom de la table de dimension
-        table_name = f"dim_{col_name}"
-        
-        # Remplacement des valeurs par les labels dans la fact table
-        self._convert_fact_table_dimension_mapping(col_name, values_to_labels=True)
-        
-        # Suppression de la table de dimension
-        self.conn.execute(f"DROP TABLE IF EXISTS {table_name}")
-        
-        # Mise à jour du statut dans les métadonnées
-        self._update_categorical_status(col_name, False)
-        
-        self.logger.info(f"Converted {col_name} to non-categorical - dropped {table_name}")  
+            return False
+        else :
+            return True 
     
     
     # Méthode auxiliaire de mise à jour du statut catégoriel dans les méta-données
@@ -449,31 +466,14 @@ class DatabaseUpdater:
                 if col_name not in fact_columns:
                     continue
                 
-                # Comptage des modalités uniques dans la fact table
-                unique_count_query = f"SELECT COUNT(DISTINCT {col_name}) as count FROM fact_table WHERE {col_name} IS NOT NULL"
-                unique_count = self.conn.execute(unique_count_query).fetchone()[0]
+                # Récupération des valeurs uniques de la colonne
+                unique_labels_query = f"SELECT DISTINCT {col_name} as label FROM fact_table WHERE {col_name} IS NOT NULL ORDER BY {col_name}"
+                unique_labels_result = self.conn.execute(unique_labels_query).fetchdf()
                 
-                # Si le nombre de modalités est inférieur au seuil, créer une table de dimension
-                if unique_count <= self.categorical_threshold:
-                    # Récupération des valeurs uniques des labels
-                    unique_labels_query = f"SELECT DISTINCT {col_name} as label FROM fact_table WHERE {col_name} IS NOT NULL ORDER BY {col_name}"
-                    unique_labels_result = self.conn.execute(unique_labels_query).fetchdf()
-                    
-                    if len(unique_labels_result) > 0:
-                        # Création de la table de dimension
-                        self._update_dimension_values(col_name, unique_labels_result['label'])
-                        
-                        # Mise à jour du statut catégoriel dans les métadonnées
-                        self.conn.execute(
-                            "UPDATE metadata SET is_categorical = ? WHERE name = ?",
-                            [True, col_name]
-                        )
-                        
-                        # Remplacement des labels par les valeurs de la table de dimension dans la fact table
-                        self._convert_fact_table_dimension_mapping(col_name, values_to_labels=False)
-                        # Logging
-                        self.logger.info(f"Converted {col_name} to categorical after upsert ({unique_count} unique values)")
-                        
+                if len(unique_labels_result) > 0:
+                    # Conversion en catégorielle si nécessaire
+                    self._check_and_convert_to_categorical(col_name=col_name, values=unique_labels_result['label'])
+
             except Exception as e:
                 # Logging
                 self.logger.error(f"Error detecting categorical status for {col_name} after upsert: {e}")
@@ -1010,4 +1010,333 @@ class DatabaseUpdater:
             if values_added > 0:
                 # Logging
                 self.logger.info(f"Added {values_added} new values to {table_name}")
+
+    # Méthode de suppression de colonnes avec gestion rigoureuse des dépendances
+    def delete_columns(self, columns: List[str], use_transaction: bool = True) -> None:
+        """
+        Delete columns from fact table and update related tables.
         
+        Args:
+            columns: List of column names to delete
+            use_transaction: Whether to use database transaction for atomicity
+            
+        Example:
+            >>> deleter.delete_columns(['old_column1', 'old_column2'])
+        """       
+        # Vérification des colonnes existantes
+        existing_columns = self._get_fact_table_columns()
+        valid_columns = np.intersect1d(existing_columns, columns).tolist()
+
+        # Initialisation du booléen d'erreur
+        has_errors=False
+        
+        # Utilisation de transaction pour l'atomicité si demandée
+        if use_transaction:
+            try:
+                # Commencement de la transaction
+                self.conn.execute("BEGIN TRANSACTION")
+                # Logging
+                self.logger.info("Transaction commencée pour la suppression des colonnes")
+            except Exception as e:
+                # Logging
+                self.logger.warning(f"Impossible de commencer une transaction: {e}")
+                # Fallback
+                use_transaction = False
+        
+        try:
+            # Parcours des colonnes existantes à supprimer
+            for column in valid_columns:
+                try:                   
+                    # Suppression de la colonne de la fact table
+                    alter_query = f"ALTER TABLE fact_table DROP COLUMN {column}"
+                    self.conn.execute(alter_query)
+                    
+                    # Si c'est une dimension, suppression de la table associée
+                    # Nom de la table de dimension
+                    table_name = f"dim_{column}"
+                    # Suppression de la table de dimension
+                    self.conn.execute(f"DROP TABLE IF EXISTS {table_name}")
+                    
+                    # Suppression des index pour les colonnes non-catégorielles
+                    self._drop_column_indexes(column)
+                    
+                    # Suppression des métadonnées
+                    self.delete_column_metadata(column)
+                    
+                    # Logging
+                    self.logger.info(f"Successfully deleted column {column}")
+                    
+                except Exception as e:
+                    has_errors=True
+                    # Logging
+                    self.logger.error(f"Failed to delete column {column}: {e}")
+                    # En cas d'erreur, continuer avec les autres colonnes
+                    # Le rollback sera géré à la fin si nécessaire
+        
+            # Nettoyage final des index orphelins
+            self._cleanup_orphaned_indexes()
+            
+            # Commit de la transaction si tout s'est bien passé
+            if use_transaction:
+                # S'il n'y a pas d'erreur, exécution de la suppression
+                if not has_errors:
+                    # Exécution de la transaction
+                    self.conn.execute("COMMIT")
+                    # Logging
+                    self.logger.info("Transaction commitée avec succès")
+                else:
+                    # Annulation de la transaction
+                    self.conn.execute("ROLLBACK")
+                    # Logging
+                    self.logger.warning("Transaction annulée à cause d'erreurs")
+                    
+        except Exception as e:
+            # Gestion des erreurs globales
+            self.logger.error(f"Erreur globale lors de la suppression des colonnes: {e}")
+            # Si on utilise une transaction, annulation à cuase de l'erreir
+            if use_transaction:
+                try:
+                    # Annulation de la transaction
+                    self.conn.execute("ROLLBACK")
+                    # Logging
+                    self.logger.info("Transaction annulée à cause d'une erreur globale")
+                except Exception:
+                    pass
+
+    # Méthode de suppression des métadonnées d'une colonne
+    def delete_column_metadata(self, column_name: str) -> None:
+        """
+        Delete metadata for a specific column.
+        
+        Args:
+            column_name: Name of the column
+        """
+        try:
+            # Requête de suppression des méta-données
+            delete_query = "DELETE FROM metadata WHERE name = ?"
+            # Exécution de la requête
+            self.conn.execute(delete_query, [column_name])
+            # Logging
+            self.logger.info(f"Deleted metadata for column {column_name}")
+            
+        except Exception as e:
+            # Logging
+            self.logger.error(f"Failed to delete metadata for column {column_name}: {e}")
+            raise
+    
+    # Méthode de suppression des index liés à une colonne
+    def _drop_column_indexes(self, column: str) -> List[str]:
+        """
+        Drop all indexes that involve the specified column.
+        
+        Args:
+            column: Column name
+            
+        Returns:
+            List of dropped index names
+            
+        Example:
+            >>> dropped = deleter._drop_column_indexes('category')
+            >>> print(f"Dropped indexes: {dropped}")
+        """
+        # Initialisation de la liste des indices supprimés
+        dropped_indexes = []
+        
+        try:
+            # Recherche des index utilisant cette colonne
+            index_query = """
+                SELECT index_name, expressions 
+                FROM duckdb_indexes() 
+                WHERE expressions LIKE ?
+            """
+            # Exécution de la requête
+            indexes = self.conn.execute(index_query, [f'%{column}%']).fetchall()
+            # Parcours des index à supprimer
+            for index_name, expressions in indexes:
+                try:
+                    # Suppression de l'index
+                    drop_query = f"DROP INDEX IF EXISTS {index_name}"
+                    self.conn.execute(drop_query)
+                    dropped_indexes.append(index_name)
+                    # Logging
+                    self.logger.info(f"Index supprimé: {index_name} (expressions: {expressions})")
+                    
+                except Exception as e:
+                    # Logging
+                    self.logger.error(f"Erreur lors de la suppression de l'index {index_name}: {e}")
+            if dropped_indexes :
+                # Logging
+                self.logger.info(f"Index supprimés pour {column}: {dropped_indexes}")
+            
+        except Exception as e:
+            # Logging
+            self.logger.error(f"Erreur lors de la recherche des index pour {column}: {e}")
+
+            if dropped_indexes :
+                # Logging
+                self.logger.info(f"Index supprimés pour {column}: {dropped_indexes}")
+    
+    # Méthode de nettoyage des index orphelins
+    def _cleanup_orphaned_indexes(self) -> List[str]:
+        """
+        Clean up indexes that reference non-existent columns.
+        
+        Returns:
+            List of cleaned up index names
+            
+        Example:
+            >>> cleaned = deleter._cleanup_orphaned_indexes()
+        """
+        
+        try:
+            # Récupération des colonnes existantes dans fact_table
+            existing_columns = set(self._get_fact_table_columns())
+            
+            # Récupération de tous les index
+            all_indexes = self.conn.execute("""
+                SELECT index_name, expressions 
+                FROM duckdb_indexes()
+            """).fetchall()
+            
+            # Parcours des indices
+            for index_name, expressions in all_indexes:
+                # Vérification si l'index référence des colonnes qui n'existent plus
+                should_drop = False
+                
+                # Vérification si l'index référence des colonnes supprimées
+                # Analyse des colonnes potentiellement référencées dans l'expression
+                referenced_columns = []
+                for col in existing_columns:
+                    if col in expressions or f"fact_table.{col}" in expressions:
+                        referenced_columns.append(col)
+                
+                # Si l'index ne référence aucune colonne existante, il est orphelin
+                if not referenced_columns and "fact_table" in expressions:
+                    should_drop = True
+                
+                if should_drop:
+                    try:
+                        # Suppression de l'indice
+                        self.conn.execute(f"DROP INDEX IF EXISTS {index_name}")
+                        # Logging
+                        self.logger.info(f"Index orphelin supprimé: {index_name}")
+                    except Exception as e:
+                        # Logging
+                        self.logger.error(f"Erreur lors de la suppression de l'index orphelin {index_name}: {e}")
+            
+        except Exception as e:
+            # Logging
+            self.logger.error(f"Erreur lors du nettoyage des index orphelins: {e}")
+    
+    # Méthode d'obtention des colonnes de la table de faits
+    def _get_fact_table_columns(self) -> List[str]:
+        """Get list of columns in fact table."""
+        result = self.conn.execute("DESCRIBE fact_table").fetchall()
+        return [row[0] for row in result]
+    
+    # Méthode d'identification des colonnes ne contenant que des valeurs nulles
+    def _get_null_only_columns(self) -> List[str]:
+        """
+        Get list of columns that contain only null values in the fact table.
+        
+        Returns:
+            List of column names that contain only null values
+        """
+        # Initialisation de la liste des colonnes vides
+        null_only_columns = []
+        
+        try:
+            # Récupération des colonnes de la fact table
+            columns = self._get_fact_table_columns()
+            # Parcours des données
+            for column in columns:
+                # Vérification si la colonne ne contient que des valeurs nulles
+                query = f"SELECT COUNT(*) FROM fact_table WHERE {column} IS NOT NULL"
+                non_null_count = self.conn.execute(query).fetchone()[0]
+                # Ajout à la liste si ne contient que des colonnes nulles
+                if non_null_count == 0:
+                    null_only_columns.append(column)
+            # Logging
+            if null_only_columns:
+                self.logger.info(f"Columns containing only null values detected: {null_only_columns}")
+                
+        except Exception as e:
+            self.logger.error(f"An error occured while detecting null values: {e}")
+        
+        return null_only_columns
+    
+    # Méthode de nettoyage des entrées orphelines dans les tables de dimension
+    def _cleanup_dimension_orphaned_entries(self) -> None:
+        """
+        Clean up dimension table entries that are no longer referenced in the fact table.
+        """
+        try:
+            # Chargement des métadonnées pour identifier les colonnes catégorielles
+            current_metadata = self._load_current_metadata()
+            
+            # Parcours des colonnes catégorielles
+            for _, row in current_metadata.iterrows():
+                col_name = row['name']
+                is_categorical = row['is_categorical']
+                # Nettotage des variables catégorielles
+                if is_categorical:
+                    self._cleanup_single_dimension_orphaned_entries(col_name)
+                    
+        except Exception as e:
+            # Logging
+            self.logger.error(f"An error occured while cleaning orphaned dimension entries: {e}")
+    
+    # Méthode de nettoyage des entrées orphelines pour une dimension spécifique
+    def _cleanup_single_dimension_orphaned_entries(self, col_name: str) -> None:
+        """
+        Clean up orphaned entries for a specific dimension table.
+        
+        Args:
+            col_name: Column name associated with the dimension table
+        """
+        # Nom de la table de dimension
+        table_name = f"dim_{col_name}"
+        
+        try:
+            # Vérification que la table de dimension existe
+            dimension_exists = self.conn.execute(f"""
+                SELECT COUNT(*) FROM information_schema.tables 
+                WHERE table_name = '{table_name}'
+            """).fetchone()[0] > 0
+            
+            if dimension_exists:
+                # Vérification que la colonne existe dans la fact table
+                fact_columns = self._get_fact_table_columns()
+                if col_name not in fact_columns:
+                    # Si la colonne n'existe plus dans la fact table, supprimer toute la dimension
+                    self.conn.execute(f"DROP TABLE IF EXISTS {table_name}")
+                    # Logging
+                    self.logger.info(f"Table de dimension {table_name} supprimée car la colonne {col_name} n'existe plus")
+                
+                # Suppression des entrées orphelines (valeurs qui ne sont plus référencées dans la fact table)
+                cleanup_query = f"""
+                    DELETE FROM {table_name}
+                    WHERE value NOT IN (
+                        SELECT DISTINCT {col_name} 
+                        FROM fact_table 
+                        WHERE {col_name} IS NOT NULL
+                    )
+                """
+                
+                # Comptage des entrées avant suppression
+                count_before = self.conn.execute(f"SELECT COUNT(*) FROM {table_name}").fetchone()[0]
+                
+                # Exécution de la suppression
+                self.conn.execute(cleanup_query)
+                
+                # Comptage des entrées après suppression
+                count_after = self.conn.execute(f"SELECT COUNT(*) FROM {table_name}").fetchone()[0]
+                
+                removed_count = count_before - count_after
+                # Logging
+                if removed_count > 0:
+                    self.logger.info(f"Removed {removed_count} orphaned entries from {table_name}")
+                    
+        except Exception as e:
+            # Logging
+            self.logger.error(f"An error occured while cleaning orphaned entries from {table_name}: {e}")
