@@ -17,6 +17,7 @@ from ...utils.data_processing import map_python_to_sql_type
 FILE_PATH = Path(os.path.abspath(__file__))
 
 
+# Classe contennat des opérations utilitaires de base sur la base de données au schéma métadonnées - table des faits - tables de dimensions
 class BaseSchemaManager(ABC):
     """
     Base class for database schema management operations.
@@ -30,6 +31,7 @@ class BaseSchemaManager(ABC):
         logger: Logger instance for operation tracking
     """
     
+    # Initialisation
     def __init__(self, 
                  connection: duckdb.DuckDBPyConnection,
                  categorical_threshold: Optional[int] = 50,
@@ -54,7 +56,7 @@ class BaseSchemaManager(ABC):
         
         # Initialisation du logger pour traçabilité des opérations
         if log_filename is None:
-            log_filename = os.path.join(FILE_PATH.parents[3], f"logs/{self.__class__.__name__.lower()}.log")
+            log_filename = os.path.join(FILE_PATH.parents[3], "logs/base_schema_manager.log")
         self.logger = _init_logger(filename=log_filename)
         
         # Cache thread-safe pour optimiser les accès aux métadonnées
@@ -62,6 +64,7 @@ class BaseSchemaManager(ABC):
         self._cache_lock = threading.RLock()
     
     # Méthodes de gestion du cache des métadonnées
+    # Méthode de chargement des méta-données
     def _load_current_metadata(self) -> pd.DataFrame:
         """
         Load current metadata from the database with thread-safe caching.
@@ -83,6 +86,7 @@ class BaseSchemaManager(ABC):
             
             return self._metadata_cache.copy()
     
+    # Méthode d'invalidation des méta-données mises en cache
     def _invalidate_metadata_cache(self) -> None:
         """
         Invalidate the metadata cache to force reload on next access.
@@ -91,6 +95,8 @@ class BaseSchemaManager(ABC):
             self._metadata_cache = None
     
     # Méthodes d'introspection de la base de données
+    # Méthode d'extraction des colonnes de la table des faits
+    # /!\ Doit être cohérent avec les colonnes dans meta-données[name]
     def _get_fact_table_columns(self) -> List[str]:
         """
         Get list of columns in fact table.
@@ -99,11 +105,13 @@ class BaseSchemaManager(ABC):
             List of column names
         """
         try:
+            # Exécution de la requête
             result = self.conn.execute("DESCRIBE fact_table").fetchall()
             return [row[0] for row in result]
         except:
             return []
     
+    # Méthode d'extraction des colonnes catégorielles
     def _get_categorical_columns(self) -> List[str]:
         """
         Get list of categorical columns from metadata.
@@ -112,6 +120,7 @@ class BaseSchemaManager(ABC):
             List of categorical column names
         """
         try:
+            # Exécution de la requête
             result = self.conn.execute(
                 "SELECT name FROM metadata WHERE is_categorical = true"
             ).fetchall()
@@ -119,6 +128,7 @@ class BaseSchemaManager(ABC):
         except:
             return []
     
+    # Méthode de vérification de l'existance d'une table dans la base de données
     def _table_exists(self, table_name: str) -> bool:
         """
         Check if a table exists in the database.
@@ -130,6 +140,7 @@ class BaseSchemaManager(ABC):
             True if table exists
         """
         try:
+            # Exécution de la requête
             result = self.conn.execute(
                 "SELECT COUNT(*) FROM information_schema.tables WHERE table_name = ?",
                 [table_name]
@@ -138,6 +149,7 @@ class BaseSchemaManager(ABC):
         except:
             return False
     
+    # Méthode de vérification de l'existence d'une colonne dans une table
     def _column_exists(self, column: str, table: str = "fact_table") -> bool:
         """
         Check if a column exists in specified table.
@@ -150,11 +162,13 @@ class BaseSchemaManager(ABC):
             True if column exists
         """
         try:
+            # Extraction des colonnes de la table
             columns = [row[0] for row in self.conn.execute(f"DESCRIBE {table}").fetchall()]
             return column in columns
         except:
             return False
     
+    # Méthode de vérification si une colonne a une table de dimension (équivalent à vérifier si elle est catégorielle)
     def _is_dimension_column(self, column: str) -> bool:
         """
         Check if a column is a dimension (categorical).
@@ -175,6 +189,7 @@ class BaseSchemaManager(ABC):
             return False
     
     # Méthodes de gestion des métadonnées
+    # Méthode d'ajout d'une colonne aux méta-données
     def _add_column_to_metadata(self, column: str, df: pd.DataFrame, label: Optional[str] = None) -> None:
         """
         Add a new column to metadata table.
@@ -225,6 +240,7 @@ class BaseSchemaManager(ABC):
         # Logging
         self.logger.info(f"Added/updated column {column} in metadata")
     
+    # Méthode de mise à jour du statut catégoriel d'une donnée
     def _update_categorical_status(self, col_name: str, is_categorical: bool) -> None:
         """
         Update categorical status in metadata.
@@ -245,6 +261,7 @@ class BaseSchemaManager(ABC):
         # Logging
         self.logger.info(f"Updated categorical status for {col_name}: {is_categorical}")
     
+    # Méthode de suppression des méta-données pour une colonne
     def delete_column_metadata(self, column_name: str) -> None:
         """
         Delete metadata for a specific column.
@@ -320,7 +337,7 @@ class BaseSchemaManager(ABC):
         # Logging
         self.logger.info(f"Type conflict resolution for {column}: {current_type} -> {resolved_type}")
     
-    # Méthodes utilitaires pour les colonnes contenant uniquement des valeurs nulles
+    # Méthode utilitaire pour les colonnes contenant uniquement des valeurs nulles
     def _get_null_only_columns(self) -> List[str]:
         """
         Get list of columns that contain only null values in the fact table.

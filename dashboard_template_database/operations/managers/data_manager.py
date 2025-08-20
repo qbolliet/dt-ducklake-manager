@@ -16,7 +16,7 @@ from ...utils.data_processing import map_python_to_sql_type, _build_where_clause
 # Emplacement du fichier
 FILE_PATH = Path(os.path.abspath(__file__))
 
-
+# Classe de gestion des opérations sur la table des faits en accord ave la table des méta-données
 class DataManager(BaseSchemaManager):
     """
     Manages fact table operations including inserts, updates, upserts, and deletes.
@@ -27,7 +27,7 @@ class DataManager(BaseSchemaManager):
     Attributes:
         batch_size (int): Size of batches for processing large datasets
     """
-    
+    # Initialisation
     def __init__(self, 
                  connection: duckdb.DuckDBPyConnection,
                  categorical_threshold: Optional[int] = 50,
@@ -46,11 +46,14 @@ class DataManager(BaseSchemaManager):
             >>> conn = duckdb.connect('database.db')
             >>> data_mgr = DataManager(conn, batch_size=5000)
         """
+        # Initialisation du parent
         super().__init__(connection, categorical_threshold, log_filename)
         
         # Configuration pour le traitement par lots
         self.batch_size = batch_size
     
+    # Méthodes de validation des opérations avant leur exécution
+    # Méthode de validation de l'ensemble des opérations
     def validate_operation(self, operation_type: str, **kwargs) -> bool:
         """
         Validate data operations before execution.
@@ -62,6 +65,7 @@ class DataManager(BaseSchemaManager):
         Returns:
             True if operation is valid
         """
+        # Choix de la méthode appropriée suivant le type d'opération
         if operation_type == 'insert':
             return self._validate_insert(**kwargs)
         elif operation_type == 'update':
@@ -75,12 +79,16 @@ class DataManager(BaseSchemaManager):
         elif operation_type == 'drop_column':
             return self._validate_drop_column(**kwargs)
         else:
+            # Logging
             self.logger.warning(f"Unknown operation type: {operation_type}")
             return False
     
+    # Méthode de validation des insertions de données
     def _validate_insert(self, df: pd.DataFrame, **kwargs) -> bool:
         """Valider l'insertion de données."""
+        # Validation du jeu de données à insérer
         if df is None or len(df) == 0:
+            # Logging
             self.logger.error("DataFrame cannot be empty for insertion")
             return False
         
@@ -92,62 +100,81 @@ class DataManager(BaseSchemaManager):
         
         return True
     
+    # Méthode de validation de la mise à jour des données
     def _validate_update(self, df: pd.DataFrame, merge_keys: List[str], **kwargs) -> bool:
         """Valider la mise à jour de données."""
+        # Validation de l'insertion
+
         if not self._validate_insert(df, **kwargs):
             return False
-        
+        # Vérification de l'existence des clés d'appariement
         if not merge_keys:
+            # Logging
             self.logger.error("Merge keys cannot be empty for update operation")
             return False
         
-        # Vérification que les clés de fusion existent dans le DataFrame
+        # Vérification que les clés d'appariement existent dans le DataFrame
         missing_keys = [key for key in merge_keys if key not in df.columns]
         if missing_keys:
+            # Logging
             self.logger.error(f"Merge keys not found in DataFrame: {missing_keys}")
             return False
         
         return True
     
+    # Méthode de validation de la mise à jour et l'insertion de données
     def _validate_upsert(self, df: pd.DataFrame, merge_keys: List[str], **kwargs) -> bool:
         """Valider l'upsert de données."""
         return self._validate_update(df, merge_keys, **kwargs)
     
+    # Méthode de validation de la suppression de données
     def _validate_delete(self, filters: Optional[Union[str, List]], **kwargs) -> bool:
         """Valider la suppression de données."""
+
+        # Vérification de la spécification des filtres
         if filters is None:
+            # Logging
             self.logger.error("Filters cannot be None for delete operation")
             return False
         
         return True
     
+    # Méthode de validation de l'ajout d'une colonne
     def _validate_add_column(self, column_name: str, df: pd.DataFrame, **kwargs) -> bool:
         """Valider l'ajout de colonne."""
+        # Vérification que le nom est valide
         if not column_name or column_name.strip() == "":
+            # logging
             self.logger.error("Column name cannot be empty")
             return False
-        
+        # Vérification que le nom de colonne n'est pas présent dans le jeu de données
         if column_name not in df.columns:
             self.logger.error(f"Column {column_name} not found in DataFrame")
             return False
         
         return True
     
+    # Méthode de validation de la suppression de colonnes de la table des faits
     def _validate_drop_column(self, columns: List[str], **kwargs) -> bool:
         """Valider la suppression de colonnes."""
+        # Vérification de la spécification des colonnes
         if not columns:
+            # Logging
             self.logger.error("Columns list cannot be empty")
             return False
         
         # Vérification que les colonnes existent
         existing_columns = self._get_fact_table_columns()
+        # Identification des colonnes manquantes
         missing_columns = [col for col in columns if col not in existing_columns]
         if missing_columns:
+            # Logging
             self.logger.warning(f"Columns not found in fact table: {missing_columns}")
         
         return True
     
     # Méthodes principales de gestion des données
+    # Méthode de création de la table des faits à partir d'un jeu de données
     def create_fact_table(self, df: pd.DataFrame) -> bool:
         """
         Create the fact table with initial data.
@@ -188,9 +215,11 @@ class DataManager(BaseSchemaManager):
             except:
                 pass
             
+            # Logging
             self.logger.error(f"Failed to create fact table: {e}")
             return False
     
+    # Méthode d'insertion de données dans la table des faits
     def insert_data(self, df: pd.DataFrame, use_batch: bool = True) -> int:
         """
         Insert new data into the fact table.
@@ -224,9 +253,11 @@ class DataManager(BaseSchemaManager):
                 return self._direct_insert_data(df)
             
         except Exception as e:
+            # Logging
             self.logger.error(f"Failed to insert data: {e}")
             return 0
     
+    # Méthode de mise à jour et d'insertion de données
     def upsert_data(self, df: pd.DataFrame, merge_keys: Optional[List[str]] = None, use_batch: bool = True) -> Tuple[int, int]:
         """
         Upsert data into the fact table (insert new, update existing).
@@ -243,11 +274,12 @@ class DataManager(BaseSchemaManager):
             >>> inserted, updated = data_mgr.upsert_data(df, merge_keys=['id', 'date'])
             >>> print(f"Inserted: {inserted}, Updated: {updated}")
         """
-        # Détermination des clés de fusion
+        # Détermination des clés d'appariement
         if merge_keys is None:
             existing_columns = self._get_fact_table_columns()
             merge_keys = list(set(df.columns).intersection(set(existing_columns)))
         
+        # Validation de l'opération
         if not self.validate_operation('upsert', df=df, merge_keys=merge_keys):
             return 0, 0
         
@@ -269,6 +301,7 @@ class DataManager(BaseSchemaManager):
             self.logger.error(f"Failed to upsert data: {e}")
             return 0, 0
     
+    # Méthode de suppression de lignes de la table de faits
     def delete_rows(self, filters: Optional[Union[str, List]]) -> int:
         """
         Delete rows from fact table based on filters.
@@ -287,6 +320,7 @@ class DataManager(BaseSchemaManager):
             >>> filters = [('status', '=', 'inactive'), ('date', '<', '2023-01-01')]
             >>> deleted = data_mgr.delete_rows(filters)
         """
+        # Validation de l'opération
         if not self.validate_operation('delete', filters=filters):
             return 0
         
@@ -314,10 +348,12 @@ class DataManager(BaseSchemaManager):
             return rows_deleted
             
         except Exception as e:
+            # Logging
             self.logger.error(f"Failed to delete rows: {e}")
             return 0
     
     # Méthodes de gestion des colonnes
+    # Méthode d'ajout d'une colonne à la table des faits et à la table des méta-données
     def add_column(self, column_name: str, df: pd.DataFrame, default_value: Any = None) -> bool:
         """
         Add a new column to the fact table.
@@ -333,12 +369,14 @@ class DataManager(BaseSchemaManager):
         Example:
             >>> success = data_mgr.add_column('new_field', df_with_new_field)
         """
+        # Validation de l'opération
         if not self.validate_operation('add_column', column_name=column_name, df=df):
             return False
         
         try:
             # Vérification que la colonne n'existe pas déjà
             if self._column_exists(column_name):
+                # Logging
                 self.logger.warning(f"Column {column_name} already exists")
                 return False
             
@@ -365,6 +403,7 @@ class DataManager(BaseSchemaManager):
             self.logger.error(f"Failed to add column {column_name}: {e}")
             return False
     
+    # Méthode de suppression de colonnes de la table des faits et de la table des méta-données
     def drop_columns(self, columns: List[str]) -> List[str]:
         """
         Drop columns from the fact table.
@@ -379,13 +418,16 @@ class DataManager(BaseSchemaManager):
             >>> dropped = data_mgr.drop_columns(['old_col1', 'old_col2'])
             >>> print(f"Dropped columns: {dropped}")
         """
+        # Validation de l'opération
         if not self.validate_operation('drop_column', columns=columns):
             return []
         
+        # Identification des colonnes à supprimer
         successfully_dropped = []
         existing_columns = self._get_fact_table_columns()
         valid_columns = [col for col in columns if col in existing_columns]
         
+        # Parcours des colonnes
         for column in valid_columns:
             try:
                 # Suppression de la colonne
@@ -396,6 +438,7 @@ class DataManager(BaseSchemaManager):
                 self.delete_column_metadata(column)
                 
                 successfully_dropped.append(column)
+                # Logging
                 self.logger.info(f"Dropped column {column} from fact table")
                 
             except Exception as e:
@@ -403,6 +446,7 @@ class DataManager(BaseSchemaManager):
         
         return successfully_dropped
     
+    # Méthode de mise à jour du type d'une colonne
     def update_column_type(self, column_name: str, new_type: str) -> bool:
         """
         Update the data type of an existing column.
@@ -418,7 +462,9 @@ class DataManager(BaseSchemaManager):
             >>> success = data_mgr.update_column_type('amount', 'DECIMAL(10,2)')
         """
         try:
+            # Validation de l'opération
             if not self._column_exists(column_name):
+                # Logging
                 self.logger.error(f"Column {column_name} does not exist")
                 return False
             
@@ -441,33 +487,43 @@ class DataManager(BaseSchemaManager):
             return True
             
         except Exception as e:
+            # Logging
             self.logger.error(f"Failed to update column type for {column_name}: {e}")
             return False
     
     # Méthodes privées pour le traitement par lots
+    # Méthode auxiliaire d'insertion par batch
     def _batch_insert_data(self, df: pd.DataFrame) -> int:
         """Insérer des données par lots."""
+        # Initialisation du compteur d'insertions
         total_inserted = 0
-        
+        # Logging
         self.logger.info(f"Processing {len(df)} rows in batches of {self.batch_size}")
-        
+        # Parcours des batch
         for i in range(0, len(df), self.batch_size):
+            # Détermination du début et de la fin du batch
             batch_start = i
             batch_end = min(i + self.batch_size, len(df))
+            # Construction du jeu de données correspondant
             batch_df = df.iloc[batch_start:batch_end].copy()
             
             try:
+                # Insertion des données dans la base
                 inserted = self._direct_insert_data(batch_df)
+                # Ajout au total
                 total_inserted += inserted
-                
+                # Vérificaion que le nombre d'observations insérées correspond bien à la longueur du batch
                 if inserted != len(batch_df):
+                    # Logging
                     self.logger.warning(f"Batch {batch_start}-{batch_end}: Expected {len(batch_df)}, inserted {inserted}")
                     
             except Exception as e:
+                # Logging
                 self.logger.error(f"Error processing batch {batch_start}-{batch_end}: {e}")
         
         return total_inserted
     
+    # Méthode d'insertion directe des données
     def _direct_insert_data(self, df: pd.DataFrame) -> int:
         """Insérer des données directement."""
         try:
@@ -498,28 +554,36 @@ class DataManager(BaseSchemaManager):
                 pass
             raise e
     
+    # Méthode de mise à jour et d'insertion des données en batch
     def _batch_upsert_data(self, df: pd.DataFrame, merge_keys: List[str]) -> Tuple[int, int]:
         """Faire un upsert par lots."""
+        # Initialisation des totaux
         total_inserted = 0
         total_updated = 0
-        
+        # Logging
         self.logger.info(f"Processing {len(df)} rows in batches of {self.batch_size}")
-        
+        # Parcours des batchs
         for i in range(0, len(df), self.batch_size):
+            # Détermination du début et de la fin du batch
             batch_start = i
             batch_end = min(i + self.batch_size, len(df))
+            # Circonscription du batch
             batch_df = df.iloc[batch_start:batch_end].copy()
             
             try:
+                # Mise à jour du jeu de données
                 inserted, updated = self._direct_upsert_data(batch_df, merge_keys)
+                # Ajout aux totaux
                 total_inserted += inserted
                 total_updated += updated
                 
             except Exception as e:
+                # Logging
                 self.logger.error(f"Error processing upsert batch {batch_start}-{batch_end}: {e}")
         
         return total_inserted, total_updated
     
+    # Méthode de mise à jour et d'insertion des données directement
     def _direct_upsert_data(self, df: pd.DataFrame, merge_keys: List[str]) -> Tuple[int, int]:
         """Faire un upsert direct."""
         try:
@@ -590,16 +654,20 @@ class DataManager(BaseSchemaManager):
                 pass
             raise e
     
+    # Méthode auxiliaire de vérification que toutes les colonnes d'un jeu de données existente dans la table des faits
     def _ensure_columns_exist(self, df: pd.DataFrame) -> None:
         """S'assurer que toutes les colonnes du DataFrame existent dans la fact table."""
+        # Identification des colonnes manquantes
         existing_columns = set(self._get_fact_table_columns())
         new_columns = set(df.columns) - existing_columns
         
+        # Ajout des colonnes manquantes
         for column in new_columns:
             if not self.add_column(column, df):
                 raise Exception(f"Failed to add required column: {column}")
     
     # Méthodes utilitaires
+    # Méthode produisant des statistiques sur la table des faits
     def get_table_stats(self) -> Dict[str, Any]:
         """
         Get statistics about the fact table.
@@ -633,9 +701,11 @@ class DataManager(BaseSchemaManager):
             return stats
             
         except Exception as e:
+            # Logging
             self.logger.error(f"Failed to get table stats: {e}")
             return {'error': str(e)}
     
+    # Méthode d'analyse de la table des faits pour optimiser les requêtes
     def optimize_table(self) -> bool:
         """
         Optimize the fact table by analyzing and potentially reorganizing data.
@@ -655,5 +725,6 @@ class DataManager(BaseSchemaManager):
             return True
             
         except Exception as e:
+            # Logging
             self.logger.error(f"Failed to optimize table: {e}")
             return False

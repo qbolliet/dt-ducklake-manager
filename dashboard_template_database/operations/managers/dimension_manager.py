@@ -15,7 +15,7 @@ from .base_manager import BaseSchemaManager
 # Emplacement du fichier
 FILE_PATH = Path(os.path.abspath(__file__))
 
-
+# Classe de gestion des opérations sur la table d
 class DimensionManager(BaseSchemaManager):
     """
     Manages dimension table operations and categorical variable conversions.
@@ -28,6 +28,7 @@ class DimensionManager(BaseSchemaManager):
         max_workers (int): Maximum number of parallel workers for dimension operations
     """
     
+    # Initialisation
     def __init__(self, 
                  connection: duckdb.DuckDBPyConnection,
                  categorical_threshold: Optional[int] = 50,
@@ -46,6 +47,7 @@ class DimensionManager(BaseSchemaManager):
             >>> conn = duckdb.connect('database.db')
             >>> dim_mgr = DimensionManager(conn, max_workers=8)
         """
+        # Initialisation du parent
         super().__init__(connection, categorical_threshold, log_filename)
         
         # Configuration pour le traitement parallèle
@@ -54,6 +56,7 @@ class DimensionManager(BaseSchemaManager):
         # Verrou pour les opérations thread-safe sur les dimensions
         self._dimension_lock = threading.RLock()
     
+    # Méthode de validation de l'opération
     def validate_operation(self, operation_type: str, **kwargs) -> bool:
         """
         Validate dimension operations before execution.
@@ -65,6 +68,7 @@ class DimensionManager(BaseSchemaManager):
         Returns:
             True if operation is valid
         """
+        # Distinction de la bonne méthode de validation suivant l'opération
         if operation_type == 'create':
             return self._validate_create_dimension(**kwargs)
         elif operation_type == 'update':
@@ -74,25 +78,32 @@ class DimensionManager(BaseSchemaManager):
         elif operation_type == 'convert':
             return self._validate_convert_dimension(**kwargs)
         else:
+            # Logging
             self.logger.warning(f"Unknown operation type: {operation_type}")
             return False
     
+    # Méthode de validation de la création de dimensions
     def _validate_create_dimension(self, column_name: str, values: pd.Series, **kwargs) -> bool:
         """Valider la création d'une dimension."""
+        # Validation du nom de colonne
         if not column_name or column_name.strip() == "":
+            # Logging
             self.logger.error("Column name cannot be empty")
             return False
-        
+        # Validation des valeurs
         if values is None or len(values) == 0:
+            # Logging
             self.logger.error("Values cannot be empty")
             return False
         
         return True
     
+    # Méthode de validation de la mise à jour de dimensions
     def _validate_update_dimension(self, column_name: str, values: pd.Series, **kwargs) -> bool:
         """Valider la mise à jour d'une dimension."""
         return self._validate_create_dimension(column_name, values, **kwargs)
     
+    # Méthode de validation de la suppresion de dimension
     def _validate_delete_dimension(self, column_name: str, **kwargs) -> bool:
         """Valider la suppression d'une dimension."""
         if not column_name or column_name.strip() == "":
@@ -101,11 +112,13 @@ class DimensionManager(BaseSchemaManager):
         
         return True
     
+    # Méthode de validation de la conversion d'une dimension
     def _validate_convert_dimension(self, column_name: str, values: pd.Series, **kwargs) -> bool:
         """Valider la conversion d'une dimension."""
         return self._validate_create_dimension(column_name, values, **kwargs)
     
     # Méthodes principales de gestion des dimensions
+    # Méthode de création de la table de dimensions
     def create_dimension_table(self, dimension_name: str, values: pd.Series) -> bool:
         """
         Create a new dimension table with unique values.
@@ -121,6 +134,7 @@ class DimensionManager(BaseSchemaManager):
             >>> values = pd.Series(['A', 'B', 'C', 'A'])
             >>> success = dim_mgr.create_dimension_table('category', values)
         """
+        # Validation de l'opération de création
         if not self.validate_operation('create', column_name=dimension_name, values=values):
             return False
         
@@ -153,9 +167,11 @@ class DimensionManager(BaseSchemaManager):
                 return True
                 
             except Exception as e:
+                # Logging
                 self.logger.error(f"Failed to create dimension table for {dimension_name}: {e}")
                 return False
     
+    # Méthode de mise à jour d'une table de dimension
     def update_dimension_values(self, dimension_name: str, values: pd.Series) -> int:
         """
         Update dimension table with new values.
@@ -172,6 +188,7 @@ class DimensionManager(BaseSchemaManager):
             >>> added_count = dim_mgr.update_dimension_values('category', new_values)
             >>> print(f"Added {added_count} new values")
         """
+        # Validation de l'opération de mise à jour
         if not self.validate_operation('update', column_name=dimension_name, values=values):
             return 0
         
@@ -210,6 +227,7 @@ class DimensionManager(BaseSchemaManager):
                 values_added = 0
                 for value, label in zip(new_values, new_labels):
                     try:
+                        # Exécution de la requête d'insertion
                         self.conn.execute(f"""
                             INSERT INTO {table_name} (value, label) 
                             VALUES (?, ?)
@@ -217,6 +235,7 @@ class DimensionManager(BaseSchemaManager):
                         """, [str(value), str(label)])
                         values_added += 1
                     except Exception as e:
+                        # Logging
                         self.logger.warning(f"Cannot insert {value}:{label} into {table_name}: {e}")
                 
                 # Logging
@@ -226,9 +245,11 @@ class DimensionManager(BaseSchemaManager):
                 return values_added
                 
             except Exception as e:
+                # Logging
                 self.logger.error(f"Failed to update dimension {dimension_name}: {e}")
                 return 0
     
+    # Méthode de suppression de la table de dimension
     def delete_dimension_table(self, dimension_name: str) -> bool:
         """
         Delete a dimension table completely.
@@ -242,6 +263,7 @@ class DimensionManager(BaseSchemaManager):
         Example:
             >>> success = dim_mgr.delete_dimension_table('old_category')
         """
+        # Validation de l'opération
         if not self.validate_operation('delete', column_name=dimension_name):
             return False
         
@@ -258,10 +280,12 @@ class DimensionManager(BaseSchemaManager):
                 return True
                 
             except Exception as e:
+                # Logging
                 self.logger.error(f"Failed to delete dimension table {dimension_name}: {e}")
                 return False
     
     # Méthodes de conversion entre catégoriel et non-catégoriel
+    # Méthode de conversion en variable catégorielle
     def convert_to_categorical(self, col_name: str, values: pd.Series) -> bool:
         """
         Convert a non-categorical column to categorical.
@@ -277,10 +301,13 @@ class DimensionManager(BaseSchemaManager):
             >>> values = df['status']  # Series with few unique values
             >>> success = dim_mgr.convert_to_categorical('status', values)
         """
+        # Validation de l'opération
         if not self.validate_operation('convert', column_name=col_name, values=values):
             return False
         
+        # Vérification que le seuil catégoriel est satisfait
         if not self._check_categorical_threshold(values):
+            # Logging
             self.logger.warning(f"Column {col_name} exceeds categorical threshold")
             return False
         
@@ -304,9 +331,11 @@ class DimensionManager(BaseSchemaManager):
             return True
             
         except Exception as e:
+            # Logging
             self.logger.error(f"Failed to convert {col_name} to categorical: {e}")
             return False
     
+    # Méthode de conversion en variable non-catégorielle
     def convert_to_non_categorical(self, col_name: str) -> bool:
         """
         Convert a categorical column to non-categorical.
@@ -320,12 +349,14 @@ class DimensionManager(BaseSchemaManager):
         Example:
             >>> success = dim_mgr.convert_to_non_categorical('category')
         """
+        # Validation de l'opération
         if not self.validate_operation('delete', column_name=col_name):
             return False
         
         try:
             # Conversion des valeurs dans la fact table (values -> labels)
             if not self._convert_fact_table_dimension_mapping(col_name, values_to_labels=True):
+                # Logging
                 self.logger.error(f"Failed to convert fact table values for {col_name}")
                 return False
             
@@ -341,10 +372,12 @@ class DimensionManager(BaseSchemaManager):
             return True
             
         except Exception as e:
+            # Logging
             self.logger.error(f"Failed to convert {col_name} to non-categorical: {e}")
             return False
     
     # Méthodes de traitement parallèle
+    # Méthode de traitement de la mise à jour des dimensions en parallèle
     def batch_update_dimensions(self, dimension_data: Dict[str, pd.Series], 
                               use_parallel: bool = True) -> Dict[str, int]:
         """
@@ -361,6 +394,7 @@ class DimensionManager(BaseSchemaManager):
             >>> data = {'cat1': series1, 'cat2': series2}
             >>> results = dim_mgr.batch_update_dimensions(data, use_parallel=True)
         """
+        # Initialisation des résultats
         results = {}
         
         if use_parallel and len(dimension_data) > 1 and self.max_workers > 1:
@@ -378,6 +412,7 @@ class DimensionManager(BaseSchemaManager):
                     try:
                         results[dimension] = future.result()
                     except Exception as e:
+                        # Logging
                         self.logger.error(f"Error during parallel update of {dimension}: {e}")
                         results[dimension] = 0
         else:
@@ -388,6 +423,7 @@ class DimensionManager(BaseSchemaManager):
         return results
     
     # Méthodes de nettoyage et maintenance
+    # méthode de suppression des tables de dimension qui ne sont plus référencées dans la table des faits
     def cleanup_orphaned_dimension_entries(self, dimension_name: Optional[str] = None) -> Dict[str, int]:
         """
         Clean up dimension entries that are no longer referenced in fact table.
@@ -402,9 +438,10 @@ class DimensionManager(BaseSchemaManager):
             >>> removed = dim_mgr.cleanup_orphaned_dimension_entries()
             >>> print(f"Cleaned dimensions: {removed}")
         """
+        # Initialisation du dictionnaire des suppressions
         removed_counts = {}
         
-        # Déterminer quelles dimensions nettoyer
+        # Détermination des dimensions à nettoyer
         if dimension_name:
             dimensions_to_clean = [dimension_name] if self._is_dimension_column(dimension_name) else []
         else:
@@ -412,6 +449,7 @@ class DimensionManager(BaseSchemaManager):
         
         for dim_col in dimensions_to_clean:
             try:
+                # Nom de la table de dimension
                 table_name = f"dim_{dim_col}"
                 
                 # Vérification de l'existence de la table
@@ -442,16 +480,20 @@ class DimensionManager(BaseSchemaManager):
                 # Comptage final
                 count_after = self.conn.execute(f"SELECT COUNT(*) FROM {table_name}").fetchone()[0]
                 
+                # Comptage des suppressions
                 removed_count = count_before - count_after
                 if removed_count > 0:
                     removed_counts[dim_col] = removed_count
+                    # Logging
                     self.logger.info(f"Removed {removed_count} orphaned entries from {table_name}")
                 
             except Exception as e:
+                # Logging
                 self.logger.error(f"Error cleaning dimension {dim_col}: {e}")
         
         return removed_counts
     
+    # Méthode d'extration de la correspondance valeur-label dans la table de dimension
     def get_dimension_mapping(self, dimension_name: str) -> Optional[pd.DataFrame]:
         """
         Get the complete mapping for a dimension table.
@@ -467,15 +509,19 @@ class DimensionManager(BaseSchemaManager):
             >>> print(mapping[['value', 'label']])
         """
         try:
+            # Nom de la table de dimension
             table_name = f"dim_{dimension_name}"
             
+            # Vérification de l'existence de la table
             if not self._table_exists(table_name):
+                # Logging
                 self.logger.warning(f"Dimension table {table_name} does not exist")
                 return None
             
             return self.conn.execute(f"SELECT value, label FROM {table_name} ORDER BY value").fetchdf()
             
         except Exception as e:
+            # Logging
             self.logger.error(f"Error getting dimension mapping for {dimension_name}: {e}")
             return None
     
@@ -491,11 +537,13 @@ class DimensionManager(BaseSchemaManager):
         Returns:
             True if conversion was successful
         """
+        # Nom de la table de dimension
         table_name = f"dim_{col_name}"
         
         try:
             # Vérification de l'existence de la colonne
             if not self._column_exists(col_name):
+                # Logging
                 self.logger.error(f"Column {col_name} does not exist in fact table")
                 return False
             
@@ -503,6 +551,7 @@ class DimensionManager(BaseSchemaManager):
             dim_result = self.conn.execute(f"SELECT value, label FROM {table_name}").fetchdf()
             
             if len(dim_result) == 0:
+                # Logging
                 self.logger.warning(f"Dimension table {table_name} is empty")
                 return True  # Pas d'erreur si la table est vide
             
