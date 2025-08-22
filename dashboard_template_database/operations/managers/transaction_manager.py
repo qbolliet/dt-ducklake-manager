@@ -16,7 +16,7 @@ from .base_manager import BaseSchemaManager
 # Emplacement du fichier
 FILE_PATH = Path(os.path.abspath(__file__))
 
-
+# Énumération des états possibles d'une transaction
 class TransactionState(Enum):
     """Énumération des états possibles d'une transaction."""
     PENDING = "pending"
@@ -26,6 +26,7 @@ class TransactionState(Enum):
     FAILED = "failed"
 
 
+# Opérations au seil d'une transaction
 @dataclass
 class TransactionOperation:
     """
@@ -50,7 +51,7 @@ class TransactionOperation:
     rollback_kwargs: dict = field(default_factory=dict)
     description: str = ""
 
-
+# Contexte pour suivre les transition d'état et d'opération
 @dataclass
 class TransactionContext:
     """
@@ -73,7 +74,7 @@ class TransactionContext:
     error_message: Optional[str] = None
     savepoints: Dict[str, int] = field(default_factory=dict)
 
-
+# Classe de gestion des transactions
 class TransactionManager(BaseSchemaManager):
     """
     Manages database transactions with support for atomic operations, rollback,
@@ -84,7 +85,8 @@ class TransactionManager(BaseSchemaManager):
         auto_commit (bool): Whether to auto-commit single operations
         transaction_timeout (int): Maximum transaction duration in seconds
     """
-    
+
+    # Initialisation
     def __init__(self, 
                  connection: duckdb.DuckDBPyConnection,
                  categorical_threshold: Optional[int] = 50,
@@ -105,6 +107,7 @@ class TransactionManager(BaseSchemaManager):
             >>> conn = duckdb.connect('database.db')
             >>> tx_mgr = TransactionManager(conn, transaction_timeout=600)
         """
+        # Initialisation du parent
         super().__init__(connection, categorical_threshold, log_filename)
         
         # Configuration des transactions
@@ -122,6 +125,7 @@ class TransactionManager(BaseSchemaManager):
         except Exception as e:
             self.logger.warning(f"Could not set autocommit mode: {e}")
     
+    # Méthode de validation de l'opération
     def validate_operation(self, operation_type: str, **kwargs) -> bool:
         """
         Validate transaction operations before execution.
@@ -133,8 +137,9 @@ class TransactionManager(BaseSchemaManager):
         Returns:
             True if operation is valid
         """
+        # Distinction de la méthode de validation suivant le type
         if operation_type == 'begin':
-            return True  # Begin operations are always valid
+            return True  # Les opérations de démarrage sont toujours valides
         elif operation_type == 'commit':
             return self._validate_commit(**kwargs)
         elif operation_type == 'rollback':
@@ -142,37 +147,49 @@ class TransactionManager(BaseSchemaManager):
         elif operation_type == 'execute':
             return self._validate_execute(**kwargs)
         else:
+            # Logging
             self.logger.warning(f"Unknown transaction operation type: {operation_type}")
             return False
     
+    # Méthode de validation d'un commit de transaction
     def _validate_commit(self, transaction_id: Optional[str] = None, **kwargs) -> bool:
         """Valider un commit de transaction."""
+        # Vérification que la transaction possède un identifiant et n'est plus active
         if transaction_id and transaction_id not in self._active_transactions:
+            # Logging
             self.logger.error(f"Transaction {transaction_id} not found")
             return False
         return True
     
+    # Méthode de validation d'un rollback de transaction
     def _validate_rollback(self, transaction_id: Optional[str] = None, **kwargs) -> bool:
         """Valider un rollback de transaction."""
+        # Vérification que la transaction possède un identifiant et n'est plus active
         if transaction_id and transaction_id not in self._active_transactions:
+            # Logging
             self.logger.error(f"Transaction {transaction_id} not found")
             return False
         return True
     
+    # Méthode de validation de l'exécution d'une opération
     def _validate_execute(self, transaction_id: str, operation: TransactionOperation, **kwargs) -> bool:
         """Valider l'exécution d'une opération."""
+        # Vérification que la transaction n'est pas active
         if transaction_id not in self._active_transactions:
+            # Logging
             self.logger.error(f"Transaction {transaction_id} not found")
             return False
-        
+        # Vérification que la transaction n'est pas en attente ou en cours d'exécution
         context = self._active_transactions[transaction_id]
         if context.state not in [TransactionState.PENDING, TransactionState.RUNNING]:
+            # Logging
             self.logger.error(f"Cannot execute operation in transaction state: {context.state}")
             return False
         
         return True
     
     # Méthodes principales de gestion des transactions
+    # Méthode d'amorçage d'une nouvelle transaction
     def begin_transaction(self, description: str = "") -> str:
         """
         Begin a new transaction.
@@ -188,6 +205,7 @@ class TransactionManager(BaseSchemaManager):
             >>> # ... add operations ...
             >>> tx_mgr.commit_transaction(tx_id)
         """
+        # Validation de l'opération
         if not self.validate_operation('begin'):
             raise Exception("Cannot begin transaction")
         
@@ -216,9 +234,11 @@ class TransactionManager(BaseSchemaManager):
             except Exception as e:
                 # Nettoyage en cas d'erreur
                 del self._active_transactions[transaction_id]
+                # Logging
                 self.logger.error(f"Failed to begin transaction: {e}")
                 raise
     
+    # Méthode d'ajout d'une opération sur la base de données à la transaction
     def add_operation(self, 
                      transaction_id: str,
                      operation_type: str,
@@ -260,13 +280,17 @@ class TransactionManager(BaseSchemaManager):
             ...     rollback_func=rollback_insert, rollback_args=('temp_table',)
             ... )
         """
+        # Vérification que la transaction n'est pas déjà active
         if transaction_id not in self._active_transactions:
+            # Logging
             self.logger.error(f"Transaction {transaction_id} not found")
             return False
         
         context = self._active_transactions[transaction_id]
         
+        # Vérification que la transaction n'est pas déjà en cours d'exécution
         if context.state != TransactionState.RUNNING:
+            # Logging
             self.logger.error(f"Cannot add operation to transaction in state: {context.state}")
             return False
         
@@ -286,8 +310,10 @@ class TransactionManager(BaseSchemaManager):
         
         # Logging
         self.logger.info(f"Added operation to {transaction_id}: {operation_type} - {description}")
+
         return True
     
+    # Méthode d'exécution d'une opération
     def execute_operation(self, transaction_id: str, operation_index: Optional[int] = None) -> bool:
         """
         Execute a specific operation or the next pending operation.
@@ -306,7 +332,9 @@ class TransactionManager(BaseSchemaManager):
             >>> # Execute specific operation
             >>> success = tx_mgr.execute_operation(tx_id, operation_index=2)
         """
+        # Vérification que la transaction fait bien partie des transactions actives
         if transaction_id not in self._active_transactions:
+            # Logging
             self.logger.error(f"Transaction {transaction_id} not found")
             return False
         
@@ -314,7 +342,9 @@ class TransactionManager(BaseSchemaManager):
         
         # Vérification du timeout
         if time.time() - context.start_time > self.transaction_timeout:
+            # Logging
             self.logger.error(f"Transaction {transaction_id} timed out")
+            # Si timout dépassé annulation de la transaction
             self.rollback_transaction(transaction_id)
             return False
         
@@ -323,16 +353,21 @@ class TransactionManager(BaseSchemaManager):
             # Recherche de la prochaine opération non exécutée
             operation_index = len(context.executed_operations)
         
+        # Vérification que l'index est valide
         if operation_index >= len(context.operations):
+            # Logging
             self.logger.warning(f"Operation index {operation_index} out of range")
             return False
         
+        # Vérification que l'opération n'est pas déjà exécutée
         if operation_index in context.executed_operations:
+            # Logging
             self.logger.warning(f"Operation {operation_index} already executed")
             return True
         
         operation = context.operations[operation_index]
         
+        # Validation de l'opération
         if not self.validate_operation('execute', transaction_id=transaction_id, operation=operation):
             return False
         
@@ -352,9 +387,11 @@ class TransactionManager(BaseSchemaManager):
             context.state = TransactionState.FAILED
             context.error_message = str(e)
             
+            # Logging
             self.logger.error(f"Operation {operation_index} failed in {transaction_id}: {e}")
             return False
     
+    # Méthode de commit d'une transaction
     def commit_transaction(self, transaction_id: str) -> bool:
         """
         Commit a transaction.
@@ -370,6 +407,7 @@ class TransactionManager(BaseSchemaManager):
             >>> if not success:
             ...     print("Transaction failed and was rolled back")
         """
+        # Validation de l'opération
         if not self.validate_operation('commit', transaction_id=transaction_id):
             return False
         
@@ -398,10 +436,13 @@ class TransactionManager(BaseSchemaManager):
             return True
             
         except Exception as e:
+            # Logging
             self.logger.error(f"Failed to commit transaction {transaction_id}: {e}")
+            # Annulation de la transaction
             self.rollback_transaction(transaction_id)
             return False
     
+    # Méthode d'annulation d'une transaction
     def rollback_transaction(self, transaction_id: str) -> bool:
         """
         Rollback a transaction.
@@ -415,6 +456,7 @@ class TransactionManager(BaseSchemaManager):
         Example:
             >>> success = tx_mgr.rollback_transaction(tx_id)
         """
+        # Validation de l'opération
         if not self.validate_operation('rollback', transaction_id=transaction_id):
             return False
         
@@ -423,22 +465,28 @@ class TransactionManager(BaseSchemaManager):
         try:
             # Rollback des opérations individuelles (en ordre inverse)
             rollback_errors = []
-            
+            # Parcours des opérations
             for operation_index in reversed(context.executed_operations):
                 operation = context.operations[operation_index]
-                
+                # Annulation
                 if operation.rollback_func:
                     try:
+                        # Eécution de l'annulation
                         operation.rollback_func(*operation.rollback_args, **operation.rollback_kwargs)
+                        # Logging
                         self.logger.info(f"Rolled back operation {operation_index}: {operation.description}")
                     except Exception as e:
+                        # Ajout aux erreurs
                         rollback_errors.append(f"Operation {operation_index}: {e}")
+                        # Logging
                         self.logger.error(f"Failed to rollback operation {operation_index}: {e}")
             
             # Rollback de la transaction DuckDB
             try:
+                # Exécution de l'annulation
                 self.conn.execute("ROLLBACK")
             except Exception as e:
+                # Logging
                 self.logger.warning(f"DuckDB rollback failed: {e}")
             
             # Mise à jour du statut
@@ -456,12 +504,14 @@ class TransactionManager(BaseSchemaManager):
             return len(rollback_errors) == 0
             
         except Exception as e:
+            # Logging
             self.logger.error(f"Critical error during rollback of {transaction_id}: {e}")
             context.state = TransactionState.FAILED
             context.error_message = str(e)
             return False
     
     # Méthodes utilitaires
+    # Méthode de création d'un savepoint au sein d'une transaction
     def create_savepoint(self, transaction_id: str, savepoint_name: str) -> bool:
         """
         Create a savepoint within a transaction.
@@ -478,7 +528,9 @@ class TransactionManager(BaseSchemaManager):
             >>> # ... execute risky operations ...
             >>> tx_mgr.rollback_to_savepoint(tx_id, "before_critical_operation")
         """
+        # Vérification que l'identifiant fait bien partie des transactions actives
         if transaction_id not in self._active_transactions:
+            # Logging
             self.logger.error(f"Transaction {transaction_id} not found")
             return False
         
@@ -496,9 +548,11 @@ class TransactionManager(BaseSchemaManager):
             return True
             
         except Exception as e:
+            # Logging
             self.logger.error(f"Failed to create savepoint '{savepoint_name}': {e}")
             return False
     
+    # Méthode d'annulation jusqu'à un savepoint
     def rollback_to_savepoint(self, transaction_id: str, savepoint_name: str) -> bool:
         """
         Rollback to a specific savepoint.
@@ -510,13 +564,17 @@ class TransactionManager(BaseSchemaManager):
         Returns:
             True if rollback was successful
         """
+        # Vérification que la transaction ne fait pas partie des transactions actives
         if transaction_id not in self._active_transactions:
+            # Logging
             self.logger.error(f"Transaction {transaction_id} not found")
             return False
         
         context = self._active_transactions[transaction_id]
         
+        # Vérification que la savepoint est enregistré
         if savepoint_name not in context.savepoints:
+            # Logging
             self.logger.error(f"Savepoint '{savepoint_name}' not found")
             return False
         
@@ -544,9 +602,11 @@ class TransactionManager(BaseSchemaManager):
             return True
             
         except Exception as e:
+            # Logging
             self.logger.error(f"Failed to rollback to savepoint '{savepoint_name}': {e}")
             return False
     
+    # Méthode d'extraction du statut de la transaction
     def get_transaction_status(self, transaction_id: str) -> Optional[Dict[str, Any]]:
         """
         Get the status of a transaction.
@@ -561,6 +621,7 @@ class TransactionManager(BaseSchemaManager):
             >>> status = tx_mgr.get_transaction_status(tx_id)
             >>> print(f"State: {status['state']}, Operations: {status['total_operations']}")
         """
+        # Vérification que la transaction n'est pas active
         if transaction_id not in self._active_transactions:
             return None
         
@@ -578,6 +639,7 @@ class TransactionManager(BaseSchemaManager):
             'error_message': context.error_message
         }
     
+    # Méthode d'énumération des transactions actives
     def list_active_transactions(self) -> List[Dict[str, Any]]:
         """
         List all active transactions.
@@ -596,6 +658,7 @@ class TransactionManager(BaseSchemaManager):
                 for tx_id in list(self._active_transactions.keys())
             ]
     
+    # Méthode de nettoyage des transactions passées
     def cleanup_old_transactions(self, max_age_seconds: int = 3600) -> int:
         """
         Clean up old completed transactions.
@@ -610,27 +673,34 @@ class TransactionManager(BaseSchemaManager):
             >>> cleaned = tx_mgr.cleanup_old_transactions(max_age_seconds=1800)
             >>> print(f"Cleaned up {cleaned} old transactions")
         """
+        # Intialisation du temps
         current_time = time.time()
+        # Initialisation du compteur des transactions supprimées
         cleaned_count = 0
         
         with self._transaction_lock:
+            # Identification des transactions à supprimer
             transactions_to_remove = []
-            
+            # parcours des transactions
             for tx_id, context in self._active_transactions.items():
                 # Nettoyer les transactions terminées depuis longtemps
                 if (context.state in [TransactionState.COMMITTED, TransactionState.ROLLED_BACK, TransactionState.FAILED] and
                     current_time - context.start_time > max_age_seconds):
                     transactions_to_remove.append(tx_id)
-            
+            # Suppression des transactions
             for tx_id in transactions_to_remove:
+                # Nettoyage de la transaction
                 self._cleanup_transaction(tx_id)
+                # Incrémentation du compteur
                 cleaned_count += 1
         
         if cleaned_count > 0:
+            # Logging
             self.logger.info(f"Cleaned up {cleaned_count} old transactions")
         
         return cleaned_count
     
+    # Méthode de nettoyage d'une transaction
     def _cleanup_transaction(self, transaction_id: str) -> None:
         """Nettoyer le contexte d'une transaction terminée."""
         with self._transaction_lock:
@@ -638,6 +708,7 @@ class TransactionManager(BaseSchemaManager):
                 del self._active_transactions[transaction_id]
     
     # Méthodes de convenance pour les opérations atomiques
+    # Méthode d'exécution de plusieurs opérations de manière atomique
     def execute_atomic(self, 
                       operations: List[TransactionOperation], 
                       description: str = "Atomic operation") -> bool:
@@ -658,11 +729,13 @@ class TransactionManager(BaseSchemaManager):
             ... ]
             >>> success = tx_mgr.execute_atomic(ops, "Batch data update")
         """
+        # Amorçage de la transaction
         tx_id = self.begin_transaction(description)
         
         try:
             # Ajout de toutes les opérations
             for operation in operations:
+                # Ajout de l'opération et si echoue, annulation de cette drnière
                 if not self.add_operation(
                     tx_id,
                     operation.operation_type,
@@ -681,6 +754,8 @@ class TransactionManager(BaseSchemaManager):
             return self.commit_transaction(tx_id)
             
         except Exception as e:
+            # Logging
             self.logger.error(f"Atomic operation failed: {e}")
+            # Annulation de la transaction
             self.rollback_transaction(tx_id)
             return False
