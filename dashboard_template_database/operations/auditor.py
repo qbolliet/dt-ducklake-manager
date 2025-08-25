@@ -17,6 +17,7 @@ from ..utils.logger import _init_logger
 FILE_PATH = Path(os.path.abspath(__file__))
 
 
+# Classe des niveaux de validation sur la base de données
 class ValidationLevel(Enum):
     """Niveaux de validation pour l'audit de la base de données."""
     BASIC = "basic"
@@ -24,6 +25,7 @@ class ValidationLevel(Enum):
     COMPREHENSIVE = "comprehensive"
 
 
+# Classe des types de problèmes détectés
 class IssueType(Enum):
     """Types d'issues détectées lors de l'audit."""
     SCHEMA_INCONSISTENCY = "schema_inconsistency"
@@ -36,6 +38,7 @@ class IssueType(Enum):
     CONSTRAINT_VIOLATION = "constraint_violation"
 
 
+# Classe des niveaux de sévérité des problèmes détectés
 class IssueSeverity(Enum):
     """Niveaux de sévérité des issues."""
     LOW = "low"
@@ -44,6 +47,7 @@ class IssueSeverity(Enum):
     CRITICAL = "critical"
 
 
+# Classe de problème détecté durant l'audit de la base de données
 @dataclass
 class ValidationIssue:
     """
@@ -71,6 +75,7 @@ class ValidationIssue:
     additional_info: dict = field(default_factory=dict)
 
 
+# Classe de rapport d'audit de la base de données
 @dataclass 
 class ValidationReport:
     """
@@ -93,22 +98,27 @@ class ValidationReport:
     validation_summary: dict = field(default_factory=dict)
     recommendations: List[str] = field(default_factory=list)
     
+    # Méthode d'ajout d'un problème
     def add_issue(self, issue: ValidationIssue) -> None:
         """Ajouter une issue au rapport."""
         self.issues.append(issue)
     
+    # Méthode d'extraction des problèmes par sévérité
     def get_issues_by_severity(self, severity: IssueSeverity) -> List[ValidationIssue]:
         """Obtenir les issues par niveau de sévérité."""
         return [issue for issue in self.issues if issue.severity == severity]
     
+    # Méthode d'extraction des problèmes par type
     def get_issues_by_type(self, issue_type: IssueType) -> List[ValidationIssue]:
         """Obtenir les issues par type."""
         return [issue for issue in self.issues if issue.issue_type == issue_type]
     
+    # Méthode de comptage des problèmes critiques
     def get_critical_issues_count(self) -> int:
         """Obtenir le nombre d'issues critiques."""
         return len(self.get_issues_by_severity(IssueSeverity.CRITICAL))
     
+    # Méthode de finalisation du rapport d'audit avec des statistiques
     def finalize(self) -> None:
         """Finaliser le rapport avec les statistiques."""
         self.end_time = time.time()
@@ -127,26 +137,31 @@ class ValidationReport:
         # Génération des recommandations
         self._generate_recommendations()
     
+    # Méthode auxiliaire de génération de recommandations
     def _generate_recommendations(self) -> None:
         """Générer des recommandations basées sur les issues trouvées."""
+        # Identification des erreurs critiques
         critical_count = self.get_critical_issues_count()
-        
         if critical_count > 0:
-            self.recommendations.append(f"Adresser immédiatement les {critical_count} issues critiques détectées")
+            self.recommendations.append(f"Adress immediately the {critical_count} critical issues detected")
         
+        # Identification des erreurs de schéma
         schema_issues = self.get_issues_by_type(IssueType.SCHEMA_INCONSISTENCY)
         if schema_issues:
-            self.recommendations.append("Réviser la cohérence du schéma de base de données")
+            self.recommendations.append("Review the consistency of the database schema")
         
+        # Identification des références orphelines
         orphaned_issues = self.get_issues_by_type(IssueType.ORPHANED_REFERENCE)
         if orphaned_issues:
-            self.recommendations.append("Nettoyer les références orphelines dans les tables de dimension")
+            self.recommendations.append("Clean up orphan references in dimension tables")
         
+        # Identification des problèmes de performance
         performance_issues = self.get_issues_by_type(IssueType.PERFORMANCE_ISSUE)
         if performance_issues:
-            self.recommendations.append("Optimiser les index et la structure des tables pour améliorer les performances")
+            self.recommendations.append("Optimize indexes and table structure to improve performance")
 
 
+# Classe d'audit de la base de données
 class DatabaseAuditor:
     """
     Provides comprehensive database validation and state checking capabilities.
@@ -159,7 +174,7 @@ class DatabaseAuditor:
         categorical_threshold (int): Threshold for categorical determination
         logger: Logger instance for audit tracking
     """
-    
+    # Initialisation
     def __init__(self, 
                  connection: duckdb.DuckDBPyConnection,
                  categorical_threshold: Optional[int] = 50,
@@ -189,6 +204,7 @@ class DatabaseAuditor:
         self.logger = _init_logger(filename=log_filename)
     
     # Méthodes principales de validation
+    # Méthode de validation de la base de données
     def validate_database(self, validation_level: ValidationLevel = ValidationLevel.STANDARD) -> ValidationReport:
         """
         Perform comprehensive database validation.
@@ -208,37 +224,48 @@ class DatabaseAuditor:
         """
         # Création du rapport
         report = ValidationReport(validation_level=validation_level)
-        
+        # Logging
         self.logger.info(f"Starting database validation at level: {validation_level.value}")
         
         try:
             # Validation de base (toujours effectuée)
+            # Validation du schéma
             self._validate_schema_existence(report)
+            # Validation de la consistence des méta-données
             self._validate_metadata_consistency(report)
             
+            # Validation standard
             if validation_level in [ValidationLevel.STANDARD, ValidationLevel.COMPREHENSIVE]:
-                # Validation standard
+                # Validation des tables de dimension
                 self._validate_fact_dimension_consistency(report)
+                # Validation de la consistance des types des données
                 self._validate_data_types_consistency(report)
+                # Validation des références orphelines
                 self._validate_orphaned_references(report)
-                
+            
+            # Validation complète
             if validation_level == ValidationLevel.COMPREHENSIVE:
-                # Validation complète
+                # Validation des seuils de variables catégorielles
                 self._validate_categorical_thresholds(report)
+                # Validation de l'efficacité de l'index
                 self._validate_index_efficiency(report)
+                # Validation de la qualité des données
                 self._validate_data_quality(report)
+                # Validation de la violation des contraintes
                 self._validate_constraint_violations(report)
             
             # Finalisation du rapport
             report.finalize()
             
+            # Logging
             self.logger.info(f"Database validation completed. Found {len(report.issues)} issues.")
             return report
             
         except Exception as e:
+            # Logging
             self.logger.error(f"Error during database validation: {e}")
             
-            # Ajout d'une issue critique pour l'erreur de validation
+            # Ajout d'un problème critique pour l'erreur de validation
             error_issue = ValidationIssue(
                 issue_type=IssueType.SCHEMA_INCONSISTENCY,
                 severity=IssueSeverity.CRITICAL,
@@ -247,10 +274,12 @@ class DatabaseAuditor:
                 suggested_fix="Check database connection and schema structure"
             )
             report.add_issue(error_issue)
+            # Finalisation du rapport
             report.finalize()
             
             return report
     
+    # Validation des prérequis d'une opération
     def validate_operation_preconditions(self, operation_type: str, **kwargs) -> ValidationReport:
         """
         Validate preconditions before executing specific operations.
@@ -269,11 +298,13 @@ class DatabaseAuditor:
             ...     # Safe to proceed with insertion
             ...     pass
         """
+        # Initialisation du rapport
         report = ValidationReport(validation_level=ValidationLevel.BASIC)
-        
+        # Logging
         self.logger.info(f"Validating preconditions for operation: {operation_type}")
         
         try:
+            # Validation distincte suivant le type d'opération
             if operation_type == 'insert':
                 self._validate_insert_preconditions(report, **kwargs)
             elif operation_type == 'update':
@@ -292,12 +323,15 @@ class DatabaseAuditor:
                 )
                 report.add_issue(issue)
             
+            # Finalisation du rapport
             report.finalize()
             return report
             
         except Exception as e:
+            # Logging
             self.logger.error(f"Error validating operation preconditions: {e}")
             
+            # Création d'un erreur associée à l'opération inconnue
             error_issue = ValidationIssue(
                 issue_type=IssueType.SCHEMA_INCONSISTENCY,
                 severity=IssueSeverity.HIGH,
@@ -306,19 +340,24 @@ class DatabaseAuditor:
                 suggested_fix="Check operation parameters and database state"
             )
             report.add_issue(error_issue)
+            # Finalisation du rapport
             report.finalize()
             
             return report
     
     # Méthodes de validation spécifiques
+    # Méthode de validation de l'existence du schéma
     def _validate_schema_existence(self, report: ValidationReport) -> None:
         """Valider l'existence des tables de schéma essentielles."""
         try:
             # Vérification des tables essentielles
             essential_tables = ['metadata']
+            # Extraction des tables de la base de données
             existing_tables = self._get_existing_tables()
             
+            # Parcours des tables essentielles
             for table in essential_tables:
+                # Vérification de l'existence de la table
                 if table not in existing_tables:
                     issue = ValidationIssue(
                         issue_type=IssueType.SCHEMA_INCONSISTENCY,
@@ -331,7 +370,7 @@ class DatabaseAuditor:
                 else:
                     report.tables_validated.add(table)
             
-            # Vérification de la table fact_table
+            # Vérification de l'existence de la table des faits
             if 'fact_table' not in existing_tables:
                 issue = ValidationIssue(
                     issue_type=IssueType.SCHEMA_INCONSISTENCY,
@@ -345,6 +384,7 @@ class DatabaseAuditor:
                 report.tables_validated.add('fact_table')
             
         except Exception as e:
+            # Création d'un problème dans le rapport associé à l'erreur
             issue = ValidationIssue(
                 issue_type=IssueType.SCHEMA_INCONSISTENCY,
                 severity=IssueSeverity.CRITICAL,
@@ -354,12 +394,14 @@ class DatabaseAuditor:
             )
             report.add_issue(issue)
     
+    # Méthode de validation de la cohérence des méta-données
     def _validate_metadata_consistency(self, report: ValidationReport) -> None:
         """Valider la cohérence des métadonnées."""
         try:
             # Chargement des métadonnées
             metadata_df = self._get_metadata()
             
+            # Vérification que la table n'est pas vide
             if len(metadata_df) == 0:
                 issue = ValidationIssue(
                     issue_type=IssueType.MISSING_METADATA,
@@ -401,7 +443,7 @@ class DatabaseAuditor:
                         )
                         report.add_issue(issue)
             
-            # Vérification des doublons dans les noms de colonnes
+            # Vérification des doublons dans les noms de colonnes (il s'agit d ela clé primaire de la base de données)
             if 'name' in metadata_df.columns:
                 duplicate_names = metadata_df[metadata_df['name'].duplicated()]['name'].tolist()
                 if duplicate_names:
@@ -417,6 +459,7 @@ class DatabaseAuditor:
                     report.add_issue(issue)
             
         except Exception as e:
+            # Création d'un problème dans le rapport associé à l'erreur
             issue = ValidationIssue(
                 issue_type=IssueType.SCHEMA_INCONSISTENCY,
                 severity=IssueSeverity.HIGH,
@@ -426,6 +469,7 @@ class DatabaseAuditor:
             )
             report.add_issue(issue)
     
+    # Méthode de validation de la cohérence entre la table de faits et les tables de dimension
     def _validate_fact_dimension_consistency(self, report: ValidationReport) -> None:
         """Valider la cohérence entre la fact table et les tables de dimension."""
         try:
@@ -444,7 +488,9 @@ class DatabaseAuditor:
             # Vérification des colonnes catégorielles
             categorical_columns = metadata_df[metadata_df['is_categorical'] == True]['name'].tolist()
             
+            # Parcours des colonnes catégorielles
             for col_name in categorical_columns:
+                # Nom de la table de dimension
                 dim_table_name = f"dim_{col_name}"
                 
                 # Vérification de l'existence de la table de dimension
@@ -494,8 +540,9 @@ class DatabaseAuditor:
                     suggested_fix="Add missing columns to metadata table"
                 )
                 report.add_issue(issue)
-            
+
         except Exception as e:
+            # Création d'un problème dans le rapport associé à l'erreur
             issue = ValidationIssue(
                 issue_type=IssueType.SCHEMA_INCONSISTENCY,
                 severity=IssueSeverity.HIGH,
@@ -505,10 +552,11 @@ class DatabaseAuditor:
             )
             report.add_issue(issue)
     
+    # Méthode de validation de l'intégrité référentielle entre la table des faits et la table de dimension
     def _validate_referential_integrity(self, report: ValidationReport, col_name: str, dim_table_name: str) -> None:
         """Valider l'intégrité référentielle entre fact table et dimension."""
         try:
-            # Vérification des valeurs orphelines dans fact_table
+            # Vérification des valeurs orphelines dans fact_table (ie qui ne sont pas référencées dans la table de dimension)
             orphaned_query = f"""
                 SELECT COUNT(DISTINCT f.{col_name}) as orphaned_count
                 FROM fact_table f
@@ -554,6 +602,7 @@ class DatabaseAuditor:
                 report.add_issue(issue)
             
         except Exception as e:
+            # Création d'un problème dans le rapport associé à l'erreur
             issue = ValidationIssue(
                 issue_type=IssueType.DATA_INTEGRITY,
                 severity=IssueSeverity.MEDIUM,
@@ -564,6 +613,7 @@ class DatabaseAuditor:
             )
             report.add_issue(issue)
     
+    # Méthode de validation de la cohérence des types de données entre la table des méta-données et la table des faits
     def _validate_data_types_consistency(self, report: ValidationReport) -> None:
         """Valider la cohérence des types de données."""
         try:
@@ -573,9 +623,11 @@ class DatabaseAuditor:
             # Récupération des métadonnées et de la structure de fact_table
             metadata_df = self._get_metadata()
             fact_structure = self._get_table_structure('fact_table')
-            
+            # Parcours des colonnes de méta-données
             for _, metadata_row in metadata_df.iterrows():
+                # Extraction du nom de la colonne
                 col_name = metadata_row['name']
+                # Extraction du type SQL attendu
                 expected_sql_type = metadata_row['sql_type']
                 
                 # Recherche du type actuel dans fact_table
@@ -586,7 +638,7 @@ class DatabaseAuditor:
                         break
                 
                 if actual_sql_type is None:
-                    # Colonne manquante dans fact_table (déjà signalé ailleurs)
+                    # Colonne manquante dans fact_table (déjà signalé dans _validate_fact_dimension_consistency)
                     continue
                 
                 # Comparaison des types (normalisation pour éviter les faux positifs)
@@ -606,6 +658,7 @@ class DatabaseAuditor:
                     report.add_issue(issue)
             
         except Exception as e:
+            # Création d'un problème dans le rapport associé à l'erreur
             issue = ValidationIssue(
                 issue_type=IssueType.TYPE_MISMATCH,
                 severity=IssueSeverity.MEDIUM,
@@ -615,23 +668,27 @@ class DatabaseAuditor:
             )
             report.add_issue(issue)
     
+    # Méthode de validation des variables catégorielles par rapport au seuil et à leur nombre de modalités
     def _validate_categorical_thresholds(self, report: ValidationReport) -> None:
         """Valider les seuils catégoriels."""
         try:
+            # Extraction de méta-données
             metadata_df = self._get_metadata()
             
             # Vérification des colonnes marquées comme catégorielles
             categorical_columns = metadata_df[metadata_df['is_categorical'] == True]['name'].tolist()
             
+            # Parcours des colonnes
             for col_name in categorical_columns:
                 if not self._column_exists_in_fact_table(col_name):
-                    continue
+                    continue # Colonne manquante dans fact_table (déjà signalé dans A AJOUTER)
                 
                 # Comptage des valeurs uniques
                 unique_count_query = f"SELECT COUNT(DISTINCT {col_name}) FROM fact_table WHERE {col_name} IS NOT NULL"
                 result = self.conn.execute(unique_count_query).fetchone()
                 unique_count = result[0] if result else 0
                 
+                # Si le nombre de modalités est supérieur au seuil, renvoie un problème
                 if unique_count > self.categorical_threshold:
                     issue = ValidationIssue(
                         issue_type=IssueType.INVALID_DIMENSION,
@@ -650,6 +707,7 @@ class DatabaseAuditor:
                 (metadata_df['python_type'] == 'object')
             ]['name'].tolist()
             
+            # Parcours des colonnes
             for col_name in non_categorical_columns:
                 if not self._column_exists_in_fact_table(col_name):
                     continue
@@ -672,6 +730,7 @@ class DatabaseAuditor:
                     report.add_issue(issue)
             
         except Exception as e:
+            # Création d'un problème dans le rapport associé à l'erreur
             issue = ValidationIssue(
                 issue_type=IssueType.PERFORMANCE_ISSUE,
                 severity=IssueSeverity.LOW,
@@ -681,13 +740,15 @@ class DatabaseAuditor:
             )
             report.add_issue(issue)
     
+    # Méthode de détection des références orphelines
     def _validate_orphaned_references(self, report: ValidationReport) -> None:
         """Valider et détecter les références orphelines."""
         try:
             # Recherche des tables de dimension orphelines
+            # Extraction des tables de dimension existantes
             existing_tables = self._get_existing_tables()
             dimension_tables = [table for table in existing_tables if table.startswith('dim_')]
-            
+            # Extraction des métadonnées
             metadata_df = self._get_metadata()
             expected_dimensions = set(f"dim_{row['name']}" for _, row in metadata_df.iterrows() if row['is_categorical'])
             
@@ -707,13 +768,16 @@ class DatabaseAuditor:
             # Vérification des entrées orphelines dans les dimensions existantes
             for _, metadata_row in metadata_df.iterrows():
                 if metadata_row['is_categorical']:
+                    # Nom de la table de dimension
                     col_name = metadata_row['name']
                     dim_table_name = f"dim_{col_name}"
-                    
+                    # On vérifie les entrées si la table de dimension existe et que la colonne existe dans la table des faits
+                    # (On vérifie plus haut que toutes les variables catégroeilles dans les métadonnées ont une table de dimension et que chaque colonne des métadonnées existe dans la table des faits)
                     if self._table_exists(dim_table_name) and self._column_exists_in_fact_table(col_name):
                         self._validate_referential_integrity(report, col_name, dim_table_name)
             
         except Exception as e:
+            # Création d'un problème dans le rapport associé à l'erreur
             issue = ValidationIssue(
                 issue_type=IssueType.ORPHANED_REFERENCE,
                 severity=IssueSeverity.MEDIUM,
@@ -723,6 +787,7 @@ class DatabaseAuditor:
             )
             report.add_issue(issue)
     
+    # Méthode de validation de l'efficacité des index
     def _validate_index_efficiency(self, report: ValidationReport) -> None:
         """Valider l'efficacité des index."""
         try:
