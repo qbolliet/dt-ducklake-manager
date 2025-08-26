@@ -794,6 +794,7 @@ class DatabaseAuditor:
             # Récupération des index existants
             indexes = self._get_existing_indexes()
             
+            # Ajout d'un message au rapport si aucun index n'est attaché à la base de données
             if len(indexes) == 0:
                 issue = ValidationIssue(
                     issue_type=IssueType.PERFORMANCE_ISSUE,
@@ -808,8 +809,11 @@ class DatabaseAuditor:
             # Vérification des index sur des colonnes inexistantes
             fact_columns = set(self._get_fact_table_columns())
             
+            # Parcours des index
             for index_info in indexes:
+                # Nom de l'index
                 index_name = index_info.get('index_name', '')
+                # Expressions
                 expressions = index_info.get('expressions', '')
                 
                 # Analyse simplifiée pour détecter les colonnes référencées
@@ -831,6 +835,7 @@ class DatabaseAuditor:
                     report.add_issue(issue)
             
         except Exception as e:
+            # Création d'un problème dans le rapport associé à l'erreur
             issue = ValidationIssue(
                 issue_type=IssueType.PERFORMANCE_ISSUE,
                 severity=IssueSeverity.LOW,
@@ -840,15 +845,18 @@ class DatabaseAuditor:
             )
             report.add_issue(issue)
     
+    # Méthode de validation de la qualité des données
     def _validate_data_quality(self, report: ValidationReport) -> None:
         """Valider la qualité des données."""
         try:
+            # Vérification de l'existence de la table des faits
             if not self._table_exists('fact_table'):
                 return
             
             # Comptage total des lignes
             total_rows = self.conn.execute("SELECT COUNT(*) FROM fact_table").fetchone()[0]
             
+            # Vérification que la table des faits n'est pas vide
             if total_rows == 0:
                 issue = ValidationIssue(
                     issue_type=IssueType.DATA_INTEGRITY,
@@ -862,12 +870,16 @@ class DatabaseAuditor:
             
             # Vérification des colonnes avec beaucoup de valeurs nulles
             fact_columns = self._get_fact_table_columns()
-            
+            # Parcours des colonnes
             for col_name in fact_columns:
+                # Création de la requête de comptage du nombre de valeurs nulles dans la colonne
                 null_count_query = f"SELECT COUNT(*) FROM fact_table WHERE {col_name} IS NULL"
+                # Exécution de la requête
                 null_count = self.conn.execute(null_count_query).fetchone()[0]
+                # Calcul du pourcentage de valeurs nulles
                 null_percentage = (null_count / total_rows) * 100
                 
+                # Ajout des messages au rapport
                 if null_percentage > 50:  # Plus de 50% de valeurs nulles
                     issue = ValidationIssue(
                         issue_type=IssueType.DATA_INTEGRITY,
@@ -893,6 +905,7 @@ class DatabaseAuditor:
                     report.add_issue(issue)
             
         except Exception as e:
+            # Création d'un problème dans le rapport associé à l'erreur
             issue = ValidationIssue(
                 issue_type=IssueType.DATA_INTEGRITY,
                 severity=IssueSeverity.MEDIUM,
@@ -902,13 +915,16 @@ class DatabaseAuditor:
             )
             report.add_issue(issue)
     
+    # Méthode de vérification de l'unicité des clés primaires dans les tables de dimension
     def _validate_constraint_violations(self, report: ValidationReport) -> None:
         """Valider les violations de contraintes."""
         try:
             # Vérification des contraintes de clé primaire dans les tables de dimension
+            # Identification des tables de dimension
             existing_tables = self._get_existing_tables()
             dimension_tables = [table for table in existing_tables if table.startswith('dim_')]
-            
+
+            # Parcours des tables de dimension
             for dim_table in dimension_tables:
                 # Vérification des doublons dans la colonne 'value' (clé primaire)
                 duplicates_query = f"""
@@ -920,6 +936,7 @@ class DatabaseAuditor:
                 
                 duplicates_result = self.conn.execute(duplicates_query).fetchall()
                 
+                # Ajout d'un message au rapport si des duplicats sont présents
                 if duplicates_result:
                     duplicate_count = len(duplicates_result)
                     issue = ValidationIssue(
@@ -935,6 +952,7 @@ class DatabaseAuditor:
                     report.add_issue(issue)
             
         except Exception as e:
+            # Création d'un problème dans le rapport associé à l'erreur
             issue = ValidationIssue(
                 issue_type=IssueType.CONSTRAINT_VIOLATION,
                 severity=IssueSeverity.MEDIUM,
@@ -945,8 +963,10 @@ class DatabaseAuditor:
             report.add_issue(issue)
     
     # Méthodes de validation des préconditions d'opération
+    # Méthode de validation des conditions préalables à une opération d'insertion
     def _validate_insert_preconditions(self, report: ValidationReport, df: pd.DataFrame = None, **kwargs) -> None:
         """Valider les préconditions d'insertion."""
+        # Vérifiation que le jeu de données est spécifié
         if df is None:
             issue = ValidationIssue(
                 issue_type=IssueType.DATA_INTEGRITY,
@@ -957,7 +977,8 @@ class DatabaseAuditor:
             )
             report.add_issue(issue)
             return
-        
+
+        # Vérification que le jeu de données est non vide
         if len(df) == 0:
             issue = ValidationIssue(
                 issue_type=IssueType.DATA_INTEGRITY,
@@ -980,10 +1001,13 @@ class DatabaseAuditor:
             )
             report.add_issue(issue)
     
+    # Méthode de validation des conditions préalables à une mise à jour de la base de données
     def _validate_update_preconditions(self, report: ValidationReport, df: pd.DataFrame = None, merge_keys: List[str] = None, **kwargs) -> None:
         """Valider les préconditions de mise à jour."""
+        # Vérification des conditions d'insertions
         self._validate_insert_preconditions(report, df, **kwargs)
         
+        # Vérification que des cls de jointure sont bien spécifiées
         if merge_keys is None or len(merge_keys) == 0:
             issue = ValidationIssue(
                 issue_type=IssueType.DATA_INTEGRITY,
@@ -994,7 +1018,7 @@ class DatabaseAuditor:
             )
             report.add_issue(issue)
             return
-        
+        # Vérification que les clés de jointure sont présentes dans le jeu de données
         if df is not None:
             missing_keys = [key for key in merge_keys if key not in df.columns]
             if missing_keys:
@@ -1007,8 +1031,10 @@ class DatabaseAuditor:
                 )
                 report.add_issue(issue)
     
+    # Méthode de validation des conditions préalable à la suppression de données
     def _validate_delete_preconditions(self, report: ValidationReport, filters: Any = None, **kwargs) -> None:
         """Valider les préconditions de suppression."""
+        # Vérification de l'existence du filtre de suppression des données
         if filters is None:
             issue = ValidationIssue(
                 issue_type=IssueType.DATA_INTEGRITY,
@@ -1019,6 +1045,7 @@ class DatabaseAuditor:
             )
             report.add_issue(issue)
     
+    # méthode de validation des conditions préalable à un changement de schéma dans la base de données
     def _validate_schema_change_preconditions(self, report: ValidationReport, **kwargs) -> None:
         """Valider les préconditions de changement de schéma."""
         # Vérification de l'existence des tables avant modification
@@ -1033,6 +1060,7 @@ class DatabaseAuditor:
             report.add_issue(issue)
     
     # Méthodes utilitaires privées
+    # Méthode auxiliaire d'obtention des tables de la base de données
     def _get_existing_tables(self) -> List[str]:
         """Obtenir la liste des tables existantes."""
         try:
@@ -1041,6 +1069,7 @@ class DatabaseAuditor:
         except:
             return []
     
+    # Méthode auxiliaire d'extraction des colonnes de la table des faits
     def _get_fact_table_columns(self) -> List[str]:
         """Obtenir les colonnes de la fact table."""
         try:
@@ -1049,6 +1078,7 @@ class DatabaseAuditor:
         except:
             return []
     
+    # Méthode auxiliaire d'extraction des coonnes d'une table spécifique
     def _get_table_columns(self, table_name: str) -> List[str]:
         """Obtenir les colonnes d'une table spécifique."""
         try:
@@ -1057,6 +1087,7 @@ class DatabaseAuditor:
         except:
             return []
     
+    # Méthode auxiliaire de description d'une table
     def _get_table_structure(self, table_name: str) -> List[Tuple]:
         """Obtenir la structure complète d'une table."""
         try:
@@ -1064,6 +1095,7 @@ class DatabaseAuditor:
         except:
             return []
     
+    # Méthode auxiliaire d'extraction des métadonnées
     def _get_metadata(self) -> pd.DataFrame:
         """Obtenir les métadonnées."""
         try:
@@ -1071,6 +1103,7 @@ class DatabaseAuditor:
         except:
             return pd.DataFrame()
     
+    # Méthode auxiliaire d'obtention de la liste des indices disponibles dans la base de données
     def _get_existing_indexes(self) -> List[Dict[str, str]]:
         """Obtenir la liste des index existants."""
         try:
@@ -1079,6 +1112,7 @@ class DatabaseAuditor:
         except:
             return []
     
+    # méthode auxiliaire de vérification de l'existence d'une table
     def _table_exists(self, table_name: str) -> bool:
         """Vérifier si une table existe."""
         try:
@@ -1087,11 +1121,13 @@ class DatabaseAuditor:
         except:
             return False
     
+    # Méthode auxiliaire de vérification de l'existence d'une colonne dans la table des faits
     def _column_exists_in_fact_table(self, column_name: str) -> bool:
         """Vérifier si une colonne existe dans fact_table."""
         fact_columns = self._get_fact_table_columns()
         return column_name in fact_columns
     
+    # Méthode auxiliaire de vérification de la compatibilité des types entre eux
     def _types_are_compatible(self, expected_type: str, actual_type: str) -> bool:
         """Vérifier si deux types SQL sont compatibles."""
         # Normalisation des types pour comparaison
@@ -1121,6 +1157,7 @@ class DatabaseAuditor:
         return False
     
     # Méthodes publiques pour obtenir des rapports spécialisés
+    # Méthode de vérification rapide de la base de données
     def get_quick_health_check(self) -> Dict[str, Any]:
         """
         Perform a quick health check of the database.
@@ -1178,6 +1215,7 @@ class DatabaseAuditor:
             return health_info
             
         except Exception as e:
+            # Logging
             self.logger.error(f"Error during quick health check: {e}")
             return {
                 'status': 'error',
