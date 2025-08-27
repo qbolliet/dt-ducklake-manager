@@ -24,6 +24,7 @@ from ..utils.logger import _init_logger
 FILE_PATH = Path(os.path.abspath(__file__))
 
 
+# Classe des types de stratégies de récupération possibles
 class RecoveryStrategy(Enum):
     """Stratégies de récupération disponibles."""
     ROLLBACK_TRANSACTION = "rollback_transaction"
@@ -34,6 +35,7 @@ class RecoveryStrategy(Enum):
     VALIDATE_AND_FIX = "validate_and_fix"
 
 
+# Classe des types de sauvegarde possibles
 class BackupType(Enum):
     """Types de sauvegarde disponibles."""
     FULL_BACKUP = "full_backup"
@@ -42,6 +44,7 @@ class BackupType(Enum):
     INCREMENTAL_BACKUP = "incremental_backup"
 
 
+# Classe de point de récupération de la base de données
 @dataclass
 class RecoveryPoint:
     """
@@ -65,6 +68,7 @@ class RecoveryPoint:
     description: str = ""
 
 
+# Classe d'opération de récupération
 @dataclass
 class RecoveryOperation:
     """
@@ -84,6 +88,7 @@ class RecoveryOperation:
     description: str = ""
 
 
+# Classe de résultat de récupération
 @dataclass
 class RecoveryResult:
     """
@@ -107,6 +112,7 @@ class RecoveryResult:
     recommendations: List[str] = field(default_factory=list)
 
 
+# Classe de récupération de la base de données
 class DatabaseRecoveryManager:
     """
     Manages database recovery operations and backup/restore functionality.
@@ -122,7 +128,7 @@ class DatabaseRecoveryManager:
         max_backup_age_days (int): Maximum age for keeping backups
         auto_backup_on_changes (bool): Whether to create automatic backups
     """
-    
+    # Initialisation
     def __init__(self, 
                  connection: duckdb.DuckDBPyConnection,
                  backup_dir: Optional[os.PathLike] = None,
@@ -150,7 +156,7 @@ class DatabaseRecoveryManager:
         
         # Configuration des répertoires
         if backup_dir is None:
-            backup_dir = os.path.join(FILE_PATH.parents[2], "backups")
+            backup_dir = os.path.join(FILE_PATH.parents[2], "data/backups")
         
         self.backup_dir = Path(backup_dir)
         self.backup_dir.mkdir(parents=True, exist_ok=True)
@@ -173,6 +179,7 @@ class DatabaseRecoveryManager:
         self._load_existing_recovery_points()
     
     # Méthodes de gestion des points de récupération
+    # Méthode de création d'un point de récupération
     def create_recovery_point(self, 
                             backup_type: BackupType = BackupType.FULL_BACKUP,
                             description: str = "",
@@ -197,6 +204,7 @@ class DatabaseRecoveryManager:
         try:
             # Génération d'un ID unique
             recovery_id = f"recovery_{int(time.time())}_{len(self._recovery_points)}"
+            # Génération d'un timestamp
             timestamp = time.time()
             
             # Validation préalable si demandée
@@ -222,6 +230,7 @@ class DatabaseRecoveryManager:
             elif backup_type == BackupType.INCREMENTAL_BACKUP:
                 success = self._create_incremental_backup(backup_path)
             else:
+                # Logging
                 self.logger.error(f"Unknown backup type: {backup_type}")
                 return None
             
@@ -250,13 +259,16 @@ class DatabaseRecoveryManager:
             # Nettoyage des anciens points de récupération
             self._cleanup_old_recovery_points()
             
+            # Logging
             self.logger.info(f"Created recovery point {recovery_id} ({backup_type.value})")
             return recovery_id
             
         except Exception as e:
+            # Logging
             self.logger.error(f"Error creating recovery point: {e}")
             return None
     
+    # Méthode d'énumération des points de récupération
     def list_recovery_points(self, backup_type: Optional[BackupType] = None) -> List[RecoveryPoint]:
         """
         List available recovery points.
@@ -273,6 +285,7 @@ class DatabaseRecoveryManager:
             ...     print(f"{point.recovery_id}: {point.description}")
         """
         try:
+            # Extraction des points de récupération
             points = list(self._recovery_points.values())
             
             # Filtrage par type si spécifié
@@ -285,9 +298,11 @@ class DatabaseRecoveryManager:
             return points
             
         except Exception as e:
+            # Logging
             self.logger.error(f"Error listing recovery points: {e}")
             return []
     
+    # Méthode de suppression d'un point de récupération
     def delete_recovery_point(self, recovery_id: str) -> bool:
         """
         Delete a specific recovery point.
@@ -302,10 +317,13 @@ class DatabaseRecoveryManager:
             >>> success = recovery_mgr.delete_recovery_point("recovery_1234567890_0")
         """
         try:
+            # Impossible de supprimer un point de récupération qui n'existe pas
             if recovery_id not in self._recovery_points:
+                # Logging
                 self.logger.error(f"Recovery point {recovery_id} not found")
                 return False
             
+            # Extraction du point de récupération à supprimer
             recovery_point = self._recovery_points[recovery_id]
             
             # Suppression des fichiers de sauvegarde
@@ -316,14 +334,17 @@ class DatabaseRecoveryManager:
             # Suppression du cache
             del self._recovery_points[recovery_id]
             
+            # Logging
             self.logger.info(f"Deleted recovery point {recovery_id}")
             return True
             
         except Exception as e:
+            # Logging
             self.logger.error(f"Error deleting recovery point {recovery_id}: {e}")
             return False
     
     # Méthodes de récupération
+    # Méthode de récupération de la base de données
     def recover_database(self, 
                         operation: RecoveryOperation,
                         confirm_destructive: bool = False) -> RecoveryResult:
@@ -345,9 +366,11 @@ class DatabaseRecoveryManager:
             ... )
             >>> result = recovery_mgr.recover_database(op, confirm_destructive=True)
         """
+        # Timestamp du début de l'opération
         start_time = time.time()
         
         try:
+            # Logging
             self.logger.info(f"Starting recovery operation: {operation.strategy.value}")
             
             # Validation de l'opération
@@ -412,7 +435,9 @@ class DatabaseRecoveryManager:
             return result
             
         except Exception as e:
+            # Calcul du temps de récupération
             recovery_time = time.time() - start_time
+            # Logging
             self.logger.error(f"Error during recovery operation: {e}")
             
             return RecoveryResult(
@@ -422,6 +447,7 @@ class DatabaseRecoveryManager:
                 error_message=str(e)
             )
     
+    # Méthode de récupération automatique de la base de données sur la base d'un rapport de validation
     def auto_recover_from_validation(self, 
                                    validation_report: Any,
                                    max_attempts: int = 3,
@@ -443,11 +469,13 @@ class DatabaseRecoveryManager:
             ...     result = recovery_mgr.auto_recover_from_validation(report)
         """
         try:
+            # Logging
             self.logger.info(f"Starting auto-recovery from validation issues")
             
-            # Analyse des issues pour déterminer la stratégie
+            # Analyse des problèmes pour déterminer la stratégie de récupération
             strategy = self._determine_recovery_strategy(validation_report, allow_destructive)
             
+            # Renvoi un message si aucune stratégie n'a été trouvée
             if strategy is None:
                 return RecoveryResult(
                     success=False,
@@ -458,6 +486,7 @@ class DatabaseRecoveryManager:
             
             # Tentatives de récupération
             for attempt in range(max_attempts):
+                # Logging
                 self.logger.info(f"Auto-recovery attempt {attempt + 1}/{max_attempts}")
                 
                 # Création de l'opération de récupération
@@ -474,11 +503,14 @@ class DatabaseRecoveryManager:
                 if result.success:
                     # Vérification que les issues ont été résolues
                     if result.validation_report and result.validation_report.get_critical_issues_count() == 0:
+                        # Logging
                         self.logger.info("Auto-recovery completed successfully")
                         return result
                     else:
+                        # Logging
                         self.logger.warning("Recovery completed but issues persist, trying again")
                 else:
+                    # Logging
                     self.logger.warning(f"Recovery attempt {attempt + 1} failed: {result.error_message}")
             
             return RecoveryResult(
@@ -489,7 +521,9 @@ class DatabaseRecoveryManager:
             )
             
         except Exception as e:
+            # Logging
             self.logger.error(f"Error during auto-recovery: {e}")
+
             return RecoveryResult(
                 success=False,
                 strategy_used=RecoveryStrategy.VALIDATE_AND_FIX,
@@ -498,12 +532,13 @@ class DatabaseRecoveryManager:
             )
     
     # Méthodes de sauvegarde privées
+    # Méthode de création d'une sauvegarde
     def _create_full_backup(self, backup_path: Path) -> bool:
         """Créer une sauvegarde complète."""
         try:
             # Sauvegarde de toutes les tables
             tables = self._get_all_tables()
-            
+            # Parcours des tables
             for table_name in tables:
                 try:
                     # Export de la table vers CSV
@@ -522,15 +557,18 @@ class DatabaseRecoveryManager:
                         }, f, indent=2)
                         
                 except Exception as e:
+                    # Logging
                     self.logger.error(f"Error backing up table {table_name}: {e}")
                     return False
             
             return True
             
         except Exception as e:
+            # Logging
             self.logger.error(f"Error creating full backup: {e}")
             return False
     
+    # Méthode de création d'une sauvegarde du schéma
     def _create_schema_backup(self, backup_path: Path) -> bool:
         """Créer une sauvegarde du schéma uniquement."""
         try:
@@ -542,6 +580,7 @@ class DatabaseRecoveryManager:
             
             # Sauvegarde des structures de tables
             tables = self._get_all_tables()
+            " Parcours des tables"
             for table_name in tables:
                 structure = self.conn.execute(f"DESCRIBE {table_name}").fetchall()
                 schema_info['tables'][table_name] = structure
@@ -561,9 +600,11 @@ class DatabaseRecoveryManager:
             return True
             
         except Exception as e:
+            # Logging
             self.logger.error(f"Error creating schema backup: {e}")
             return False
     
+    # Méthode de sauvegarde des méta-données
     def _create_metadata_backup(self, backup_path: Path) -> bool:
         """Créer une sauvegarde des métadonnées uniquement."""
         try:
@@ -579,6 +620,7 @@ class DatabaseRecoveryManager:
                 'timestamp': time.time()
             }
             
+            # Exportation dans un fichier json
             system_file = backup_path / "system_info.json"
             with open(system_file, 'w') as f:
                 json.dump(system_info, f, indent=2, default=str)
@@ -586,9 +628,11 @@ class DatabaseRecoveryManager:
             return True
             
         except Exception as e:
+            # Logging
             self.logger.error(f"Error creating metadata backup: {e}")
             return False
     
+    # Méthode de création d'une sauvegarde incrémentale
     def _create_incremental_backup(self, backup_path: Path) -> bool:
         """Créer une sauvegarde incrémentale."""
         try:
@@ -597,10 +641,12 @@ class DatabaseRecoveryManager:
             return self._create_metadata_backup(backup_path)
             
         except Exception as e:
+            # Logging
             self.logger.error(f"Error creating incremental backup: {e}")
             return False
     
     # Méthodes de récupération spécialisées
+    # Méthode de récupération d'une transaction par rollback
     def _recover_rollback_transaction(self, operation: RecoveryOperation) -> RecoveryResult:
         """Récupération par rollback de transaction."""
         try:
@@ -631,10 +677,12 @@ class DatabaseRecoveryManager:
                 recovery_time=0,
                 error_message=str(e)
             )
-    
+
+    # Méthode de récupération par restauration de sauvegarde
     def _recover_restore_backup(self, operation: RecoveryOperation) -> RecoveryResult:
         """Récupération par restauration de sauvegarde."""
         try:
+            # Vérification que la cible de la restoration est spécifié
             if not operation.target_recovery_point:
                 return RecoveryResult(
                     success=False,
@@ -642,7 +690,7 @@ class DatabaseRecoveryManager:
                     recovery_time=0,
                     error_message="No target recovery point specified"
                 )
-            
+            # Vérification que le point de sauvegarde existe
             if operation.target_recovery_point not in self._recovery_points:
                 return RecoveryResult(
                     success=False,
@@ -651,9 +699,12 @@ class DatabaseRecoveryManager:
                     error_message=f"Recovery point {operation.target_recovery_point} not found"
                 )
             
+            # Extraction du point de sauvegarde
             recovery_point = self._recovery_points[operation.target_recovery_point]
+            # Construction du chemin
             backup_path = Path(recovery_point.backup_path)
             
+            # Vérification que le chemin existe
             if not backup_path.exists():
                 return RecoveryResult(
                     success=False,
@@ -679,6 +730,7 @@ class DatabaseRecoveryManager:
                     error_message=f"Unsupported backup type: {recovery_point.backup_type}"
                 )
             
+            # Affichage d'un message différent suivant la réussite de l'opération
             if success:
                 return RecoveryResult(
                     success=True,
@@ -704,6 +756,7 @@ class DatabaseRecoveryManager:
                 error_message=str(e)
             )
     
+    # 
     def _recover_repair_schema(self, operation: RecoveryOperation) -> RecoveryResult:
         """Récupération par réparation du schéma."""
         try:
