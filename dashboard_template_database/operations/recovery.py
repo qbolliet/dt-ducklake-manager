@@ -16,7 +16,8 @@ import duckdb
 
 # Import des gestionnaires
 from .auditor import DatabaseAuditor, ValidationLevel, ValidationReport
-
+from .managers.dimension_manager import DimensionManager
+from .deleter_v2 import DatabaseDeleterV2
 # Import des utilitaires
 from ..utils.logger import _init_logger
 
@@ -756,19 +757,21 @@ class DatabaseRecoveryManager:
                 error_message=str(e)
             )
     
-    # 
+    # Méthode de récupération par réparation du schéma
     def _recover_repair_schema(self, operation: RecoveryOperation) -> RecoveryResult:
         """Récupération par réparation du schéma."""
         try:
+            # Initialisation de la liste des opération appliquées
             operations_performed = []
             
             # Validation du schéma actuel
             validation_report = self.auditor.validate_database(ValidationLevel.COMPREHENSIVE)
             
-            # Réparation des issues de schéma
+            # Réparation des problèmes du schéma
             schema_issues = [issue for issue in validation_report.issues 
                            if 'schema' in issue.issue_type.value.lower()]
             
+            # Parcours des problèmes
             for issue in schema_issues:
                 try:
                     if issue.suggested_fix:
@@ -794,19 +797,21 @@ class DatabaseRecoveryManager:
                 error_message=str(e)
             )
     
+    # Méthode de reconstruction des tables de dimension corrompues
     def _recover_rebuild_dimensions(self, operation: RecoveryOperation) -> RecoveryResult:
         """Récupération par reconstruction des dimensions."""
+        # /!\ Cette méthode n'ajoute pas les éventuelle entrées manquantes dans les tables de dimension mais se contente de supprimer les entrées superflues
         try:
+            # Initialisation de la liste des opérations réalisées
             operations_performed = []
             
             # Reconstruction des tables de dimension corrompues
-            from .managers.dimension_manager import DimensionManager
-            
+            # Initialisation du gestionnaire des dimensions
             dim_mgr = DimensionManager(self.conn, self.categorical_threshold)
             
             # Nettoyage des entrées orphelines
             cleaned = dim_mgr.cleanup_orphaned_dimension_entries()
-            
+            # Parcours des résultats du nettoyage
             for dim_name, count in cleaned.items():
                 if count > 0:
                     operations_performed.append(f"Cleaned {count} orphaned entries from {dim_name}")
@@ -828,19 +833,19 @@ class DatabaseRecoveryManager:
                 error_message=str(e)
             )
     
+    # Méthode de nettoyage des données orphelines
     def _recover_clean_orphaned_data(self, operation: RecoveryOperation) -> RecoveryResult:
         """Récupération par nettoyage des données orphelines."""
         try:
+            # Initialisation de la liste des opérations appliquées au jeu de données
             operations_performed = []
             
-            # Utilisation du deleter pour nettoyer
-            from .deleter_v2 import DatabaseDeleterV2
-            
+            # Utilisation du deleter pour nettoyer            
             deleter = DatabaseDeleterV2(self.conn, self.categorical_threshold, 
                                       enable_validation=False, auto_cleanup=True)
-            
+            # Nettoyage de la base de données
             cleanup_results = deleter.cleanup_database(comprehensive=True)
-            
+            # Parcours des résultats
             for category, result in cleanup_results.items():
                 if result:
                     operations_performed.append(f"Cleaned {category}: {result}")
@@ -859,10 +864,11 @@ class DatabaseRecoveryManager:
                 recovery_time=0,
                 error_message=str(e)
             )
-    
+    # Méthode de récupération en validant la base de données et appliquant des corrections automatiques
     def _recover_validate_and_fix(self, operation: RecoveryOperation) -> RecoveryResult:
         """Récupération par validation et correction automatique."""
         try:
+            # Initialisation de la liste des opérations appliquées
             operations_performed = []
             
             # Validation complète
@@ -872,6 +878,7 @@ class DatabaseRecoveryManager:
             # Tentatives de correction automatique des issues
             fixed_count = 0
             
+            # Parcours des problèmes
             for issue in validation_report.issues:
                 try:
                     # Correction basée sur le type d'issue
@@ -912,6 +919,7 @@ class DatabaseRecoveryManager:
             )
     
     # Méthodes utilitaires privées
+    # Méthode de validation d'une opération de 
     def _validate_recovery_operation(self, operation: RecoveryOperation, confirm_destructive: bool) -> bool:
         """Valider une opération de récupération."""
         try:
@@ -920,27 +928,31 @@ class DatabaseRecoveryManager:
                 RecoveryStrategy.RESTORE_BACKUP,
                 RecoveryStrategy.REPAIR_SCHEMA
             ]
-            
+            # Vérification de la confirmation d'une opération destructive de données
             if operation.strategy in destructive_strategies and not confirm_destructive:
+                # Logging
                 self.logger.error(f"Destructive operation {operation.strategy.value} requires confirmation")
                 return False
             
             # Vérification du point de récupération si nécessaire
             if operation.target_recovery_point:
                 if operation.target_recovery_point not in self._recovery_points:
+                    # Logging
                     self.logger.error(f"Target recovery point {operation.target_recovery_point} not found")
                     return False
             
             return True
             
         except Exception as e:
+            # Logging
             self.logger.error(f"Error validating recovery operation: {e}")
             return False
     
+    # Méthode de détermination de la stratégie de récupération
     def _determine_recovery_strategy(self, validation_report: Any, allow_destructive: bool) -> Optional[RecoveryStrategy]:
         """Déterminer la meilleure stratégie de récupération."""
         try:
-            # Analyse des types d'issues
+            # Analyse des types de problèmes
             issue_types = [issue.issue_type.value for issue in validation_report.issues]
             critical_count = validation_report.get_critical_issues_count()
             
@@ -965,9 +977,11 @@ class DatabaseRecoveryManager:
             return RecoveryStrategy.VALIDATE_AND_FIX
             
         except Exception as e:
+            # Logging
             self.logger.error(f"Error determining recovery strategy: {e}")
             return None
     
+    # Méthode auxiliaire de collecte des méta données d ela base
     def _collect_database_metadata(self) -> Dict[str, Any]:
         """Collecter les métadonnées de la base de données."""
         try:
@@ -986,28 +1000,35 @@ class DatabaseRecoveryManager:
             return metadata
             
         except Exception as e:
+            # Logging
             self.logger.error(f"Error collecting database metadata: {e}")
             return {'error': str(e)}
     
+    # Méthode auxiliaire d'extraction de l'ensemble des tables de la base de données
     def _get_all_tables(self) -> List[str]:
         """Obtenir la liste de toutes les tables."""
         try:
+            # Exécution de la requête
             result = self.conn.execute("SHOW TABLES").fetchall()
             return [row[0] for row in result]
         except:
             return []
     
+    # Méthode auxiliaire de vérification de l'existence d'une table dans la base de données
     def _table_exists(self, table_name: str) -> bool:
         """Vérifier si une table existe."""
         try:
+            # Exécution de la requête
             self.conn.execute(f"SELECT 1 FROM {table_name} LIMIT 1")
             return True
         except:
             return False
     
+    # Méthode de sauvegarde des informations d'un point de récupération
     def _save_recovery_point_info(self, recovery_point: RecoveryPoint) -> None:
         """Sauvegarder les informations d'un point de récupération."""
         try:
+            # Identification du chemin
             info_file = Path(recovery_point.backup_path) / "recovery_point.json"
             
             # Sérialisation des données
@@ -1023,25 +1044,31 @@ class DatabaseRecoveryManager:
                     'critical_issues': recovery_point.validation_report.get_critical_issues_count() if recovery_point.validation_report else 0
                 } if recovery_point.validation_report else None
             }
-            
+            # Exportation en json
             with open(info_file, 'w') as f:
                 json.dump(data, f, indent=2, default=str)
                 
         except Exception as e:
+            # Logging
             self.logger.error(f"Error saving recovery point info: {e}")
     
+    # Méthode de chargement des points de récupération existants
     def _load_existing_recovery_points(self) -> None:
         """Charger les points de récupération existants."""
         try:
+            # Vérification que le répertoire existe
             if not self.backup_dir.exists():
                 return
             
+            # Parcours des répertoires
             for backup_dir in self.backup_dir.iterdir():
                 if backup_dir.is_dir():
+                    # Idnetification du chemin
                     info_file = backup_dir / "recovery_point.json"
-                    
+                    # Extraction des informations
                     if info_file.exists():
                         try:
+                            # Chargement du json
                             with open(info_file, 'r') as f:
                                 data = json.load(f)
                             
@@ -1054,33 +1081,41 @@ class DatabaseRecoveryManager:
                                 metadata=data.get('metadata', {}),
                                 description=data.get('description', '')
                             )
-                            
+                            # Ajout aux points de sauvegarde
                             self._recovery_points[recovery_point.recovery_id] = recovery_point
                             
                         except Exception as e:
+                            # Logging
                             self.logger.warning(f"Error loading recovery point from {backup_dir}: {e}")
-            
+            # Logging
             self.logger.info(f"Loaded {len(self._recovery_points)} existing recovery points")
             
         except Exception as e:
+            # Logging
             self.logger.error(f"Error loading existing recovery points: {e}")
     
+    # Méthode auxiliaire de nettoyage des anciens points de récupération
     def _cleanup_old_recovery_points(self) -> None:
         """Nettoyer les anciens points de récupération."""
         try:
+            # Détermination du moment à partir duquel supprimer des points de sauvegarde
             cutoff_time = time.time() - (self.max_backup_age_days * 24 * 60 * 60)
+            # Détermination des points de sauvegarde à supprimer
             old_points = [
                 rp for rp in self._recovery_points.values() 
                 if rp.timestamp < cutoff_time
             ]
             
+            # Suppression des points
             for recovery_point in old_points:
                 self.delete_recovery_point(recovery_point.recovery_id)
             
             if old_points:
+                # Logging
                 self.logger.info(f"Cleaned up {len(old_points)} old recovery points")
             
         except Exception as e:
+            # Logging
             self.logger.error(f"Error cleaning up old recovery points: {e}")
     
     # Placeholder methods for specific recovery operations
