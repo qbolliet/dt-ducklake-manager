@@ -23,10 +23,10 @@ from ..utils.data_processing import _build_where_clause
 # Emplacement du fichier
 FILE_PATH = Path(os.path.abspath(__file__))
 
-
+# Classe de suppression de données dans la base
 class DatabaseDeleterV2(BaseSchemaManager):
     """
-    Refactored database deleter using the new modular architecture.
+    Database deleter using modular architecture.
     
     Provides atomic, transactional deletion operations on DuckDB databases with proper
     validation, error recovery, and state consistency. Uses specialized managers
@@ -40,7 +40,7 @@ class DatabaseDeleterV2(BaseSchemaManager):
         enable_validation (bool): Whether to enable validation
         auto_cleanup (bool): Whether to automatically clean up orphaned data
     """
-    
+    # Initialisation
     def __init__(self, 
                  connection: duckdb.DuckDBPyConnection,
                  categorical_threshold: Optional[int] = 50,
@@ -61,6 +61,7 @@ class DatabaseDeleterV2(BaseSchemaManager):
             >>> conn = duckdb.connect('database.db')
             >>> deleter = DatabaseDeleterV2(conn, enable_validation=True, auto_cleanup=True)
         """
+        # Initialisation du parent
         super().__init__(connection, categorical_threshold, log_filename)
         
         # Initialisation des gestionnaires spécialisés
@@ -84,6 +85,7 @@ class DatabaseDeleterV2(BaseSchemaManager):
         self.enable_validation = enable_validation
         self.auto_cleanup = auto_cleanup
     
+    # Méthode de validation de l'opération de suppression avant son exécution
     def validate_operation(self, operation_type: str, **kwargs) -> bool:
         """
         Validate delete operations before execution.
@@ -95,6 +97,7 @@ class DatabaseDeleterV2(BaseSchemaManager):
         Returns:
             True if operation is valid
         """
+        # Vérifiation qu'un auditeur est bien fourni et que la validation est demandée
         if not self.enable_validation or not self.auditor:
             return True
         
@@ -104,6 +107,7 @@ class DatabaseDeleterV2(BaseSchemaManager):
         # Vérification des issues critiques
         critical_issues = validation_report.get_critical_issues_count()
         if critical_issues > 0:
+            # Logging
             self.logger.error(f"Critical validation issues found for {operation_type} operation:")
             for issue in validation_report.issues:
                 if issue.severity.value == 'critical':
@@ -113,6 +117,7 @@ class DatabaseDeleterV2(BaseSchemaManager):
         # Avertissements pour les issues de haute priorité
         high_issues = [issue for issue in validation_report.issues if issue.severity.value == 'high']
         if high_issues:
+            # Logging
             self.logger.warning(f"High priority validation issues found for {operation_type} operation:")
             for issue in high_issues:
                 self.logger.warning(f"  - {issue.description}")
@@ -155,11 +160,15 @@ class DatabaseDeleterV2(BaseSchemaManager):
         # Logging
         self.logger.info(f"Starting row deletion (transaction: {use_transaction}, cleanup: {perform_cleanup})")
         
+        # Suppression des lignes
         if use_transaction:
+            # De manière transactionnelle
             return self._delete_rows_transactional(filters, perform_cleanup)
         else:
+            # Directement
             return self._delete_rows_direct(filters, perform_cleanup)
     
+    # Méthode de suppression des lignes de manière transactionnelle
     def _delete_rows_transactional(self, 
                                  filters: Optional[Union[str, List, Dict]], 
                                  perform_cleanup: bool) -> int:
@@ -182,6 +191,7 @@ class DatabaseDeleterV2(BaseSchemaManager):
                 description="Delete rows from fact table"
             )
             
+            # Annulation si l'opération ne peut pas être ajoutée ou exécutée
             if not self.transaction_mgr.add_operation(tx_id, **operation.__dict__):
                 self.transaction_mgr.rollback_transaction(tx_id)
                 return -1
@@ -213,34 +223,44 @@ class DatabaseDeleterV2(BaseSchemaManager):
                 )
                 
                 if not self.transaction_mgr.add_operation(tx_id, **operation.__dict__):
+                    # Annulation du nettoyage
                     self.transaction_mgr.rollback_to_savepoint(tx_id, "before_cleanup")
+                    # Logging
                     self.logger.warning("Cleanup failed, but row deletion completed")
                 else:
                     self.transaction_mgr.execute_operation(tx_id)  # Non-critique si échoue
             
             # Validation post-suppression
             if self.enable_validation and self.auditor:
+                # Audit d ela base de données
                 validation_report = self.auditor.validate_database(ValidationLevel.BASIC)
-                
+                # Identification des problèmes critiques
                 critical_issues = validation_report.get_critical_issues_count()
                 if critical_issues > 0:
+                    # Logging
                     self.logger.error("Critical issues found after deletion, rolling back")
+                    # Annulation de la transaction
                     self.transaction_mgr.rollback_transaction(tx_id)
                     return -1
             
             # Commit de la transaction
             if self.transaction_mgr.commit_transaction(tx_id):
+                # Logging
                 self.logger.info(f"Row deletion completed successfully: {rows_deleted} rows deleted")
                 return rows_deleted
             else:
+                # Logging
                 self.logger.error("Failed to commit deletion transaction")
                 return -1
             
         except Exception as e:
+            # Logging
             self.logger.error(f"Error during transactional deletion: {e}")
+            # Annulation de la transaction
             self.transaction_mgr.rollback_transaction(tx_id)
             return -1
     
+    # Méthode de suppression directe des lignes
     def _delete_rows_direct(self, 
                           filters: Optional[Union[str, List, Dict]], 
                           perform_cleanup: bool) -> int:
@@ -253,10 +273,12 @@ class DatabaseDeleterV2(BaseSchemaManager):
                 # Nettoyage des données orphelines
                 self._cleanup_orphaned_data_comprehensive()
             
+            # Logging
             self.logger.info(f"Row deletion completed (direct mode): {rows_deleted} rows deleted")
             return rows_deleted
             
         except Exception as e:
+            # Logging
             self.logger.error(f"Error during direct deletion: {e}")
             return -1
     
@@ -283,6 +305,7 @@ class DatabaseDeleterV2(BaseSchemaManager):
         """
         # Validation préalable
         if not self.validate_operation('drop_column', columns=columns):
+            # Logging
             self.logger.error("Pre-column-deletion validation failed")
             return {col: False for col in columns}
         
@@ -290,23 +313,29 @@ class DatabaseDeleterV2(BaseSchemaManager):
         if validate_dependencies:
             dependency_report = self._analyze_column_dependencies(columns)
             if dependency_report['has_critical_dependencies']:
-                self.logger.error("Critical dependencies found, aborting column deletion")
+                # Logging
+                self.logger.error("Critical dependencies found, aborting columns deletion")
                 return {col: False for col in columns}
         
         # Logging
-        self.logger.info(f"Starting column deletion (transaction: {use_transaction})")
+        self.logger.info(f"Starting columns deletion (transaction: {use_transaction})")
         
+        # Suppression des colonnes
         if use_transaction:
+            # Avec transaction
             return self._delete_columns_transactional(columns)
         else:
+            # Directement
             return self._delete_columns_direct(columns)
     
+    # Méthode de suppression de colonnes de manière transactionnelle
     def _delete_columns_transactional(self, columns: List[str]) -> Dict[str, bool]:
         """Suppression transactionnelle de colonnes."""
         
         # Début de la transaction
         tx_id = self.transaction_mgr.begin_transaction("Column deletion with dependency management")
         
+        # Initialisation du dictionnaire résultat
         results = {}
         
         try:
@@ -314,8 +343,11 @@ class DatabaseDeleterV2(BaseSchemaManager):
             existing_columns = self._get_fact_table_columns()
             valid_columns = [col for col in columns if col in existing_columns]
             
+            # Vérification que les colonnes sont valides
             if not valid_columns:
+                # Logging
                 self.logger.warning("No valid columns found for deletion")
+                # Commit de la transaction
                 self.transaction_mgr.commit_transaction(tx_id)
                 return {col: False for col in columns}
             
@@ -378,6 +410,7 @@ class DatabaseDeleterV2(BaseSchemaManager):
                     results[column] = True
                     
                 except Exception as e:
+                    # Logging
                     self.logger.error(f"Error processing column {column}: {e}")
                     results[column] = False
                     # Continue avec les autres colonnes
@@ -395,17 +428,23 @@ class DatabaseDeleterV2(BaseSchemaManager):
             
             # Validation post-suppression
             if self.enable_validation and self.auditor:
+                # Audit de la base de données
                 validation_report = self.auditor.validate_database(ValidationLevel.BASIC)
                 
+                # Identification des problèmes critiques
                 critical_issues = validation_report.get_critical_issues_count()
                 if critical_issues > 0:
+                    # Logging
                     self.logger.error("Critical issues found after column deletion, rolling back")
+                    # Annulation de la transaction
                     self.transaction_mgr.rollback_transaction(tx_id)
                     return {col: False for col in columns}
             
             # Commit de la transaction
             if self.transaction_mgr.commit_transaction(tx_id):
+                # Calcul du nombre de suppressions
                 successful_deletions = sum(results.values())
+                # Logging
                 self.logger.info(f"Column deletion completed: {successful_deletions}/{len(valid_columns)} columns deleted")
                 
                 # Ajout des colonnes non trouvées au résultat
@@ -415,14 +454,18 @@ class DatabaseDeleterV2(BaseSchemaManager):
                 
                 return results
             else:
+                # Logging
                 self.logger.error("Failed to commit column deletion transaction")
                 return {col: False for col in columns}
             
         except Exception as e:
+            # Logging
             self.logger.error(f"Error during transactional column deletion: {e}")
+            # Annulation de la transaction
             self.transaction_mgr.rollback_transaction(tx_id)
             return {col: False for col in columns}
     
+    # Suppression des colonnes sans transaction
     def _delete_columns_direct(self, columns: List[str]) -> Dict[str, bool]:
         """Suppression directe de colonnes sans transaction."""
         results = {}
@@ -432,6 +475,7 @@ class DatabaseDeleterV2(BaseSchemaManager):
             existing_columns = self._get_fact_table_columns()
             valid_columns = [col for col in columns if col in existing_columns]
             
+            # Parcours des colonnes
             for column in valid_columns:
                 try:
                     # Suppression des index
@@ -450,6 +494,7 @@ class DatabaseDeleterV2(BaseSchemaManager):
                     results[column] = len(dropped_columns) > 0
                     
                 except Exception as e:
+                    # Logging
                     self.logger.error(f"Error deleting column {column}: {e}")
                     results[column] = False
             
@@ -457,6 +502,7 @@ class DatabaseDeleterV2(BaseSchemaManager):
             try:
                 self._cleanup_orphaned_indexes()
             except Exception as e:
+                # Logging
                 self.logger.warning(f"Error cleaning orphaned indexes: {e}")
             
             # Ajout des colonnes non trouvées au résultat
@@ -464,16 +510,20 @@ class DatabaseDeleterV2(BaseSchemaManager):
                 if col not in results:
                     results[col] = False
             
+            # Calcul du nombre de colonnes supprimées
             successful_deletions = sum(results.values())
+            # Logging
             self.logger.info(f"Column deletion completed (direct mode): {successful_deletions}/{len(columns)} columns deleted")
             
             return results
             
         except Exception as e:
+            # Logging
             self.logger.error(f"Error during direct column deletion: {e}")
             return {col: False for col in columns}
     
     # Méthodes de suppression sécurisées
+    # Méthode de suppression des lignes
     def _execute_row_deletion(self, filters: Optional[Union[str, List, Dict]]) -> int:
         """Exécuter la suppression de lignes."""
         try:
@@ -489,12 +539,15 @@ class DatabaseDeleterV2(BaseSchemaManager):
             return rows_deleted
             
         except Exception as e:
+            # Logging
             self.logger.error(f"Error executing row deletion: {e}")
             raise
     
+    # Méthode auxiliaire de suppression des indexes liés à une colonne
     def _drop_column_indexes_safe(self, column: str) -> List[str]:
         """Supprimer les index liés à une colonne de manière sécurisée."""
         try:
+            # Initialisation de la liste des indexes supprimés
             dropped_indexes = []
             
             # Recherche des index utilisant cette colonne
@@ -505,29 +558,39 @@ class DatabaseDeleterV2(BaseSchemaManager):
             """
             indexes = self.conn.execute(index_query, [f'%{column}%']).fetchall()
             
+            # Parcours des indexes utilisant la colonne et qu'il faut supprimer
             for index_name, expressions in indexes:
                 try:
+                    # Requête de suppression
                     drop_query = f"DROP INDEX IF EXISTS {index_name}"
                     self.conn.execute(drop_query)
+                    # Ajout à la liste des indexes supprimés
                     dropped_indexes.append(index_name)
+                    # Logging
                     self.logger.info(f"Dropped index {index_name} for column {column}")
                 except Exception as e:
+                    # Logging
                     self.logger.warning(f"Failed to drop index {index_name}: {e}")
             
             return dropped_indexes
             
         except Exception as e:
+            # Logging
             self.logger.error(f"Error dropping indexes for column {column}: {e}")
             return []
     
+    # Méthode auxiliaire de suppression d'une colonne de la table des faits
     def _drop_fact_table_column(self, column: str) -> bool:
         """Supprimer une colonne de la fact table."""
         try:
+            # Suppression des colonnes
             dropped_columns = self.data_mgr.drop_columns([column])
             return len(dropped_columns) > 0
         except Exception as e:
+            # Logging
             self.logger.error(f"Error dropping fact table column {column}: {e}")
             return False
+    
     
     def _cleanup_orphaned_data_comprehensive(self) -> Dict[str, Any]:
         """Nettoyage complet des données orphelines."""
