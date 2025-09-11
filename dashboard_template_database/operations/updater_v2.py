@@ -25,6 +25,7 @@ from ..builders.indexer import IndexManager
 FILE_PATH = Path(os.path.abspath(__file__))
 
 
+# Classe de mise à jour d'une base de données
 class DatabaseUpdaterV2(BaseSchemaManager):
     """
     Refactored database updater using the new modular architecture.
@@ -41,7 +42,7 @@ class DatabaseUpdaterV2(BaseSchemaManager):
         max_workers (int): Maximum number of parallel workers
         batch_size (int): Size of batches for processing large datasets
     """
-    
+    # Initialisation
     def __init__(self, 
                  connection: duckdb.DuckDBPyConnection,
                  categorical_threshold: Optional[int] = 50,
@@ -64,6 +65,7 @@ class DatabaseUpdaterV2(BaseSchemaManager):
             >>> conn = duckdb.connect('database.db')
             >>> updater = DatabaseUpdaterV2(conn, max_workers=8, enable_validation=True)
         """
+        # Initialisation du parent
         super().__init__(connection, categorical_threshold, log_filename)
         
         # Initialisation des gestionnaires spécialisés
@@ -88,6 +90,7 @@ class DatabaseUpdaterV2(BaseSchemaManager):
         self.batch_size = batch_size
         self.enable_validation = enable_validation
     
+    # Méthode de validation d'une opération
     def validate_operation(self, operation_type: str, **kwargs) -> bool:
         """
         Validate update operations before execution.
@@ -99,23 +102,28 @@ class DatabaseUpdaterV2(BaseSchemaManager):
         Returns:
             True if operation is valid
         """
+        # Absence de validation si un auditeur n'est pas spécifié ou si elle n'est pas permise
         if not self.enable_validation or not self.auditor:
             return True
         
         # Validation par l'auditeur
         validation_report = self.auditor.validate_operation_preconditions(operation_type, **kwargs)
         
-        # Vérification des issues critiques
+        # Vérification des problèmes critiques
         if validation_report.get_critical_issues_count() > 0:
+            # Logging
             self.logger.error(f"Critical validation issues found for {operation_type} operation:")
+            # Logging des erreurs critiques
             for issue in validation_report.get_issues_by_severity(validation_report.IssueSeverity.CRITICAL):
                 self.logger.error(f"  - {issue.description}")
             return False
         
-        # Avertissements pour les issues de haute priorité
+        # Avertissements pour les problèmes de priorité haute
         high_issues = validation_report.get_issues_by_severity(validation_report.IssueSeverity.HIGH)
         if high_issues:
+            # Logging
             self.logger.warning(f"High priority validation issues found for {operation_type} operation:")
+            # Logging des problèmes de priorité haute
             for issue in high_issues:
                 self.logger.warning(f"  - {issue.description}")
         
@@ -156,23 +164,27 @@ class DatabaseUpdaterV2(BaseSchemaManager):
         """
         # Validation préalable
         if not self.validate_operation('update', df=update_df):
+            # Logging
             self.logger.error("Pre-update validation failed")
             return False
         
         # Logging
         self.logger.info(f"Starting database update with {len(update_df)} rows (transaction: {use_transaction})")
         
+        # Utilisation de la transaction pour la mise à jour de la base de données
         if use_transaction:
             return self._update_database_transactional(
                 update_df, check_duplicates_db, check_duplicates_update, 
                 keep, index_config, use_batch_processing
             )
+        # Sinon mise à jour directe
         else:
             return self._update_database_direct(
                 update_df, check_duplicates_db, check_duplicates_update,
                 keep, index_config, use_batch_processing
             )
     
+    # Méthode de mise à jour de la base de données de manière transactionnelle
     def _update_database_transactional(self,
                                      update_df: pd.DataFrame,
                                      check_duplicates_db: bool,
@@ -188,6 +200,7 @@ class DatabaseUpdaterV2(BaseSchemaManager):
         try:
             # Étape 1: Suppression des doublons dans les données de mise à jour
             if check_duplicates_update:
+                # Initialisation de l'opération de transaction
                 operation = TransactionOperation(
                     operation_type='preprocess',
                     operation_func=self._remove_update_duplicates,
@@ -195,10 +208,12 @@ class DatabaseUpdaterV2(BaseSchemaManager):
                     description="Remove duplicates from update data"
                 )
                 
+                # Annulation de la transaction si l'opération ne peut être ajoutée
                 if not self.transaction_mgr.add_operation(tx_id, **operation.__dict__):
                     self.transaction_mgr.rollback_transaction(tx_id)
                     return False
                 
+                # Annulation de la transaction si l'opération ne peut être exécutée
                 if not self.transaction_mgr.execute_operation(tx_id):
                     self.transaction_mgr.rollback_transaction(tx_id)
                     return False
@@ -208,6 +223,7 @@ class DatabaseUpdaterV2(BaseSchemaManager):
             
             # Étape 2: Suppression des doublons dans la base de données
             if check_duplicates_db:
+                # Initialisation de l'opération de transacti
                 operation = TransactionOperation(
                     operation_type='cleanup',
                     operation_func=self._remove_database_duplicates,
@@ -216,10 +232,12 @@ class DatabaseUpdaterV2(BaseSchemaManager):
                     description="Remove duplicates from existing database"
                 )
                 
+                # Annulation de la transaction si l'opération ne peut être ajoutée
                 if not self.transaction_mgr.add_operation(tx_id, **operation.__dict__):
                     self.transaction_mgr.rollback_transaction(tx_id)
                     return False
                 
+                # Annulation de la transaction si l'opération ne peut être exécutée
                 if not self.transaction_mgr.execute_operation(tx_id):
                     self.transaction_mgr.rollback_transaction(tx_id)
                     return False
@@ -228,6 +246,7 @@ class DatabaseUpdaterV2(BaseSchemaManager):
             self.transaction_mgr.create_savepoint(tx_id, "before_major_updates")
             
             # Étape 3: Mise à jour des métadonnées
+            # Initialisation de l'opération de transaction
             operation = TransactionOperation(
                 operation_type='metadata_update',
                 operation_func=self._update_metadata_safe,
@@ -236,15 +255,18 @@ class DatabaseUpdaterV2(BaseSchemaManager):
                 description="Update metadata table"
             )
             
+            # Annulation de la transaction si l'opération ne peut être ajoutée
             if not self.transaction_mgr.add_operation(tx_id, **operation.__dict__):
                 self.transaction_mgr.rollback_transaction(tx_id)
                 return False
             
+            # Annulation de la transaction si l'opération ne peut être exécutée
             if not self.transaction_mgr.execute_operation(tx_id):
                 self.transaction_mgr.rollback_transaction(tx_id)
                 return False
             
             # Étape 4: Mise à jour des tables de dimensions
+            # Initialisation de l'opération de transaction
             operation = TransactionOperation(
                 operation_type='dimension_update',
                 operation_func=self._update_dimensions_safe,
@@ -253,16 +275,20 @@ class DatabaseUpdaterV2(BaseSchemaManager):
                 description="Update dimension tables"
             )
             
+            # Annulation de la transaction si l'opération ne peut être ajoutée
             if not self.transaction_mgr.add_operation(tx_id, **operation.__dict__):
                 self.transaction_mgr.rollback_transaction(tx_id)
                 return False
             
+            # Annulation de la transaction si l'opération ne peut être exécutée
             if not self.transaction_mgr.execute_operation(tx_id):
                 self.transaction_mgr.rollback_transaction(tx_id)
                 return False
             
             # Étape 5: Mise à jour de la table de faits
+            # Mise à jour en batch si spécifié
             if use_batch_processing and len(update_df) > self.batch_size:
+                # Initialisation de l'opération de transaction
                 operation = TransactionOperation(
                     operation_type='fact_update_batch',
                     operation_func=self._update_fact_table_batch,
@@ -271,6 +297,7 @@ class DatabaseUpdaterV2(BaseSchemaManager):
                     description="Update fact table (batch processing)"
                 )
             else:
+                # Initialisation de l'opération de transaction
                 operation = TransactionOperation(
                     operation_type='fact_update_direct',
                     operation_func=self._update_fact_table_direct,
@@ -279,16 +306,20 @@ class DatabaseUpdaterV2(BaseSchemaManager):
                     description="Update fact table (direct)"
                 )
             
+            # Annulation de la transaction si l'opération ne peut être ajoutée
             if not self.transaction_mgr.add_operation(tx_id, **operation.__dict__):
                 self.transaction_mgr.rollback_transaction(tx_id)
                 return False
             
+            # Annulation de la transaction si l'opération ne peut être exécutée
             if not self.transaction_mgr.execute_operation(tx_id):
                 self.transaction_mgr.rollback_transaction(tx_id)
                 return False
             
             # Étape 6: Mise à jour des index
+            # Si un index est spécifié
             if index_config:
+                # Initialisation de l'opération de transaction
                 operation = TransactionOperation(
                     operation_type='index_update',
                     operation_func=self._update_indexes_safe,
@@ -297,37 +328,49 @@ class DatabaseUpdaterV2(BaseSchemaManager):
                     description="Update database indexes"
                 )
                 
+                # Annulation de la transaction si l'opération ne peut être ajoutée
                 if not self.transaction_mgr.add_operation(tx_id, **operation.__dict__):
                     self.transaction_mgr.rollback_transaction(tx_id)
                     return False
                 
+                # Annulation de la transaction si l'opération ne peut être exécutée
                 if not self.transaction_mgr.execute_operation(tx_id):
                     self.transaction_mgr.rollback_transaction(tx_id)
                     return False
             
             # Validation post-update
             if self.enable_validation and self.auditor:
+                # Validation de la base de données
                 validation_report = self.auditor.validate_database(ValidationLevel.STANDARD)
                 
+                # Vérification des problèmes critiques
                 if validation_report.get_critical_issues_count() > 0:
+                    # Logging
                     self.logger.error("Critical issues found after update, rolling back")
+                    # Annulation de la transaction
                     self.transaction_mgr.rollback_transaction(tx_id)
                     return False
             
             # Commit de la transaction
             if self.transaction_mgr.commit_transaction(tx_id):
+                # Logging
                 self.logger.info("Database update completed successfully")
+                # Invaliation du cache
                 self._invalidate_metadata_cache()
                 return True
             else:
+                # Logging
                 self.logger.error("Failed to commit transaction")
                 return False
             
         except Exception as e:
+            # Logging
             self.logger.error(f"Error during transactional update: {e}")
+            # Annulation de la transaction
             self.transaction_mgr.rollback_transaction(tx_id)
             return False
     
+    # Méthode auxiliaire de mise à jour directe de la base de données
     def _update_database_direct(self,
                               update_df: pd.DataFrame,
                               check_duplicates_db: bool,
@@ -354,6 +397,7 @@ class DatabaseUpdaterV2(BaseSchemaManager):
                 return False
             
             # Mise à jour de la table de faits
+            # Mise à jour par batcjs si spécifié
             if use_batch_processing and len(update_df) > self.batch_size:
                 if not self._update_fact_table_batch(update_df):
                     return False
@@ -369,15 +413,19 @@ class DatabaseUpdaterV2(BaseSchemaManager):
             # Nettoyage final
             self._cleanup_orphaned_data()
             
+            # Logging
             self.logger.info("Database update completed successfully (direct mode)")
+            # Invalidation du cache des méta-données
             self._invalidate_metadata_cache()
             return True
             
         except Exception as e:
+            # Logging
             self.logger.error(f"Error during direct update: {e}")
             return False
     
     # Méthodes de mise à jour sécurisées
+    # Méthode auxiliaire de mise à jour des méta-données
     def _update_metadata_safe(self, update_df: pd.DataFrame) -> bool:
         """Mise à jour sécurisée des métadonnées."""
         try:
@@ -386,13 +434,6 @@ class DatabaseUpdaterV2(BaseSchemaManager):
             current_columns = set(current_metadata['name'].values) if len(current_metadata) > 0 else set()
             new_columns = set(update_df.columns)
             
-            # Identification des nouvelles colonnes
-            columns_to_add = new_columns - current_columns
-            
-            # Ajout des nouvelles colonnes aux métadonnées
-            for col in columns_to_add:
-                self._add_column_to_metadata(col, update_df)
-            
             # Vérification des conflits de types pour les colonnes existantes
             for col in current_columns.intersection(new_columns):
                 self._resolve_type_conflicts(col, update_df, current_metadata)
@@ -400,21 +441,27 @@ class DatabaseUpdaterV2(BaseSchemaManager):
             return True
             
         except Exception as e:
+            # Logging
             self.logger.error(f"Error updating metadata: {e}")
             return False
     
+    # Méthode auxiliaire de mise à jour des tables de dimension
     def _update_dimensions_safe(self, update_df: pd.DataFrame) -> bool:
         """Mise à jour sécurisée des dimensions."""
         try:
-            # Classification des colonnes par statut catégoriel
+            # Chargement des métadonnées
             current_metadata = self._load_current_metadata()
-            
+
+            # Classification des colonnes par statut catégoriel
             categorical_columns = {}
             non_categorical_columns = {}
             
+            # Parcours des colonnes
             for _, row in current_metadata.iterrows():
+                " Extraction du nom de la colonne"
                 col_name = row['name']
                 if col_name in update_df.columns:
+                    # Vérification du statut catégoriel
                     if row['is_categorical']:
                         categorical_columns[col_name] = update_df[col_name]
                     elif row['python_type'] == 'object':
@@ -430,27 +477,36 @@ class DatabaseUpdaterV2(BaseSchemaManager):
                 # Vérification des résultats
                 for col_name, added_count in results.items():
                     if added_count < 0:  # Erreur
+                        # Logging
                         self.logger.error(f"Failed to update dimension for {col_name}")
                         return False
             
             # Vérification des conversions vers catégoriel
             for col_name, values in non_categorical_columns.items():
+                # Vérification du seuil
                 if self._check_categorical_threshold(values):
+                    # Conversion en catégoriel
                     if not self.dimension_mgr.convert_to_categorical(col_name, values):
+                        # Logging
                         self.logger.warning(f"Failed to convert {col_name} to categorical")
             
             # Vérification des conversions vers non-catégoriel
             for col_name, values in categorical_columns.items():
+                # Vérification du seuil
                 if not self._check_categorical_threshold(values):
+                    # Conversion en non-catégroeil
                     if not self.dimension_mgr.convert_to_non_categorical(col_name):
+                        # Logging
                         self.logger.warning(f"Failed to convert {col_name} to non-categorical")
             
             return True
             
         except Exception as e:
+            # Logging
             self.logger.error(f"Error updating dimensions: {e}")
             return False
     
+    # Méthode auxiliaire de mise à jour directe de la table des faits
     def _update_fact_table_direct(self, update_df: pd.DataFrame) -> bool:
         """Mise à jour directe de la table de faits."""
         try:
@@ -475,6 +531,7 @@ class DatabaseUpdaterV2(BaseSchemaManager):
             self.logger.error(f"Error updating fact table: {e}")
             return False
     
+    # Méthode auxiliaire de la mise à jour par batch de la table des faits
     def _update_fact_table_batch(self, update_df: pd.DataFrame) -> bool:
         """Mise à jour par batch de la table de faits."""
         try:
