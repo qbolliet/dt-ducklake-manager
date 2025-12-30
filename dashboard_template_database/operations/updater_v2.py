@@ -528,6 +528,7 @@ class DatabaseUpdaterV2(BaseSchemaManager):
             return True
             
         except Exception as e:
+            # Logging
             self.logger.error(f"Error updating fact table: {e}")
             return False
     
@@ -545,17 +546,21 @@ class DatabaseUpdaterV2(BaseSchemaManager):
             # Upsert des données par batch
             if merge_keys:
                 inserted, updated = self.data_mgr.upsert_data(prepared_df, merge_keys, use_batch=True)
+                # Logging
                 self.logger.info(f"Fact table batch update: {inserted} inserted, {updated} updated")
             else:
                 inserted = self.data_mgr.insert_data(prepared_df, use_batch=True)
+                # Logging
                 self.logger.info(f"Fact table batch insert: {inserted} rows")
             
             return True
             
         except Exception as e:
+            # Logging
             self.logger.error(f"Error updating fact table in batch: {e}")
             return False
     
+    # Méthode auxiliaire de mise à jour des index
     def _update_indexes_safe(self, index_config: Dict) -> bool:
         """Mise à jour sécurisée des index."""
         try:
@@ -565,41 +570,50 @@ class DatabaseUpdaterV2(BaseSchemaManager):
             # Suppression des index existants (optionnel selon configuration)
             if index_config.get('drop_existing', True):
                 try:
+                    # Recherche des index existants
                     existing_indexes = self.conn.execute("""
                         SELECT name FROM sqlite_master 
                         WHERE type = 'index' AND name NOT LIKE 'sqlite_%'
                     """).fetchall()
-                    
+                    # Parcours des index
                     for idx in existing_indexes:
                         try:
+                            # Suppression des index
                             index_manager.drop_index(idx[0])
                         except Exception as e:
+                            # Logging
                             self.logger.warning(f"Cannot drop index {idx[0]}: {e}")
                 except Exception as e:
+                    # Logging
                     self.logger.warning(f"Error retrieving existing indexes: {e}")
             
             # Création des nouveaux index
             index_manager.create_fact_table_indexes("fact_table", index_config)
-            
+            # Logging
             self.logger.info("Successfully updated indexes")
             return True
             
         except Exception as e:
+            # Logging
             self.logger.error(f"Error updating indexes: {e}")
             return False
     
     # Méthodes de rollback
+    # Méthode auxiliaire de rollback des changements de métadonnées
     def _rollback_metadata_changes(self) -> bool:
         """Rollback des changements de métadonnées."""
         try:
             # Invalidation du cache pour forcer le rechargement
             self._invalidate_metadata_cache()
+            # Logging
             self.logger.info("Metadata changes rolled back")
             return True
         except Exception as e:
+            # Logging
             self.logger.error(f"Error rolling back metadata changes: {e}")
             return False
     
+    # Méthode auxiliaire de rollback des changements de dimensions
     def _rollback_dimension_changes(self) -> bool:
         """Rollback des changements de dimensions."""
         try:
@@ -607,30 +621,38 @@ class DatabaseUpdaterV2(BaseSchemaManager):
             self.logger.info("Dimension changes rolled back")
             return True
         except Exception as e:
+            # Logging
             self.logger.error(f"Error rolling back dimension changes: {e}")
             return False
     
+    # Méthode auxiliaire de rollback des changements de la fact table.
     def _rollback_fact_changes(self) -> bool:
         """Rollback des changements de la fact table."""
         try:
             # Les changements de fact table sont gérés par la transaction DuckDB
+            # Logging
             self.logger.info("Fact table changes rolled back")
             return True
         except Exception as e:
+            # Logging
             self.logger.error(f"Error rolling back fact table changes: {e}")
             return False
     
+    # Méthode auxiliaire de rollback des changements d'index.
     def _rollback_index_changes(self) -> bool:
         """Rollback des changements d'index."""
         try:
             # Les changements d'index sont gérés par la transaction DuckDB
+            # Logging
             self.logger.info("Index changes rolled back")
             return True
         except Exception as e:
+            # Logging
             self.logger.error(f"Error rolling back index changes: {e}")
             return False
     
     # Méthodes utilitaires
+    # Méthode auxiliaire de préparation du jeu de données pour la table des faits
     def _prepare_dataframe_for_fact_table(self, df: pd.DataFrame) -> pd.DataFrame:
         """Préparer le DataFrame pour la fact table."""
         try:
@@ -665,9 +687,11 @@ class DatabaseUpdaterV2(BaseSchemaManager):
             return prepared_df
             
         except Exception as e:
+            # Logging
             self.logger.error(f"Error preparing DataFrame for fact table: {e}")
             return df
     
+    # Méthode auxiliaire de suppression des doublons des données de mise à jour
     def _remove_update_duplicates(self, update_df: pd.DataFrame, keep: Literal[False, 'first', 'last']) -> bool:
         """Supprimer les doublons des données de mise à jour."""
         try:
@@ -675,13 +699,16 @@ class DatabaseUpdaterV2(BaseSchemaManager):
             cleaned_df = remove_dataframe_duplicates(update_df, keep, self.logger, 'update')
             return True
         except Exception as e:
+            # Logging
             self.logger.error(f"Error removing update duplicates: {e}")
             return False
     
+    # Méthode auxiliaire de nettoyage des données mises à jour
     def _get_cleaned_update_data(self, update_df: pd.DataFrame, keep: Literal[False, 'first', 'last']) -> pd.DataFrame:
         """Obtenir les données de mise à jour nettoyées."""
         return remove_dataframe_duplicates(update_df, keep, self.logger, 'update')
     
+    # Méthode auxiliaire de suppression des doublons dans la base de données
     def _remove_database_duplicates(self, keep: Literal[False, 'first', 'last']) -> bool:
         """Supprimer les doublons de la base de données."""
         try:
@@ -706,14 +733,17 @@ class DatabaseUpdaterV2(BaseSchemaManager):
             removed_count = initial_count - final_count
             
             if removed_count > 0:
+                # Logging
                 self.logger.info(f"Database duplicate removal: {removed_count} rows removed")
             
             return True
             
         except Exception as e:
+            # Logging
             self.logger.error(f"Error removing database duplicates: {e}")
             return False
     
+    # Méthode auxuliaire de restoration de la base de données
     def _restore_database_state(self) -> bool:
         """Restaurer l'état de la base de données (méthode placeholder)."""
         # Cette méthode est un placeholder pour la restauration d'état
@@ -721,6 +751,7 @@ class DatabaseUpdaterV2(BaseSchemaManager):
         self.logger.info("Database state restoration handled by transaction")
         return True
     
+    # Méthode auxiliaire de nettoyage des données orphelines
     def _cleanup_orphaned_data(self) -> None:
         """Nettoyer les données orphelines."""
         try:
@@ -741,6 +772,7 @@ class DatabaseUpdaterV2(BaseSchemaManager):
             self.logger.error(f"Error cleaning orphaned data: {e}")
     
     # Méthodes publiques additionnelles
+    # Méthode d'extraction du statut de la base de données
     def get_update_status(self) -> Dict[str, Any]:
         """
         Get the status of the database update system.
@@ -780,9 +812,11 @@ class DatabaseUpdaterV2(BaseSchemaManager):
             return status
             
         except Exception as e:
+            # Logging
             self.logger.error(f"Error getting update status: {e}")
             return {'error': str(e), 'timestamp': pd.Timestamp.now()}
     
+    # Méthode de validation de l'état de la base de données
     def validate_database_state(self, validation_level: ValidationLevel = ValidationLevel.STANDARD) -> Any:
         """
         Validate the current state of the database.
@@ -798,12 +832,15 @@ class DatabaseUpdaterV2(BaseSchemaManager):
             >>> if report.get_critical_issues_count() > 0:
             ...     print("Critical issues detected!")
         """
+        # Vérification qu'un auditeur est renseigné
         if not self.auditor:
+            # Logging
             self.logger.warning("Validation disabled - no auditor available")
             return None
         
         return self.auditor.validate_database(validation_level)
     
+    # Méthode d'optimisation de la base de données
     def optimize_database(self) -> bool:
         """
         Perform database optimization operations.
@@ -829,9 +866,11 @@ class DatabaseUpdaterV2(BaseSchemaManager):
             if cleaned_txs > 0:
                 self.logger.info(f"Cleaned up {cleaned_txs} old transactions")
             
+            # Logging
             self.logger.info("Database optimization completed")
             return True
             
         except Exception as e:
+            # Logging
             self.logger.error(f"Error during database optimization: {e}")
             return False
