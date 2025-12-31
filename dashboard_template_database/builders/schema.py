@@ -77,6 +77,7 @@ class SchemaBuilder:
                     'python_type': dtype,
                     'sql_type': map_python_to_sql_type(dtype),
                     'is_categorical': False,
+                    'is_primary_key': False,
                     # 'modalities': None
                 }
             else :
@@ -86,6 +87,7 @@ class SchemaBuilder:
                     'python_type': dtype,
                     'sql_type': map_python_to_sql_type(dtype),
                     'is_categorical': False,
+                    'is_primary_key': False,
                     # 'modalities': None
                 }
             
