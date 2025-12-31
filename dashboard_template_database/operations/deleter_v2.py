@@ -172,7 +172,7 @@ class DatabaseDeleterV2(BaseSchemaManager):
     def _delete_rows_transactional(self, 
                                  filters: Optional[Union[str, List, Dict]], 
                                  perform_cleanup: bool) -> int:
-        """Suppression transactionnelle de lignes."""
+        """Transactional row deletion with rollback support."""
         
         # Début de la transaction
         tx_id = self.transaction_mgr.begin_transaction("Row deletion with cleanup and validation")
@@ -184,7 +184,7 @@ class DatabaseDeleterV2(BaseSchemaManager):
             # Étape 1: Suppression des lignes
             operation = TransactionOperation(
                 operation_type='delete_rows',
-                operation_func=self._execute_row_deletion,
+                operation_func=self.data_mgr.delete_rows,
                 operation_args=(filters,),
                 rollback_func=self._restore_deleted_rows,
                 rollback_args=(filters, initial_count),
@@ -264,11 +264,11 @@ class DatabaseDeleterV2(BaseSchemaManager):
     def _delete_rows_direct(self, 
                           filters: Optional[Union[str, List, Dict]], 
                           perform_cleanup: bool) -> int:
-        """Suppression directe sans transaction."""
+        """Direct deletion without transaction management."""
         try:
-            # Exécution de la suppression
-            rows_deleted = self._execute_row_deletion(filters)
-            
+            # Exécution de la suppression via data manager
+            rows_deleted = self.data_mgr.delete_rows(filters)
+
             if rows_deleted > 0 and perform_cleanup:
                 # Nettoyage des données orphelines
                 self._cleanup_orphaned_data_comprehensive()
@@ -330,7 +330,7 @@ class DatabaseDeleterV2(BaseSchemaManager):
     
     # Méthode de suppression de colonnes de manière transactionnelle
     def _delete_columns_transactional(self, columns: List[str]) -> Dict[str, bool]:
-        """Suppression transactionnelle de colonnes."""
+        """Transactional column deletion with rollback support."""
         
         # Début de la transaction
         tx_id = self.transaction_mgr.begin_transaction("Column deletion with dependency management")
@@ -467,7 +467,7 @@ class DatabaseDeleterV2(BaseSchemaManager):
     
     # Suppression des colonnes sans transaction
     def _delete_columns_direct(self, columns: List[str]) -> Dict[str, bool]:
-        """Suppression directe de colonnes sans transaction."""
+        """Direct column deletion without transaction management."""
         results = {}
         
         try:
@@ -523,29 +523,9 @@ class DatabaseDeleterV2(BaseSchemaManager):
             return {col: False for col in columns}
     
     # Méthodes de suppression sécurisées
-    # Méthode de suppression des lignes
-    def _execute_row_deletion(self, filters: Optional[Union[str, List, Dict]]) -> int:
-        """Exécuter la suppression de lignes."""
-        try:
-            # Comptage initial
-            initial_count = self.conn.execute("SELECT COUNT(*) FROM fact_table").fetchone()[0]
-            
-            if initial_count == 0:
-                return 0
-            
-            # Utilisation du data manager pour la suppression
-            rows_deleted = self.data_mgr.delete_rows(filters)
-            
-            return rows_deleted
-            
-        except Exception as e:
-            # Logging
-            self.logger.error(f"Error executing row deletion: {e}")
-            raise
-    
     # Méthode auxiliaire de suppression des indexes liés à une colonne
     def _drop_column_indexes_safe(self, column: str) -> List[str]:
-        """Supprimer les index liés à une colonne de manière sécurisée."""
+        """Safely drop indexes related to a column."""
         try:
             # Initialisation de la liste des indexes supprimés
             dropped_indexes = []
@@ -581,7 +561,7 @@ class DatabaseDeleterV2(BaseSchemaManager):
     
     # Méthode auxiliaire de suppression d'une colonne de la table des faits
     def _drop_fact_table_column(self, column: str) -> bool:
-        """Supprimer une colonne de la fact table."""
+        """Drop a column from the fact table."""
         try:
             # Suppression des colonnes
             dropped_columns = self.data_mgr.drop_columns([column])
@@ -591,43 +571,94 @@ class DatabaseDeleterV2(BaseSchemaManager):
             self.logger.error(f"Error dropping fact table column {column}: {e}")
             return False
     
+    # Méthode de détection des colonnes devenant catégorielles après suppression de lignes
+    def _detect_new_categorical_after_deletion(self) -> List[str]:
+        """
+        Detect non-categorical columns that should become categorical after row deletion.
+
+        Returns:
+            List of column names that were converted to categorical
+
+        Example:
+            >>> deleter.delete_rows({'status': 'inactive'})
+            >>> converted = deleter._detect_new_categorical_after_deletion()
+            >>> print(f"Columns converted to categorical: {converted}")
+        """
+        # Initialisation de la liste des colonnes converties
+        converted = []
+
+        try:
+            # Chargement des métadonnées actuelles
+            metadata = self._load_current_metadata()
+
+            # Filtrage des colonnes non-catégorielles de type object
+            non_categorical = metadata[
+                (metadata['is_categorical'] == False) &
+                (metadata['python_type'] == 'object')
+            ]
+
+            # Parcours des colonnes candidates
+            for _, row in non_categorical.iterrows():
+                col_name = row['name']
+
+                # Vérification de l'existence de la colonne dans fact_table
+                if not self._column_exists(col_name, 'fact_table'):
+                    continue
+
+                # Comptage des valeurs uniques non nulles
+                unique_count = self.conn.execute(
+                    f"SELECT COUNT(DISTINCT {col_name}) FROM fact_table WHERE {col_name} IS NOT NULL"
+                ).fetchone()[0]
+
+                # Vérification du seuil catégoriel
+                if unique_count <= self.categorical_threshold:
+                    # Extraction des valeurs distinctes
+                    values = self.conn.execute(
+                        f"SELECT DISTINCT {col_name} FROM fact_table WHERE {col_name} IS NOT NULL"
+                    ).fetchdf()[col_name]
+
+                    # Conversion en catégorielle via dimension manager
+                    if self.dimension_mgr.convert_to_categorical(col_name, values):
+                        converted.append(col_name)
+                        self.logger.info(f"Column {col_name} converted to categorical (unique values: {unique_count})")
+
+        except Exception as e:
+            self.logger.error(f"Error detecting new categorical columns after deletion: {e}")
+
+        return converted
+
     # Méthode auxiliaire de suppression des données orphelines
     def _cleanup_orphaned_data_comprehensive(self) -> Dict[str, Any]:
-        """Nettoyage complet des données orphelines."""
+        """Comprehensive cleanup of orphaned data."""
         try:
             # Initialisation du dictionnaire résultat
             results = {
                 'orphaned_dimensions': {},
                 'null_columns': [],
-                'orphaned_indexes': []
+                'orphaned_indexes': [],
+                'new_categoricals': []
             }
-            
-            # Nettoyage des dimensions orphelines
+
+            # Étape 1: Nettoyage des dimensions orphelines
             results['orphaned_dimensions'] = self.dimension_mgr.cleanup_orphaned_dimension_entries()
-            
-            # Suppression des colonnes ne contenant que des nulles
-            # Détection des colonnes nulles
+
+            # Étape 2: Suppression des colonnes ne contenant que des nulles
+            # Utilisation de delete_columns pour assurer le nettoyage complet (dimensions, indexes, métadonnées)
             null_only_columns = self._get_null_only_columns()
-            # Suppression des colonnes
             if null_only_columns:
-                dropped_columns = self.data_mgr.drop_columns(null_only_columns)
-                # Ajout au résultat
-                results['null_columns'] = dropped_columns
-                
-                # Suppression des métadonnées pour ces colonnes
-                for col in dropped_columns:
-                    try:
-                        # Suppression des méta-données associées à la colonne supprimée
-                        self.delete_column_metadata(col)
-                    except Exception as e:
-                        # Logging
-                        self.logger.warning(f"Failed to delete metadata for {col}: {e}")
-            
-            # Nettoyage des index orphelins
+                # Suppression via delete_columns (sans transaction car déjà dans un contexte)
+                column_results = self.delete_columns(null_only_columns, use_transaction=False)
+                # Ajout des colonnes supprimées avec succès au résultat
+                results['null_columns'] = [col for col, success in column_results.items() if success]
+
+            # Étape 3: Nettoyage des index orphelins
             results['orphaned_indexes'] = self._cleanup_orphaned_indexes()
-            
+
+            # Étape 4: Détection des variables devenues catégorielles après suppression
+            results['new_categoricals'] = self._detect_new_categorical_after_deletion()
+
             return results
-            
+
         except Exception as e:
             # Logging
             self.logger.error(f"Error during comprehensive cleanup: {e}")
@@ -635,7 +666,7 @@ class DatabaseDeleterV2(BaseSchemaManager):
     
     # Méthode auxiliaire de suppression des index orphelins
     def _cleanup_orphaned_indexes(self) -> List[str]:
-        """Nettoyer les index orphelins."""
+        """Clean up orphaned indexes."""
         try:
             # Initialisation de la liste des indexs nettoyés
             cleaned_indexes = []
@@ -679,14 +710,14 @@ class DatabaseDeleterV2(BaseSchemaManager):
     # Méthodes de rollback
     # Méthode auxiliaire de restauration des lignes supprimées
     def _restore_deleted_rows(self, filters: Optional[Union[str, List, Dict]], initial_count: int) -> bool:
-        """Restaurer les lignes supprimées (placeholder - géré par transaction DuckDB)."""
+        """Restore deleted rows (placeholder - handled by DuckDB transaction)."""
         # Logging
         self.logger.info("Deleted rows restoration handled by database transaction")
         return True
     
     # Méthode auxiliaire de restauration des index d'une colonne
     def _restore_column_indexes(self, column: str) -> bool:
-        """Restaurer les index de colonne (placeholder - géré par transaction DuckDB)."""
+        """Restore column indexes (placeholder - handled by DuckDB transaction)."""
         # Logging
         self.logger.info(f"Column indexes restoration for {column} handled by database transaction")
         return True
@@ -694,27 +725,38 @@ class DatabaseDeleterV2(BaseSchemaManager):
     # Méthode auxiliaire de restaurarion de la table de dimension associée à une colonne
     def _restore_dimension_table(self, column: str) -> bool:
         # Logging
-        """Restaurer une table de dimension (placeholder - géré par transaction DuckDB)."""
+        """Restore a dimension table (placeholder - handled by DuckDB transaction)."""
         self.logger.info(f"Dimension table restoration for {column} handled by database transaction")
         return True
     
     # Méthode auxiliaire de restauration d'une colonne de la table des faits
     def _restore_fact_table_column(self, column: str) -> bool:
-        """Restaurer une colonne de fact table (placeholder - géré par transaction DuckDB)."""
+        """Restore a fact table column (placeholder - handled by DuckDB transaction)."""
         # Logging
         self.logger.info(f"Fact table column restoration for {column} handled by database transaction")
         return True
     
     # Méthode auxiliaire de restauration d'une colonne de la table des méta-données
     def _restore_column_metadata(self, column: str) -> bool:
-        """Restaurer les métadonnées de colonne (placeholder - géré par transaction DuckDB)."""
+        """Restore column metadata (placeholder - handled by DuckDB transaction).
+
+        Args:
+            column: Name of the column whose metadata to restore.
+
+        Returns:
+            True (actual restoration handled by database transaction rollback).
+        """
         # Logging
         self.logger.info(f"Column metadata restoration for {column} handled by database transaction")
         return True
     
     # Méthode auxiliaire de restauration de données orphelines
     def _restore_orphaned_data(self) -> bool:
-        """Restaurer les données orphelines (placeholder - géré par transaction DuckDB)."""
+        """Restore orphaned data (placeholder - handled by DuckDB transaction).
+
+        Returns:
+            True (actual restoration handled by database transaction rollback).
+        """
         # Logging
         self.logger.info("Orphaned data restoration handled by database transaction")
         return True
@@ -722,7 +764,21 @@ class DatabaseDeleterV2(BaseSchemaManager):
     # Méthodes d'analyse des dépendances
     # Méthode auxiliaire d'analyse des dépendances associées à une colonne
     def _analyze_column_dependencies(self, columns: List[str]) -> Dict[str, Any]:
-        """Analyser les dépendances des colonnes."""
+        """Analyze column dependencies for deletion impact assessment.
+
+        Examines each column for dependencies including dimension tables,
+        indexes, primary key status, and critical references.
+
+        Args:
+            columns: List of column names to analyze.
+
+        Returns:
+            Dependency report containing:
+            - columns_analyzed: List of analyzed columns
+            - has_critical_dependencies: Whether any critical deps exist
+            - dependencies: Per-column dependency details
+            - warnings: List of warning messages
+        """
         try:
             # Initialisation du rapport
             dependency_report = {
@@ -769,7 +825,14 @@ class DatabaseDeleterV2(BaseSchemaManager):
                     dependency_report['warnings'].append(
                         f"Column {column} has associated indexes that will be dropped"
                     )
-                
+
+                # Vérification si la colonne est une clé primaire (dépendance critique)
+                if self._is_primary_key_column(column):
+                    dependency_report['has_critical_dependencies'] = True
+                    dependency_report['warnings'].append(
+                        f"CRITICAL: Column {column} is a primary key - deletion will break data integrity"
+                    )
+
                 dependency_report['dependencies'][column] = column_deps
             
             return dependency_report

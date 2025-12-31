@@ -85,7 +85,7 @@ class DataManager(BaseSchemaManager):
     
     # Méthode de validation des insertions de données
     def _validate_insert(self, df: pd.DataFrame, **kwargs) -> bool:
-        """Valider l'insertion de données."""
+        """Validate data insertion parameters."""
         # Validation du jeu de données à insérer
         if df is None or len(df) == 0:
             # Logging
@@ -102,7 +102,7 @@ class DataManager(BaseSchemaManager):
     
     # Méthode de validation de la mise à jour des données
     def _validate_update(self, df: pd.DataFrame, merge_keys: List[str], **kwargs) -> bool:
-        """Valider la mise à jour de données."""
+        """Validate data update parameters."""
         # Validation de l'insertion
 
         if not self._validate_insert(df, **kwargs):
@@ -124,12 +124,12 @@ class DataManager(BaseSchemaManager):
     
     # Méthode de validation de la mise à jour et l'insertion de données
     def _validate_upsert(self, df: pd.DataFrame, merge_keys: List[str], **kwargs) -> bool:
-        """Valider l'upsert de données."""
+        """Validate data upsert parameters."""
         return self._validate_update(df, merge_keys, **kwargs)
     
     # Méthode de validation de la suppression de données
     def _validate_delete(self, filters: Optional[Union[str, List]], **kwargs) -> bool:
-        """Valider la suppression de données."""
+        """Validate data deletion parameters."""
 
         # Vérification de la spécification des filtres
         if filters is None:
@@ -141,7 +141,7 @@ class DataManager(BaseSchemaManager):
     
     # Méthode de validation de l'ajout d'une colonne
     def _validate_add_column(self, column_name: str, df: pd.DataFrame, **kwargs) -> bool:
-        """Valider l'ajout de colonne."""
+        """Validate column addition parameters."""
         # Vérification que le nom est valide
         if not column_name or column_name.strip() == "":
             # logging
@@ -156,7 +156,7 @@ class DataManager(BaseSchemaManager):
     
     # Méthode de validation de la suppression de colonnes de la table des faits
     def _validate_drop_column(self, columns: List[str], **kwargs) -> bool:
-        """Valider la suppression de colonnes."""
+        """Validate column drop parameters."""
         # Vérification de la spécification des colonnes
         if not columns:
             # Logging
@@ -494,7 +494,7 @@ class DataManager(BaseSchemaManager):
     # Méthodes privées pour le traitement par lots
     # Méthode auxiliaire d'insertion par batch
     def _batch_insert_data(self, df: pd.DataFrame) -> int:
-        """Insérer des données par lots."""
+        """Insert data in batches for large datasets."""
         # Initialisation du compteur d'insertions
         total_inserted = 0
         # Logging
@@ -525,7 +525,7 @@ class DataManager(BaseSchemaManager):
     
     # Méthode d'insertion directe des données
     def _direct_insert_data(self, df: pd.DataFrame) -> int:
-        """Insérer des données directement."""
+        """Insert data directly without batch processing."""
         try:
             # Préparation des colonnes manquantes
             self._ensure_columns_exist(df)
@@ -556,7 +556,7 @@ class DataManager(BaseSchemaManager):
     
     # Méthode de mise à jour et d'insertion des données en batch
     def _batch_upsert_data(self, df: pd.DataFrame, merge_keys: List[str]) -> Tuple[int, int]:
-        """Faire un upsert par lots."""
+        """Upsert data in batches for large datasets."""
         # Initialisation des totaux
         total_inserted = 0
         total_updated = 0
@@ -585,7 +585,7 @@ class DataManager(BaseSchemaManager):
     
     # Méthode de mise à jour et d'insertion des données directement
     def _direct_upsert_data(self, df: pd.DataFrame, merge_keys: List[str]) -> Tuple[int, int]:
-        """Faire un upsert direct."""
+        """Upsert data directly without batch processing."""
         try:
             # Préparation des colonnes manquantes
             self._ensure_columns_exist(df)
@@ -656,7 +656,7 @@ class DataManager(BaseSchemaManager):
     
     # Méthode auxiliaire de vérification que toutes les colonnes d'un jeu de données existente dans la table des faits
     def _ensure_columns_exist(self, df: pd.DataFrame) -> None:
-        """S'assurer que toutes les colonnes du DataFrame existent dans la fact table."""
+        """Ensure all DataFrame columns exist in the fact table."""
         # Identification des colonnes manquantes
         existing_columns = set(self._get_fact_table_columns())
         new_columns = set(df.columns) - existing_columns

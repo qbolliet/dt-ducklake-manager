@@ -81,7 +81,7 @@ class BaseSchemaManager(ABC):
                 except:
                     # Si la table n'existe pas encore, on l'initialise vide
                     self._metadata_cache = pd.DataFrame(columns=[
-                        'name', 'label', 'python_type', 'sql_type', 'is_categorical'
+                        'name', 'label', 'python_type', 'sql_type', 'is_categorical', 'is_primary_key'
                     ])
             
             return self._metadata_cache.copy()
@@ -172,10 +172,10 @@ class BaseSchemaManager(ABC):
     def _is_dimension_column(self, column: str) -> bool:
         """
         Check if a column is a dimension (categorical).
-        
+
         Args:
             column: Column name
-            
+
         Returns:
             True if column is categorical
         """
@@ -187,7 +187,31 @@ class BaseSchemaManager(ABC):
             return result[0] if result else False
         except:
             return False
-    
+
+    # Méthode de vérification si une colonne est marquée comme clé primaire
+    def _is_primary_key_column(self, column: str) -> bool:
+        """
+        Check if a column is marked as primary key in metadata.
+
+        Args:
+            column: Column name to check
+
+        Returns:
+            True if column is a primary key
+
+        Example:
+            >>> manager._is_primary_key_column('user_id')
+            True
+        """
+        try:
+            result = self.conn.execute(
+                "SELECT is_primary_key FROM metadata WHERE name = ?",
+                [column]
+            ).fetchone()
+            return result[0] if result else False
+        except:
+            return False
+
     # Méthodes de gestion des métadonnées
     # Méthode d'ajout d'une colonne aux méta-données
     def _add_column_to_metadata(self, column: str, df: pd.DataFrame, label: Optional[str] = None) -> None:
@@ -216,7 +240,8 @@ class BaseSchemaManager(ABC):
                 label VARCHAR,
                 python_type VARCHAR,
                 sql_type VARCHAR,
-                is_categorical BOOLEAN
+                is_categorical BOOLEAN,
+                is_primary_key BOOLEAN DEFAULT FALSE
             )
         """)
         
@@ -225,8 +250,8 @@ class BaseSchemaManager(ABC):
             label = column.replace('_', ' ').title()
         
         self.conn.execute("""
-            INSERT INTO metadata (name, label, python_type, sql_type, is_categorical)
-            VALUES (?, ?, ?, ?, ?)
+            INSERT INTO metadata (name, label, python_type, sql_type, is_categorical, is_primary_key)
+            VALUES (?, ?, ?, ?, ?, FALSE)
             ON CONFLICT (name) DO UPDATE SET
                 label = excluded.label,
                 python_type = excluded.python_type,

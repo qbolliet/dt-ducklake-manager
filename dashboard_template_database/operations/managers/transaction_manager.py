@@ -18,7 +18,7 @@ FILE_PATH = Path(os.path.abspath(__file__))
 
 # Énumération des états possibles d'une transaction
 class TransactionState(Enum):
-    """Énumération des états possibles d'une transaction."""
+    """Enumeration of possible transaction states."""
     PENDING = "pending"
     RUNNING = "running"
     COMMITTED = "committed"
@@ -153,7 +153,7 @@ class TransactionManager(BaseSchemaManager):
     
     # Méthode de validation d'un commit de transaction
     def _validate_commit(self, transaction_id: Optional[str] = None, **kwargs) -> bool:
-        """Valider un commit de transaction."""
+        """Validate transaction commit parameters."""
         # Vérification que la transaction possède un identifiant et n'est plus active
         if transaction_id and transaction_id not in self._active_transactions:
             # Logging
@@ -163,7 +163,7 @@ class TransactionManager(BaseSchemaManager):
     
     # Méthode de validation d'un rollback de transaction
     def _validate_rollback(self, transaction_id: Optional[str] = None, **kwargs) -> bool:
-        """Valider un rollback de transaction."""
+        """Validate transaction rollback parameters."""
         # Vérification que la transaction possède un identifiant et n'est plus active
         if transaction_id and transaction_id not in self._active_transactions:
             # Logging
@@ -173,7 +173,7 @@ class TransactionManager(BaseSchemaManager):
     
     # Méthode de validation de l'exécution d'une opération
     def _validate_execute(self, transaction_id: str, operation: TransactionOperation, **kwargs) -> bool:
-        """Valider l'exécution d'une opération."""
+        """Validate operation execution parameters."""
         # Vérification que la transaction n'est pas active
         if transaction_id not in self._active_transactions:
             # Logging
@@ -702,7 +702,7 @@ class TransactionManager(BaseSchemaManager):
     
     # Méthode de nettoyage d'une transaction
     def _cleanup_transaction(self, transaction_id: str) -> None:
-        """Nettoyer le contexte d'une transaction terminée."""
+        """Clean up the context of a completed transaction."""
         with self._transaction_lock:
             if transaction_id in self._active_transactions:
                 del self._active_transactions[transaction_id]

@@ -84,7 +84,7 @@ class DimensionManager(BaseSchemaManager):
     
     # Méthode de validation de la création de dimensions
     def _validate_create_dimension(self, column_name: str, values: pd.Series, **kwargs) -> bool:
-        """Valider la création d'une dimension."""
+        """Validate dimension creation parameters."""
         # Validation du nom de colonne
         if not column_name or column_name.strip() == "":
             # Logging
@@ -100,12 +100,12 @@ class DimensionManager(BaseSchemaManager):
     
     # Méthode de validation de la mise à jour de dimensions
     def _validate_update_dimension(self, column_name: str, values: pd.Series, **kwargs) -> bool:
-        """Valider la mise à jour d'une dimension."""
+        """Validate dimension update parameters."""
         return self._validate_create_dimension(column_name, values, **kwargs)
     
     # Méthode de validation de la suppresion de dimension
     def _validate_delete_dimension(self, column_name: str, **kwargs) -> bool:
-        """Valider la suppression d'une dimension."""
+        """Validate dimension deletion parameters."""
         if not column_name or column_name.strip() == "":
             self.logger.error("Column name cannot be empty")
             return False
@@ -114,7 +114,7 @@ class DimensionManager(BaseSchemaManager):
     
     # Méthode de validation de la conversion d'une dimension
     def _validate_convert_dimension(self, column_name: str, values: pd.Series, **kwargs) -> bool:
-        """Valider la conversion d'une dimension."""
+        """Validate dimension conversion parameters."""
         return self._validate_create_dimension(column_name, values, **kwargs)
     
     # Méthodes principales de gestion des dimensions

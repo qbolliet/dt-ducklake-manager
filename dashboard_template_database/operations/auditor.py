@@ -19,7 +19,7 @@ FILE_PATH = Path(os.path.abspath(__file__))
 
 # Classe des niveaux de validation sur la base de données
 class ValidationLevel(Enum):
-    """Niveaux de validation pour l'audit de la base de données."""
+    """Validation levels for database auditing."""
     BASIC = "basic"
     STANDARD = "standard"
     COMPREHENSIVE = "comprehensive"
@@ -27,7 +27,7 @@ class ValidationLevel(Enum):
 
 # Classe des types de problèmes détectés
 class IssueType(Enum):
-    """Types d'issues détectées lors de l'audit."""
+    """Types of issues detected during audit."""
     SCHEMA_INCONSISTENCY = "schema_inconsistency"
     DATA_INTEGRITY = "data_integrity"
     ORPHANED_REFERENCE = "orphaned_reference"
@@ -40,7 +40,7 @@ class IssueType(Enum):
 
 # Classe des niveaux de sévérité des problèmes détectés
 class IssueSeverity(Enum):
-    """Niveaux de sévérité des issues."""
+    """Issue severity levels."""
     LOW = "low"
     MEDIUM = "medium"
     HIGH = "high"
@@ -100,27 +100,27 @@ class ValidationReport:
     
     # Méthode d'ajout d'un problème
     def add_issue(self, issue: ValidationIssue) -> None:
-        """Ajouter une issue au rapport."""
+        """Add an issue to the report."""
         self.issues.append(issue)
     
     # Méthode d'extraction des problèmes par sévérité
     def get_issues_by_severity(self, severity: IssueSeverity) -> List[ValidationIssue]:
-        """Obtenir les issues par niveau de sévérité."""
+        """Get issues by severity level."""
         return [issue for issue in self.issues if issue.severity == severity]
     
     # Méthode d'extraction des problèmes par type
     def get_issues_by_type(self, issue_type: IssueType) -> List[ValidationIssue]:
-        """Obtenir les issues par type."""
+        """Get issues by type."""
         return [issue for issue in self.issues if issue.issue_type == issue_type]
     
     # Méthode de comptage des problèmes critiques
     def get_critical_issues_count(self) -> int:
-        """Obtenir le nombre d'issues critiques."""
+        """Get the count of critical issues."""
         return len(self.get_issues_by_severity(IssueSeverity.CRITICAL))
     
     # Méthode de finalisation du rapport d'audit avec des statistiques
     def finalize(self) -> None:
-        """Finaliser le rapport avec les statistiques."""
+        """Finalize the report with statistics."""
         self.end_time = time.time()
         
         # Calcul des statistiques
@@ -139,7 +139,7 @@ class ValidationReport:
     
     # Méthode auxiliaire de génération de recommandations
     def _generate_recommendations(self) -> None:
-        """Générer des recommandations basées sur les issues trouvées."""
+        """Generate recommendations based on issues found."""
         # Identification des erreurs critiques
         critical_count = self.get_critical_issues_count()
         if critical_count > 0:
@@ -348,7 +348,7 @@ class DatabaseAuditor:
     # Méthodes de validation spécifiques
     # Méthode de validation de l'existence du schéma
     def _validate_schema_existence(self, report: ValidationReport) -> None:
-        """Valider l'existence des tables de schéma essentielles."""
+        """Validate existence of essential schema tables."""
         try:
             # Vérification des tables essentielles
             essential_tables = ['metadata']
@@ -396,7 +396,7 @@ class DatabaseAuditor:
     
     # Méthode de validation de la cohérence des méta-données
     def _validate_metadata_consistency(self, report: ValidationReport) -> None:
-        """Valider la cohérence des métadonnées."""
+        """Validate metadata consistency."""
         try:
             # Chargement des métadonnées
             metadata_df = self._get_metadata()
@@ -471,7 +471,7 @@ class DatabaseAuditor:
     
     # Méthode de validation de la cohérence entre la table de faits et les tables de dimension
     def _validate_fact_dimension_consistency(self, report: ValidationReport) -> None:
-        """Valider la cohérence entre la fact table et les tables de dimension."""
+        """Validate consistency between fact table and dimension tables."""
         try:
             if not self._table_exists('fact_table'):
                 return  # Déjà signalé dans _validate_schema_existence
@@ -541,6 +541,19 @@ class DatabaseAuditor:
                 )
                 report.add_issue(issue)
 
+            # Vérification des colonnes dans metadata qui ne sont pas dans fact_table (métadonnées orphelines)
+            orphaned_metadata = metadata_columns - fact_columns
+
+            if orphaned_metadata:
+                issue = ValidationIssue(
+                    issue_type=IssueType.MISSING_METADATA,
+                    severity=IssueSeverity.MEDIUM,
+                    table_name='metadata',
+                    description=f"Columns in metadata not found in fact_table: {list(orphaned_metadata)}",
+                    suggested_fix="Remove orphaned metadata entries or add missing columns to fact_table"
+                )
+                report.add_issue(issue)
+
         except Exception as e:
             # Création d'un problème dans le rapport associé à l'erreur
             issue = ValidationIssue(
@@ -554,7 +567,7 @@ class DatabaseAuditor:
     
     # Méthode de validation de l'intégrité référentielle entre la table des faits et la table de dimension
     def _validate_referential_integrity(self, report: ValidationReport, col_name: str, dim_table_name: str) -> None:
-        """Valider l'intégrité référentielle entre fact table et dimension."""
+        """Validate referential integrity between fact table and dimension."""
         try:
             # Vérification des valeurs orphelines dans fact_table (ie qui ne sont pas référencées dans la table de dimension)
             orphaned_query = f"""
@@ -615,7 +628,7 @@ class DatabaseAuditor:
     
     # Méthode de validation de la cohérence des types de données entre la table des méta-données et la table des faits
     def _validate_data_types_consistency(self, report: ValidationReport) -> None:
-        """Valider la cohérence des types de données."""
+        """Validate data type consistency."""
         try:
             if not self._table_exists('fact_table'):
                 return
@@ -670,7 +683,7 @@ class DatabaseAuditor:
     
     # Méthode de validation des variables catégorielles par rapport au seuil et à leur nombre de modalités
     def _validate_categorical_thresholds(self, report: ValidationReport) -> None:
-        """Valider les seuils catégoriels."""
+        """Validate categorical thresholds."""
         try:
             # Extraction de méta-données
             metadata_df = self._get_metadata()
@@ -742,7 +755,7 @@ class DatabaseAuditor:
     
     # Méthode de détection des références orphelines
     def _validate_orphaned_references(self, report: ValidationReport) -> None:
-        """Valider et détecter les références orphelines."""
+        """Validate and detect orphaned references."""
         try:
             # Recherche des tables de dimension orphelines
             # Extraction des tables de dimension existantes
@@ -789,7 +802,7 @@ class DatabaseAuditor:
     
     # Méthode de validation de l'efficacité des index
     def _validate_index_efficiency(self, report: ValidationReport) -> None:
-        """Valider l'efficacité des index."""
+        """Validate index effectiveness."""
         try:
             # Récupération des index existants
             indexes = self._get_existing_indexes()
@@ -847,7 +860,7 @@ class DatabaseAuditor:
     
     # Méthode de validation de la qualité des données
     def _validate_data_quality(self, report: ValidationReport) -> None:
-        """Valider la qualité des données."""
+        """Validate data quality."""
         try:
             # Vérification de l'existence de la table des faits
             if not self._table_exists('fact_table'):
@@ -917,7 +930,7 @@ class DatabaseAuditor:
     
     # Méthode de vérification de l'unicité des clés primaires dans les tables de dimension
     def _validate_constraint_violations(self, report: ValidationReport) -> None:
-        """Valider les violations de contraintes."""
+        """Validate constraint violations."""
         try:
             # Vérification des contraintes de clé primaire dans les tables de dimension
             # Identification des tables de dimension
@@ -965,7 +978,7 @@ class DatabaseAuditor:
     # Méthodes de validation des préconditions d'opération
     # Méthode de validation des conditions préalables à une opération d'insertion
     def _validate_insert_preconditions(self, report: ValidationReport, df: pd.DataFrame = None, **kwargs) -> None:
-        """Valider les préconditions d'insertion."""
+        """Validate insert preconditions."""
         # Vérifiation que le jeu de données est spécifié
         if df is None:
             issue = ValidationIssue(
@@ -1003,7 +1016,7 @@ class DatabaseAuditor:
     
     # Méthode de validation des conditions préalables à une mise à jour de la base de données
     def _validate_update_preconditions(self, report: ValidationReport, df: pd.DataFrame = None, merge_keys: List[str] = None, **kwargs) -> None:
-        """Valider les préconditions de mise à jour."""
+        """Validate update preconditions."""
         # Vérification des conditions d'insertions
         self._validate_insert_preconditions(report, df, **kwargs)
         
@@ -1033,7 +1046,7 @@ class DatabaseAuditor:
     
     # Méthode de validation des conditions préalable à la suppression de données
     def _validate_delete_preconditions(self, report: ValidationReport, filters: Any = None, **kwargs) -> None:
-        """Valider les préconditions de suppression."""
+        """Validate delete preconditions."""
         # Vérification de l'existence du filtre de suppression des données
         if filters is None:
             issue = ValidationIssue(
@@ -1047,7 +1060,7 @@ class DatabaseAuditor:
     
     # méthode de validation des conditions préalable à un changement de schéma dans la base de données
     def _validate_schema_change_preconditions(self, report: ValidationReport, **kwargs) -> None:
-        """Valider les préconditions de changement de schéma."""
+        """Validate schema change preconditions."""
         # Vérification de l'existence des tables avant modification
         if not self._table_exists('fact_table'):
             issue = ValidationIssue(
@@ -1062,7 +1075,7 @@ class DatabaseAuditor:
     # Méthodes utilitaires privées
     # Méthode auxiliaire d'obtention des tables de la base de données
     def _get_existing_tables(self) -> List[str]:
-        """Obtenir la liste des tables existantes."""
+        """Get the list of existing tables."""
         try:
             result = self.conn.execute("SHOW TABLES").fetchall()
             return [row[0] for row in result]
@@ -1071,7 +1084,7 @@ class DatabaseAuditor:
     
     # Méthode auxiliaire d'extraction des colonnes de la table des faits
     def _get_fact_table_columns(self) -> List[str]:
-        """Obtenir les colonnes de la fact table."""
+        """Get fact table columns."""
         try:
             result = self.conn.execute("DESCRIBE fact_table").fetchall()
             return [row[0] for row in result]
@@ -1080,7 +1093,7 @@ class DatabaseAuditor:
     
     # Méthode auxiliaire d'extraction des coonnes d'une table spécifique
     def _get_table_columns(self, table_name: str) -> List[str]:
-        """Obtenir les colonnes d'une table spécifique."""
+        """Get columns from a specific table."""
         try:
             result = self.conn.execute(f"DESCRIBE {table_name}").fetchall()
             return [row[0] for row in result]
@@ -1089,7 +1102,7 @@ class DatabaseAuditor:
     
     # Méthode auxiliaire de description d'une table
     def _get_table_structure(self, table_name: str) -> List[Tuple]:
-        """Obtenir la structure complète d'une table."""
+        """Get the complete structure of a table."""
         try:
             return self.conn.execute(f"DESCRIBE {table_name}").fetchall()
         except:
@@ -1097,7 +1110,7 @@ class DatabaseAuditor:
     
     # Méthode auxiliaire d'extraction des métadonnées
     def _get_metadata(self) -> pd.DataFrame:
-        """Obtenir les métadonnées."""
+        """Get metadata table content."""
         try:
             return self.conn.execute("SELECT * FROM metadata").fetchdf()
         except:
@@ -1105,7 +1118,7 @@ class DatabaseAuditor:
     
     # Méthode auxiliaire d'obtention de la liste des indices disponibles dans la base de données
     def _get_existing_indexes(self) -> List[Dict[str, str]]:
-        """Obtenir la liste des index existants."""
+        """Get the list of existing indexes."""
         try:
             result = self.conn.execute("SELECT index_name, expressions FROM duckdb_indexes()").fetchall()
             return [{'index_name': row[0], 'expressions': row[1]} for row in result]
@@ -1114,7 +1127,7 @@ class DatabaseAuditor:
     
     # méthode auxiliaire de vérification de l'existence d'une table
     def _table_exists(self, table_name: str) -> bool:
-        """Vérifier si une table existe."""
+        """Check if a table exists."""
         try:
             self.conn.execute(f"SELECT 1 FROM {table_name} LIMIT 1")
             return True
@@ -1123,13 +1136,13 @@ class DatabaseAuditor:
     
     # Méthode auxiliaire de vérification de l'existence d'une colonne dans la table des faits
     def _column_exists_in_fact_table(self, column_name: str) -> bool:
-        """Vérifier si une colonne existe dans fact_table."""
+        """Check if a column exists in fact_table."""
         fact_columns = self._get_fact_table_columns()
         return column_name in fact_columns
     
     # Méthode auxiliaire de vérification de la compatibilité des types entre eux
     def _types_are_compatible(self, expected_type: str, actual_type: str) -> bool:
-        """Vérifier si deux types SQL sont compatibles."""
+        """Check if two SQL types are compatible."""
         # Normalisation des types pour comparaison
         expected_normalized = expected_type.upper().strip()
         actual_normalized = actual_type.upper().strip()

@@ -192,7 +192,22 @@ class DatabaseUpdaterV2(BaseSchemaManager):
                                      keep: Literal[False, 'first', 'last'],
                                      index_config: Optional[Dict],
                                      use_batch_processing: bool) -> bool:
-        """Mise à jour transactionnelle de la base de données."""
+        """Perform transactional database update with validation and rollback.
+
+        Executes the update within a transaction, allowing rollback on failure.
+        Steps: preprocess → duplicate removal → metadata → fact table → dimensions → indexes.
+
+        Args:
+            update_df: DataFrame containing the update data.
+            check_duplicates_db: Whether to check and remove duplicates in database.
+            check_duplicates_update: Whether to check and remove duplicates in update data.
+            keep: Duplicate handling strategy ('first', 'last', or False).
+            index_config: Optional index configuration dictionary.
+            use_batch_processing: Whether to use batch processing for large datasets.
+
+        Returns:
+            True if update succeeded and committed, False otherwise.
+        """
         
         # Début de la transaction
         tx_id = self.transaction_mgr.begin_transaction("Database update with validation and rollback")
@@ -265,27 +280,7 @@ class DatabaseUpdaterV2(BaseSchemaManager):
                 self.transaction_mgr.rollback_transaction(tx_id)
                 return False
             
-            # Étape 4: Mise à jour des tables de dimensions
-            # Initialisation de l'opération de transaction
-            operation = TransactionOperation(
-                operation_type='dimension_update',
-                operation_func=self._update_dimensions_safe,
-                operation_args=(update_df,),
-                rollback_func=self._rollback_dimension_changes,
-                description="Update dimension tables"
-            )
-            
-            # Annulation de la transaction si l'opération ne peut être ajoutée
-            if not self.transaction_mgr.add_operation(tx_id, **operation.__dict__):
-                self.transaction_mgr.rollback_transaction(tx_id)
-                return False
-            
-            # Annulation de la transaction si l'opération ne peut être exécutée
-            if not self.transaction_mgr.execute_operation(tx_id):
-                self.transaction_mgr.rollback_transaction(tx_id)
-                return False
-            
-            # Étape 5: Mise à jour de la table de faits
+            # Étape 4: Mise à jour de la table de faits (avant les dimensions pour refléter l'état actuel)
             # Mise à jour en batch si spécifié
             if use_batch_processing and len(update_df) > self.batch_size:
                 # Initialisation de l'opération de transaction
@@ -305,17 +300,53 @@ class DatabaseUpdaterV2(BaseSchemaManager):
                     rollback_func=self._rollback_fact_changes,
                     description="Update fact table (direct)"
                 )
-            
+
             # Annulation de la transaction si l'opération ne peut être ajoutée
             if not self.transaction_mgr.add_operation(tx_id, **operation.__dict__):
                 self.transaction_mgr.rollback_transaction(tx_id)
                 return False
-            
+
             # Annulation de la transaction si l'opération ne peut être exécutée
             if not self.transaction_mgr.execute_operation(tx_id):
                 self.transaction_mgr.rollback_transaction(tx_id)
                 return False
-            
+
+            # Étape 5: Mise à jour des tables de dimensions (après fact table pour refléter les données actuelles)
+            # Initialisation de l'opération de transaction
+            operation = TransactionOperation(
+                operation_type='dimension_update',
+                operation_func=self._update_dimensions_safe,
+                operation_args=(update_df,),
+                rollback_func=self._rollback_dimension_changes,
+                description="Update dimension tables"
+            )
+
+            # Annulation de la transaction si l'opération ne peut être ajoutée
+            if not self.transaction_mgr.add_operation(tx_id, **operation.__dict__):
+                self.transaction_mgr.rollback_transaction(tx_id)
+                return False
+
+            # Annulation de la transaction si l'opération ne peut être exécutée
+            if not self.transaction_mgr.execute_operation(tx_id):
+                self.transaction_mgr.rollback_transaction(tx_id)
+                return False
+
+            # Étape 5b: Nettoyage des entrées orphelines dans les tables de dimension
+            cleanup_operation = TransactionOperation(
+                operation_type='dimension_cleanup',
+                operation_func=self.dimension_mgr.cleanup_orphaned_dimension_entries,
+                operation_args=(),
+                description="Clean orphaned dimension entries"
+            )
+
+            if not self.transaction_mgr.add_operation(tx_id, **cleanup_operation.__dict__):
+                self.transaction_mgr.rollback_transaction(tx_id)
+                return False
+
+            if not self.transaction_mgr.execute_operation(tx_id):
+                self.transaction_mgr.rollback_transaction(tx_id)
+                return False
+
             # Étape 6: Mise à jour des index
             # Si un index est spécifié
             if index_config:
@@ -378,7 +409,22 @@ class DatabaseUpdaterV2(BaseSchemaManager):
                               keep: Literal[False, 'first', 'last'],
                               index_config: Optional[Dict],
                               use_batch_processing: bool) -> bool:
-        """Mise à jour directe sans transaction (pour les cas simples)."""
+        """Perform direct database update without transaction wrapping.
+
+        Suitable for simple updates where rollback capability is not needed.
+        Faster but no automatic rollback on partial failure.
+
+        Args:
+            update_df: DataFrame containing the update data.
+            check_duplicates_db: Whether to check and remove duplicates in database.
+            check_duplicates_update: Whether to check and remove duplicates in update data.
+            keep: Duplicate handling strategy ('first', 'last', or False).
+            index_config: Optional index configuration dictionary.
+            use_batch_processing: Whether to use batch processing for large datasets.
+
+        Returns:
+            True if update completed successfully, False otherwise.
+        """
         try:
             # Suppression des doublons dans les données de mise à jour
             if check_duplicates_update:
@@ -391,25 +437,28 @@ class DatabaseUpdaterV2(BaseSchemaManager):
             # Mise à jour des métadonnées
             if not self._update_metadata_safe(update_df):
                 return False
-            
-            # Mise à jour des tables de dimensions
-            if not self._update_dimensions_safe(update_df):
-                return False
-            
-            # Mise à jour de la table de faits
-            # Mise à jour par batcjs si spécifié
+
+            # Mise à jour de la table de faits (avant les dimensions pour refléter l'état actuel)
+            # Mise à jour par batch si spécifié
             if use_batch_processing and len(update_df) > self.batch_size:
                 if not self._update_fact_table_batch(update_df):
                     return False
             else:
                 if not self._update_fact_table_direct(update_df):
                     return False
-            
+
+            # Mise à jour des tables de dimensions (après fact table pour refléter les données actuelles)
+            if not self._update_dimensions_safe(update_df):
+                return False
+
+            # Nettoyage des entrées orphelines dans les tables de dimension
+            self.dimension_mgr.cleanup_orphaned_dimension_entries()
+
             # Mise à jour des index
             if index_config:
                 if not self._update_indexes_safe(index_config):
                     return False
-            
+
             # Nettoyage final
             self._cleanup_orphaned_data()
             
@@ -427,7 +476,14 @@ class DatabaseUpdaterV2(BaseSchemaManager):
     # Méthodes de mise à jour sécurisées
     # Méthode auxiliaire de mise à jour des méta-données
     def _update_metadata_safe(self, update_df: pd.DataFrame) -> bool:
-        """Mise à jour sécurisée des métadonnées."""
+        """Safely update metadata table with type conflict resolution.
+
+        Args:
+            update_df: DataFrame whose columns may require metadata updates.
+
+        Returns:
+            True if metadata updated successfully, False on error.
+        """
         try:
             # Chargement des métadonnées actuelles
             current_metadata = self._load_current_metadata()
@@ -447,7 +503,17 @@ class DatabaseUpdaterV2(BaseSchemaManager):
     
     # Méthode auxiliaire de mise à jour des tables de dimension
     def _update_dimensions_safe(self, update_df: pd.DataFrame) -> bool:
-        """Mise à jour sécurisée des dimensions."""
+        """Safely update dimension tables with categorical threshold checks.
+
+        Handles conversion between categorical and non-categorical status
+        based on unique value counts relative to the threshold.
+
+        Args:
+            update_df: DataFrame containing potential dimension updates.
+
+        Returns:
+            True if dimensions updated successfully, False on error.
+        """
         try:
             # Chargement des métadonnées
             current_metadata = self._load_current_metadata()
@@ -508,7 +574,14 @@ class DatabaseUpdaterV2(BaseSchemaManager):
     
     # Méthode auxiliaire de mise à jour directe de la table des faits
     def _update_fact_table_direct(self, update_df: pd.DataFrame) -> bool:
-        """Mise à jour directe de la table de faits."""
+        """Update fact table directly without batch processing.
+
+        Args:
+            update_df: DataFrame containing the data to upsert.
+
+        Returns:
+            True if fact table updated successfully, False on error.
+        """
         try:
             # Préparation des données pour la fact table
             prepared_df = self._prepare_dataframe_for_fact_table(update_df)
@@ -534,7 +607,14 @@ class DatabaseUpdaterV2(BaseSchemaManager):
     
     # Méthode auxiliaire de la mise à jour par batch de la table des faits
     def _update_fact_table_batch(self, update_df: pd.DataFrame) -> bool:
-        """Mise à jour par batch de la table de faits."""
+        """Update fact table using batch processing for large datasets.
+
+        Args:
+            update_df: DataFrame containing the data to upsert in batches.
+
+        Returns:
+            True if fact table updated successfully, False on error.
+        """
         try:
             # Préparation des données pour la fact table
             prepared_df = self._prepare_dataframe_for_fact_table(update_df)
@@ -562,7 +642,15 @@ class DatabaseUpdaterV2(BaseSchemaManager):
     
     # Méthode auxiliaire de mise à jour des index
     def _update_indexes_safe(self, index_config: Dict) -> bool:
-        """Mise à jour sécurisée des index."""
+        """Safely update database indexes based on configuration.
+
+        Args:
+            index_config: Dictionary containing index configuration.
+                - drop_existing: Whether to drop existing indexes first.
+
+        Returns:
+            True if indexes updated successfully, False on error.
+        """
         try:
             # Création d'un gestionnaire d'index
             index_manager = IndexManager(connection=self.conn)
@@ -601,7 +689,11 @@ class DatabaseUpdaterV2(BaseSchemaManager):
     # Méthodes de rollback
     # Méthode auxiliaire de rollback des changements de métadonnées
     def _rollback_metadata_changes(self) -> bool:
-        """Rollback des changements de métadonnées."""
+        """Rollback metadata changes by invalidating cache.
+
+        Returns:
+            True if rollback succeeded, False on error.
+        """
         try:
             # Invalidation du cache pour forcer le rechargement
             self._invalidate_metadata_cache()
@@ -615,7 +707,11 @@ class DatabaseUpdaterV2(BaseSchemaManager):
     
     # Méthode auxiliaire de rollback des changements de dimensions
     def _rollback_dimension_changes(self) -> bool:
-        """Rollback des changements de dimensions."""
+        """Rollback dimension table changes (handled by DuckDB transaction).
+
+        Returns:
+            True if rollback succeeded, False on error.
+        """
         try:
             # Les changements de dimension sont gérés par la transaction DuckDB
             self.logger.info("Dimension changes rolled back")
@@ -627,7 +723,11 @@ class DatabaseUpdaterV2(BaseSchemaManager):
     
     # Méthode auxiliaire de rollback des changements de la fact table.
     def _rollback_fact_changes(self) -> bool:
-        """Rollback des changements de la fact table."""
+        """Rollback fact table changes (handled by DuckDB transaction).
+
+        Returns:
+            True if rollback succeeded, False on error.
+        """
         try:
             # Les changements de fact table sont gérés par la transaction DuckDB
             # Logging
@@ -640,7 +740,11 @@ class DatabaseUpdaterV2(BaseSchemaManager):
     
     # Méthode auxiliaire de rollback des changements d'index.
     def _rollback_index_changes(self) -> bool:
-        """Rollback des changements d'index."""
+        """Rollback index changes (handled by DuckDB transaction).
+
+        Returns:
+            True if rollback succeeded, False on error.
+        """
         try:
             # Les changements d'index sont gérés par la transaction DuckDB
             # Logging
@@ -654,7 +758,17 @@ class DatabaseUpdaterV2(BaseSchemaManager):
     # Méthodes utilitaires
     # Méthode auxiliaire de préparation du jeu de données pour la table des faits
     def _prepare_dataframe_for_fact_table(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Préparer le DataFrame pour la fact table."""
+        """Prepare DataFrame for fact table insertion.
+
+        Converts categorical columns to their dimension table values
+        and handles unmapped values.
+
+        Args:
+            df: Original DataFrame to prepare.
+
+        Returns:
+            Prepared DataFrame with categorical columns mapped to dimension values.
+        """
         try:
             # Copie du DataFrame
             prepared_df = df.copy()
@@ -693,7 +807,15 @@ class DatabaseUpdaterV2(BaseSchemaManager):
     
     # Méthode auxiliaire de suppression des doublons des données de mise à jour
     def _remove_update_duplicates(self, update_df: pd.DataFrame, keep: Literal[False, 'first', 'last']) -> bool:
-        """Supprimer les doublons des données de mise à jour."""
+        """Remove duplicates from update DataFrame.
+
+        Args:
+            update_df: DataFrame to deduplicate.
+            keep: Strategy for keeping duplicates ('first', 'last', or False).
+
+        Returns:
+            True if deduplication succeeded, False on error.
+        """
         try:
             # Cette méthode modifie le DataFrame en place via la référence
             cleaned_df = remove_dataframe_duplicates(update_df, keep, self.logger, 'update')
@@ -705,12 +827,27 @@ class DatabaseUpdaterV2(BaseSchemaManager):
     
     # Méthode auxiliaire de nettoyage des données mises à jour
     def _get_cleaned_update_data(self, update_df: pd.DataFrame, keep: Literal[False, 'first', 'last']) -> pd.DataFrame:
-        """Obtenir les données de mise à jour nettoyées."""
+        """Get deduplicated update data.
+
+        Args:
+            update_df: Original DataFrame with potential duplicates.
+            keep: Strategy for keeping duplicates ('first', 'last', or False).
+
+        Returns:
+            DataFrame with duplicates removed according to keep strategy.
+        """
         return remove_dataframe_duplicates(update_df, keep, self.logger, 'update')
     
     # Méthode auxiliaire de suppression des doublons dans la base de données
     def _remove_database_duplicates(self, keep: Literal[False, 'first', 'last']) -> bool:
-        """Supprimer les doublons de la base de données."""
+        """Remove duplicate rows from the database fact table.
+
+        Args:
+            keep: Strategy for keeping duplicates ('first', 'last', or False).
+
+        Returns:
+            True if deduplication succeeded, False on error.
+        """
         try:
             from ..utils.data_processing import build_database_duplicate_removal_query
             
@@ -745,7 +882,11 @@ class DatabaseUpdaterV2(BaseSchemaManager):
     
     # Méthode auxuliaire de restoration de la base de données
     def _restore_database_state(self) -> bool:
-        """Restaurer l'état de la base de données (méthode placeholder)."""
+        """Restore database state (placeholder - handled by DuckDB transaction).
+
+        Returns:
+            True (actual restoration handled by database transaction rollback).
+        """
         # Cette méthode est un placeholder pour la restauration d'état
         # En pratique, cela serait géré par la transaction DuckDB
         self.logger.info("Database state restoration handled by transaction")
@@ -753,7 +894,10 @@ class DatabaseUpdaterV2(BaseSchemaManager):
     
     # Méthode auxiliaire de nettoyage des données orphelines
     def _cleanup_orphaned_data(self) -> None:
-        """Nettoyer les données orphelines."""
+        """Clean up orphaned data after update operations.
+
+        Removes orphaned dimension entries and drops null-only columns.
+        """
         try:
             # Nettoyage des entrées orphelines dans les dimensions
             removed_counts = self.dimension_mgr.cleanup_orphaned_dimension_entries()
