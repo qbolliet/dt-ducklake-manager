@@ -74,7 +74,8 @@ class DuckdbTablesBuilder(SchemaBuilder):
                 label VARCHAR,
                 python_type VARCHAR,
                 sql_type VARCHAR,
-                is_categorical BOOLEAN
+                is_categorical BOOLEAN,
+                is_primary_key BOOLEAN
             )
         """)
         
