@@ -117,7 +117,8 @@ class AtomicDatabaseOperations:
     """
     
     def __init__(self, 
-                 connection: duckdb.DuckDBPyConnection,
+                 connection: Optional[duckdb.DuckDBPyConnection] = None, 
+                 path: Optional[os.PathLike]=None,
                  categorical_threshold: Optional[int] = 50,
                  log_filename: Optional[os.PathLike] = None,
                  backup_dir: Optional[os.PathLike] = None,
@@ -138,8 +139,15 @@ class AtomicDatabaseOperations:
             >>> conn = duckdb.connect('database.db')
             >>> atomic_ops = AtomicDatabaseOperations(conn)
         """
-        # Initialisation de base
-        self.conn = connection
+        # Initilisation de la connexion
+        if (connection is None) & (path is None) :
+            self.conn = duckdb.connect(':memory:')
+        elif (connection is None) :
+            self.conn = duckdb.connect(path)
+        else :
+            self.conn = connection
+
+        # Initialisation du seuil pour les variables catégorielles
         self.categorical_threshold = categorical_threshold
         
         # Initialisation du logger
@@ -149,17 +157,29 @@ class AtomicDatabaseOperations:
         
         # Initialisation des gestionnaires
         self.transaction_mgr = TransactionManager(
-            connection, categorical_threshold, log_filename
+            connection=connection, 
+            path=path, 
+            categorical_threshold=categorical_threshold, 
+            log_filename=log_filename
         )
         
         self.updater = DatabaseUpdaterV2(
-            connection, categorical_threshold, log_filename, 
-            default_max_workers, default_batch_size, enable_validation=True
+            connection=connection,
+            path=path,
+            categorical_threshold=categorical_threshold,
+            log_filename=log_filename, 
+            max_workers=default_max_workers, 
+            batch_size=default_batch_size, 
+            enable_validation=True
         )
         
         self.deleter = DatabaseDeleterV2(
-            connection, categorical_threshold, log_filename, 
-            enable_validation=True, auto_cleanup=True
+            connection=connection, 
+            path=path, 
+            categorical_threshold=categorical_threshold, 
+            log_filename=log_filename, 
+            enable_validation=True, 
+            auto_cleanup=True
         )
         
         self.recovery_mgr = DatabaseRecoveryManager(

@@ -42,7 +42,8 @@ class DatabaseDeleterV2(BaseSchemaManager):
     """
     # Initialisation
     def __init__(self, 
-                 connection: duckdb.DuckDBPyConnection,
+                 connection: Optional[duckdb.DuckDBPyConnection] = None, 
+                 path: Optional[os.PathLike]=None,
                  categorical_threshold: Optional[int] = 50,
                  log_filename: Optional[os.PathLike] = None,
                  enable_validation: bool = True,
@@ -62,23 +63,23 @@ class DatabaseDeleterV2(BaseSchemaManager):
             >>> deleter = DatabaseDeleterV2(conn, enable_validation=True, auto_cleanup=True)
         """
         # Initialisation du parent
-        super().__init__(connection, categorical_threshold, log_filename)
+        super().__init__(connection=connection, path=path, categorical_threshold=categorical_threshold, log_filename=log_filename)
         
         # Initialisation des gestionnaires spécialisés
         self.dimension_mgr = DimensionManager(
-            connection, categorical_threshold, log_filename
+            connection=connection, path=path, categorical_threshold=categorical_threshold, log_filename=log_filename
         )
         
         self.data_mgr = DataManager(
-            connection, categorical_threshold, log_filename
+            connection=connection, path=path, categorical_threshold=categorical_threshold, log_filename=log_filename
         )
         
         self.transaction_mgr = TransactionManager(
-            connection, categorical_threshold, log_filename
+            connection=connection, path=path, categorical_threshold=categorical_threshold, log_filename=log_filename
         )
         
         self.auditor = DatabaseAuditor(
-            connection, categorical_threshold, log_filename
+            connection=connection, path=path, categorical_threshold=categorical_threshold, log_filename=log_filename
         ) if enable_validation else None
         
         # Configuration

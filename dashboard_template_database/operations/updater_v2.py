@@ -44,7 +44,8 @@ class DatabaseUpdaterV2(BaseSchemaManager):
     """
     # Initialisation
     def __init__(self, 
-                 connection: duckdb.DuckDBPyConnection,
+                 connection: Optional[duckdb.DuckDBPyConnection] = None, 
+                 path: Optional[os.PathLike]=None,
                  categorical_threshold: Optional[int] = 50,
                  log_filename: Optional[os.PathLike] = None,
                  max_workers: int = 4,
@@ -66,23 +67,23 @@ class DatabaseUpdaterV2(BaseSchemaManager):
             >>> updater = DatabaseUpdaterV2(conn, max_workers=8, enable_validation=True)
         """
         # Initialisation du parent
-        super().__init__(connection, categorical_threshold, log_filename)
+        super().__init__(connection=connection, path=path, categorical_threshold=categorical_threshold, log_filename=log_filename)
         
         # Initialisation des gestionnaires spécialisés
         self.dimension_mgr = DimensionManager(
-            connection, categorical_threshold, log_filename, max_workers
+            connection=connection, path=path, categorical_threshold=categorical_threshold, log_filename=log_filename, max_workers=max_workers
         )
         
         self.data_mgr = DataManager(
-            connection, categorical_threshold, log_filename, batch_size
+            connection=connection, path=path, categorical_threshold=categorical_threshold, log_filename=log_filename, batch_size=batch_size
         )
         
         self.transaction_mgr = TransactionManager(
-            connection, categorical_threshold, log_filename
+            connection=connection, path=path, categorical_threshold=categorical_threshold, log_filename=log_filename
         )
         
         self.auditor = DatabaseAuditor(
-            connection, categorical_threshold, log_filename
+            connection=connection, path=path, categorical_threshold=categorical_threshold, log_filename=log_filename
         ) if enable_validation else None
         
         # Configuration

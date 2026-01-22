@@ -33,7 +33,8 @@ class BaseSchemaManager(ABC):
     
     # Initialisation
     def __init__(self, 
-                 connection: duckdb.DuckDBPyConnection,
+                 connection: Optional[duckdb.DuckDBPyConnection] = None, 
+                 path: Optional[os.PathLike]=None,
                  categorical_threshold: Optional[int] = 50,
                  log_filename: Optional[os.PathLike] = None):
         """
@@ -48,8 +49,13 @@ class BaseSchemaManager(ABC):
             >>> conn = duckdb.connect('database.db')
             >>> manager = ConcreteManager(conn, categorical_threshold=30)
         """
-        # Initialisation de la connexion à la base de données
-        self.conn = connection
+        # Initialisation de la connexion
+        if (connection is None) & (path is None) :
+            self.conn = duckdb.connect(':memory:')
+        elif (connection is None) :
+            self.conn = duckdb.connect(path)
+        else :
+            self.conn = connection
         
         # Seuil pour déterminer si une variable est catégorielle  
         self.categorical_threshold = categorical_threshold

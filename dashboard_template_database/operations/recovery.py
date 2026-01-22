@@ -131,7 +131,8 @@ class DatabaseRecoveryManager:
     """
     # Initialisation
     def __init__(self, 
-                 connection: duckdb.DuckDBPyConnection,
+                 connection: Optional[duckdb.DuckDBPyConnection] = None, 
+                 path: Optional[os.PathLike]=None,
                  backup_dir: Optional[os.PathLike] = None,
                  categorical_threshold: Optional[int] = 50,
                  log_filename: Optional[os.PathLike] = None,
@@ -153,7 +154,12 @@ class DatabaseRecoveryManager:
             >>> recovery_mgr = DatabaseRecoveryManager(conn, backup_dir='/path/to/backups')
         """
         # Initialisation de la connexion
-        self.conn = connection
+        if (connection is None) & (path is None) :
+            self.conn = duckdb.connect(':memory:')
+        elif (connection is None) :
+            self.conn = duckdb.connect(path)
+        else :
+            self.conn = connection
         
         # Configuration des répertoires
         if backup_dir is None:

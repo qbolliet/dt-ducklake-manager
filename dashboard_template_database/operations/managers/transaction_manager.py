@@ -88,7 +88,8 @@ class TransactionManager(BaseSchemaManager):
 
     # Initialisation
     def __init__(self, 
-                 connection: duckdb.DuckDBPyConnection,
+                 connection: Optional[duckdb.DuckDBPyConnection] = None, 
+                 path: Optional[os.PathLike]=None,
                  categorical_threshold: Optional[int] = 50,
                  log_filename: Optional[os.PathLike] = None,
                  auto_commit: bool = True,
@@ -108,7 +109,7 @@ class TransactionManager(BaseSchemaManager):
             >>> tx_mgr = TransactionManager(conn, transaction_timeout=600)
         """
         # Initialisation du parent
-        super().__init__(connection, categorical_threshold, log_filename)
+        super().__init__(connection=connection, path=path, categorical_threshold=categorical_threshold, log_filename=log_filename)
         
         # Configuration des transactions
         self.auto_commit = auto_commit

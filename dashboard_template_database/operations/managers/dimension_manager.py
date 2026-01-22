@@ -29,8 +29,9 @@ class DimensionManager(BaseSchemaManager):
     """
     
     # Initialisation
-    def __init__(self, 
-                 connection: duckdb.DuckDBPyConnection,
+    def __init__(self,
+                 connection: Optional[duckdb.DuckDBPyConnection] = None, 
+                 path: Optional[os.PathLike]=None,
                  categorical_threshold: Optional[int] = 50,
                  log_filename: Optional[os.PathLike] = None,
                  max_workers: int = 4):
@@ -48,7 +49,7 @@ class DimensionManager(BaseSchemaManager):
             >>> dim_mgr = DimensionManager(conn, max_workers=8)
         """
         # Initialisation du parent
-        super().__init__(connection, categorical_threshold, log_filename)
+        super().__init__(connection=connection, path=path, categorical_threshold=categorical_threshold, log_filename=log_filename)
         
         # Configuration pour le traitement parallèle
         self.max_workers = max_workers
