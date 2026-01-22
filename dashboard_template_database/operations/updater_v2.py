@@ -15,7 +15,7 @@ from .managers.data_manager import DataManager
 from .managers.transaction_manager import (
     TransactionManager, TransactionOperation, TransactionState
 )
-from .auditor import DatabaseAuditor, ValidationLevel
+from .auditor import DatabaseAuditor, ValidationLevel, IssueSeverity
 
 # Import des utilitaires
 from ..utils.data_processing import remove_dataframe_duplicates
@@ -115,12 +115,12 @@ class DatabaseUpdaterV2(BaseSchemaManager):
             # Logging
             self.logger.error(f"Critical validation issues found for {operation_type} operation:")
             # Logging des erreurs critiques
-            for issue in validation_report.get_issues_by_severity(validation_report.IssueSeverity.CRITICAL):
+            for issue in validation_report.get_issues_by_severity(IssueSeverity.CRITICAL):
                 self.logger.error(f"  - {issue.description}")
             return False
         
         # Avertissements pour les problèmes de priorité haute
-        high_issues = validation_report.get_issues_by_severity(validation_report.IssueSeverity.HIGH)
+        high_issues = validation_report.get_issues_by_severity(IssueSeverity.HIGH)
         if high_issues:
             # Logging
             self.logger.warning(f"High priority validation issues found for {operation_type} operation:")

@@ -1026,7 +1026,7 @@ class DatabaseAuditor:
         # Vérification des conditions d'insertions
         self._validate_insert_preconditions(report, df, **kwargs)
         
-        # Vérification que des cls de jointure sont bien spécifiées
+        # Vérification que des clés de jointure sont bien spécifiées
         if merge_keys is None or len(merge_keys) == 0:
             issue = ValidationIssue(
                 issue_type=IssueType.DATA_INTEGRITY,
