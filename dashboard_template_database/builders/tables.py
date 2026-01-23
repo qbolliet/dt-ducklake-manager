@@ -3,7 +3,7 @@
 import os
 import pandas as pd
 from pathlib import Path
-from typing import Dict, Optional, Literal
+from typing import Dict, Optional, Literal, List
 # Duckdb
 import duckdb
 
@@ -29,20 +29,21 @@ class DuckdbTablesBuilder(SchemaBuilder):
     """
 
     # Initialisation
-    def __init__(self, df: pd.DataFrame, categorical_threshold: Optional[int] = 50, connection: Optional[duckdb.DuckDBPyConnection] = None, path : Optional[os.PathLike]=None, log_filename: Optional[os.PathLike] = os.path.join(FILE_PATH.parents[2], "logs/duckdb_schema_builder.log")):
+    def __init__(self, df: pd.DataFrame, categorical_threshold: Optional[int] = 50, primary_keys: Optional[List[str]] = None, connection: Optional[duckdb.DuckDBPyConnection] = None, path : Optional[os.PathLike]=None, log_filename: Optional[os.PathLike] = os.path.join(FILE_PATH.parents[2], "logs/duckdb_schema_builder.log")):
         """
         Initialize the DuckdbTablesBuilder class.
 
         Args:
             df (pd.DataFrame): The input dataset.
             categorical_threshold (Optional[int]): Threshold for determining categorical variables.
+            primary_keys (Optional[List[str]]): List of column names to use as primary key. Defaults to None.
             connection (Optional[duckdb.DuckDBPyConnection]): Existing DuckDB connection. Defaults to None.
             path (Optional[Union[os.PathLike, None]]): Path to the DuckDB database file. Defaults to None.
             log_filename (Optional[os.PathLike]): Path to the log file. Defaults to a pre-defined path.
 
         """
         # Initialisation du schéma
-        super().__init__(df=df, categorical_threshold=categorical_threshold, log_filename=log_filename)
+        super().__init__(df=df, categorical_threshold=categorical_threshold, primary_keys=primary_keys, log_filename=log_filename)
         
         # Initialisation de la connection
         if (connection is None) & (path is None) :
@@ -146,15 +147,46 @@ class DuckdbTablesBuilder(SchemaBuilder):
         
         # Enregistrement de la table comme vue temporaire
         self.conn.register('temp_fact', self.df_fact)
-        
-        # Création de la table d'information avec seulement les colonnes originales
-        query = f"""
-        CREATE TABLE {table_name} AS 
-        SELECT {', '.join(self.df_fact.columns)}
-        FROM temp_fact
-        """
-        
-        self.conn.execute(query)
+
+        # Construction de la clause PRIMARY KEY si des clés primaires sont spécifiées
+        if hasattr(self, 'primary_keys') and len(self.primary_keys) > 0:
+            # Récupération des types SQL pour chaque colonne depuis la table de métadonnées
+            column_definitions = []
+            for col in self.df_fact.columns:
+                # Extraction du type SQL depuis la métadonnée
+                sql_type = self.df_metadata.loc[self.df_metadata['name'] == col, 'sql_type'].iloc[0]
+                column_definitions.append(f"{col} {sql_type}")
+
+            # Construction de la clause PRIMARY KEY
+            pk_columns = ', '.join(self.primary_keys)
+            primary_key_clause = f"PRIMARY KEY ({pk_columns})"
+
+            # Création de la table avec contrainte de clé primaire
+            query = f"""
+                CREATE TABLE {table_name} (
+                    {', '.join(column_definitions)},
+                    {primary_key_clause}
+                )
+            """
+            self.conn.execute(query)
+
+            # Insertion des données depuis la vue temporaire
+            self.conn.execute(f"""
+                INSERT INTO {table_name}
+                SELECT {', '.join(self.df_fact.columns)}
+                FROM temp_fact
+            """)
+
+            # Logging
+            self.logger.info(f"Primary key constraint created on fact_table: ({pk_columns})")
+        else:
+            # Création sans contrainte de clé primaire
+            query = f"""
+                CREATE TABLE {table_name} AS
+                SELECT {', '.join(self.df_fact.columns)}
+                FROM temp_fact
+            """
+            self.conn.execute(query)
 
         # Suppression de la vue temporaire
         self.conn.execute('DROP VIEW temp_fact')

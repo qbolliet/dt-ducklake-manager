@@ -3,7 +3,7 @@
 import os
 import pandas as pd
 from pathlib import Path
-from typing import Dict, Optional, Tuple, Union
+from typing import Dict, Optional, Tuple, Union, List
 # Module d'initialisation du logger
 from ..utils.logger import _init_logger
 # Utilitaires de traitement des données
@@ -29,26 +29,66 @@ class SchemaBuilder:
     """
 
     # Initialisation
-    def __init__(self, df: pd.DataFrame, categorical_threshold: Optional[int] = 50, log_filename: Optional[os.PathLike] = None) -> None:
+    def __init__(self, df: pd.DataFrame, categorical_threshold: Optional[int] = 50, primary_keys: Optional[List[str]] = None, log_filename: Optional[os.PathLike] = None) -> None:
         """
         Initialize the SchemaBuilder with a DataFrame and optional parameters.
 
         Args:
             df (pd.DataFrame): The input dataset.
-            categorical_threshold (int, optional): Maximum number of unique values 
+            categorical_threshold (int, optional): Maximum number of unique values
                                                    for a column to be considered categorical. Defaults to 50.
-            log_filename (os.PathLike, optional): Path to the log file. Defaults to 
+            primary_keys (List[str], optional): List of column names to use as primary key.
+                                                Can be a single column or composite key.
+                                                Defaults to None (no primary key).
+            log_filename (os.PathLike, optional): Path to the log file. Defaults to
                                                   a file named `schema_builder.log` in a logs directory.
+
+        Examples:
+            >>> # Single primary key
+            >>> builder = SchemaBuilder(df, primary_keys=['id'])
+
+            >>> # Composite primary key
+            >>> builder = SchemaBuilder(df, primary_keys=['date', 'country', 'indicator'])
+
+            >>> # No primary key (default)
+            >>> builder = SchemaBuilder(df)
         """
         # Initialisation des arguments
         # Jeu de données
         self.df = df
-        # Initialisation du seuil au deçà duquel les modalités d'une variable catégorielle ne sont plus exportées dans 
+        # Initialisation du seuil au deçà duquel les modalités d'une variable catégorielle ne sont plus exportées dans
         self.categorical_threshold = categorical_threshold
+
+        # Validation des clés primaires si spécifiées
+        if primary_keys is not None and len(primary_keys) > 0:
+            # Vérification de l'existence des colonnes
+            missing_cols = set(primary_keys) - set(df.columns)
+            if missing_cols:
+                raise ValueError(
+                    f"The following primary key columns do not exist in the DataFrame: {missing_cols}"
+                )
+
+            # Vérification des doublons basée sur les clés primaires
+            duplicates = df.duplicated(subset=primary_keys, keep=False)
+            if duplicates.any():
+                n_duplicates = duplicates.sum()
+                raise ValueError(
+                    f"Found {n_duplicates} duplicated rows based on the primary key columns {primary_keys}. "
+                    f"Primary keys must be unique."
+                )
+
+            self.primary_keys = primary_keys
+        else:
+            self.primary_keys = []
+
         # Initialisation du logger
         if log_filename is None:
             log_filename = os.path.join(FILE_PATH.parents[2], "logs/schema_builder.log")
         self.logger = _init_logger(filename=log_filename)
+
+        # Logging de la validation des clés primaires (après initialisation du logger)
+        if len(self.primary_keys) > 0:
+            self.logger.info(f"Primary keys validated successfully: {self.primary_keys}")
     
     # Méthode inférant le type des colonnes du jeu de données 
     def create_metadata_table(self, column_labels : Optional[Union[Dict[str, str], None]]= None) -> Dict:
@@ -77,7 +117,7 @@ class SchemaBuilder:
                     'python_type': dtype,
                     'sql_type': map_python_to_sql_type(dtype),
                     'is_categorical': False,
-                    'is_primary_key': False,
+                    'is_primary_key': col in self.primary_keys,
                     # 'modalities': None
                 }
             else :
@@ -87,7 +127,7 @@ class SchemaBuilder:
                     'python_type': dtype,
                     'sql_type': map_python_to_sql_type(dtype),
                     'is_categorical': False,
-                    'is_primary_key': False,
+                    'is_primary_key': col in self.primary_keys,
                     # 'modalities': None
                 }
             
