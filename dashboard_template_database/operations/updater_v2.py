@@ -577,6 +577,11 @@ class DatabaseUpdaterV2(BaseSchemaManager):
     def _update_fact_table_direct(self, update_df: pd.DataFrame) -> bool:
         """Update fact table directly without batch processing.
 
+        Uses primary keys from metadata to determine INSERT vs UPSERT strategy:
+        - No primary keys defined: Always INSERT
+        - Primary keys defined and values exist: UPSERT
+        - Primary keys defined but no existing values: INSERT
+
         Args:
             update_df: DataFrame containing the data to upsert.
 
@@ -586,21 +591,34 @@ class DatabaseUpdaterV2(BaseSchemaManager):
         try:
             # Préparation des données pour la fact table
             prepared_df = self._prepare_dataframe_for_fact_table(update_df)
-            
-            # Détermination des clés de fusion
-            existing_columns = self.data_mgr._get_fact_table_columns()
-            merge_keys = list(set(prepared_df.columns).intersection(set(existing_columns)))
-            
-            # Upsert des données
-            if merge_keys:
-                inserted, updated = self.data_mgr.upsert_data(prepared_df, merge_keys, use_batch=False)
-                self.logger.info(f"Fact table update: {inserted} inserted, {updated} updated")
-            else:
+
+            # Récupération des clés primaires depuis les métadonnées
+            primary_keys = self._get_primary_key_columns()
+
+            # Détermination de la stratégie d'insertion/mise à jour basée sur les clés primaires
+            if not primary_keys:
+                # Pas de clés primaires définies → toujours INSERT
                 inserted = self.data_mgr.insert_data(prepared_df, use_batch=False)
-                self.logger.info(f"Fact table insert: {inserted} rows")
-            
+                self.logger.info(f"Fact table insert (no primary keys): {inserted} rows")
+            else:
+                # Vérification que les clés primaires sont présentes dans le DataFrame
+                missing_keys = [key for key in primary_keys if key not in prepared_df.columns]
+                if missing_keys:
+                    self.logger.error(f"Primary keys missing in DataFrame: {missing_keys}")
+                    return False
+
+                # Vérification si des valeurs de clés primaires existent déjà dans la fact_table
+                if self._primary_key_values_exist(prepared_df, primary_keys):
+                    # UPSERT avec les clés primaires comme merge_keys
+                    inserted, updated = self.data_mgr.upsert_data(prepared_df, primary_keys, use_batch=False)
+                    self.logger.info(f"Fact table upsert: {inserted} inserted, {updated} updated")
+                else:
+                    # INSERT car pas de valeurs existantes correspondantes
+                    inserted = self.data_mgr.insert_data(prepared_df, use_batch=False)
+                    self.logger.info(f"Fact table insert (new primary key values): {inserted} rows")
+
             return True
-            
+
         except Exception as e:
             # Logging
             self.logger.error(f"Error updating fact table: {e}")
@@ -609,6 +627,11 @@ class DatabaseUpdaterV2(BaseSchemaManager):
     # Méthode auxiliaire de la mise à jour par batch de la table des faits
     def _update_fact_table_batch(self, update_df: pd.DataFrame) -> bool:
         """Update fact table using batch processing for large datasets.
+
+        Uses primary keys from metadata to determine INSERT vs UPSERT strategy:
+        - No primary keys defined: Always INSERT
+        - Primary keys defined and values exist: UPSERT
+        - Primary keys defined but no existing values: INSERT
 
         Args:
             update_df: DataFrame containing the data to upsert in batches.
@@ -619,28 +642,96 @@ class DatabaseUpdaterV2(BaseSchemaManager):
         try:
             # Préparation des données pour la fact table
             prepared_df = self._prepare_dataframe_for_fact_table(update_df)
-            
-            # Détermination des clés de fusion
-            existing_columns = self.data_mgr._get_fact_table_columns()
-            merge_keys = list(set(prepared_df.columns).intersection(set(existing_columns)))
-            
-            # Upsert des données par batch
-            if merge_keys:
-                inserted, updated = self.data_mgr.upsert_data(prepared_df, merge_keys, use_batch=True)
-                # Logging
-                self.logger.info(f"Fact table batch update: {inserted} inserted, {updated} updated")
-            else:
+
+            # Récupération des clés primaires depuis les métadonnées
+            primary_keys = self._get_primary_key_columns()
+
+            # Détermination de la stratégie d'insertion/mise à jour basée sur les clés primaires
+            if not primary_keys:
+                # Pas de clés primaires définies → toujours INSERT
                 inserted = self.data_mgr.insert_data(prepared_df, use_batch=True)
-                # Logging
-                self.logger.info(f"Fact table batch insert: {inserted} rows")
-            
+                self.logger.info(f"Fact table batch insert (no primary keys): {inserted} rows")
+            else:
+                # Vérification que les clés primaires sont présentes dans le DataFrame
+                missing_keys = [key for key in primary_keys if key not in prepared_df.columns]
+                if missing_keys:
+                    self.logger.error(f"Primary keys missing in DataFrame: {missing_keys}")
+                    return False
+
+                # Vérification si des valeurs de clés primaires existent déjà dans la fact_table
+                if self._primary_key_values_exist(prepared_df, primary_keys):
+                    # UPSERT avec les clés primaires comme merge_keys
+                    inserted, updated = self.data_mgr.upsert_data(prepared_df, primary_keys, use_batch=True)
+                    self.logger.info(f"Fact table batch upsert: {inserted} inserted, {updated} updated")
+                else:
+                    # INSERT car pas de valeurs existantes correspondantes
+                    inserted = self.data_mgr.insert_data(prepared_df, use_batch=True)
+                    self.logger.info(f"Fact table batch insert (new primary key values): {inserted} rows")
+
             return True
-            
+
         except Exception as e:
             # Logging
             self.logger.error(f"Error updating fact table in batch: {e}")
             return False
-    
+
+    # Méthode auxiliaire de vérification de l'existence de valeurs de clés primaires
+    def _primary_key_values_exist(self, df: pd.DataFrame, primary_keys: List[str]) -> bool:
+        """Check if any primary key values from DataFrame exist in fact_table.
+
+        Vérifie si au moins une combinaison de valeurs de clés primaires présente
+        dans le DataFrame existe déjà dans la fact_table. Cette vérification permet
+        de déterminer si une opération UPSERT ou INSERT doit être effectuée.
+
+        Args:
+            df: DataFrame containing data with primary key columns.
+            primary_keys: List of primary key column names.
+
+        Returns:
+            True if at least one row's primary key values exist in fact_table.
+
+        Example:
+            >>> df = pd.DataFrame({'id': [1, 2, 3], 'value': ['a', 'b', 'c']})
+            >>> updater._primary_key_values_exist(df, ['id'])
+            True  # Si id=1, 2, ou 3 existe dans fact_table
+        """
+        try:
+            # Vérification de l'existence de la fact_table
+            if not self._table_exists('fact_table'):
+                return False
+
+            # Vérification que la fact_table n'est pas vide
+            count = self.conn.execute("SELECT COUNT(*) FROM fact_table").fetchone()[0]
+            if count == 0:
+                return False
+
+            # Construction de la condition de jointure pour les clés primaires composites
+            conditions = " AND ".join([f"f.{key} = update_data.{key}" for key in primary_keys])
+
+            # Enregistrement temporaire du DataFrame pour la requête SQL
+            self.conn.register('update_data', df)
+
+            # Requête pour compter les correspondances entre les clés primaires
+            query = f"""
+                SELECT COUNT(*) FROM fact_table f
+                WHERE EXISTS (
+                    SELECT 1 FROM update_data
+                    WHERE {conditions}
+                )
+            """
+
+            result = self.conn.execute(query).fetchone()[0]
+
+            # Nettoyage de l'enregistrement temporaire
+            self.conn.unregister('update_data')
+
+            return result > 0
+
+        except Exception as e:
+            self.logger.error(f"Error checking primary key existence: {e}")
+            # En cas d'erreur, on retourne False pour favoriser l'INSERT
+            return False
+
     # Méthode auxiliaire de mise à jour des index
     def _update_indexes_safe(self, index_config: Dict) -> bool:
         """Safely update database indexes based on configuration.

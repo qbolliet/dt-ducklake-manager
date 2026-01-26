@@ -1021,32 +1021,52 @@ class DatabaseAuditor:
             report.add_issue(issue)
     
     # Méthode de validation des conditions préalables à une mise à jour de la base de données
-    def _validate_update_preconditions(self, report: ValidationReport, df: pd.DataFrame = None, merge_keys: List[str] = None, **kwargs) -> None:
-        """Validate update preconditions."""
+    def _validate_update_preconditions(self, report: ValidationReport, df: pd.DataFrame = None, **kwargs) -> None:
+        """Validate update preconditions.
+
+        Valide les préconditions pour une opération de mise à jour en utilisant
+        les clés primaires définies dans les métadonnées au lieu des merge_keys
+        passées en paramètre.
+        """
         # Vérification des conditions d'insertions
         self._validate_insert_preconditions(report, df, **kwargs)
-        
-        # Vérification que des clés de jointure sont bien spécifiées
-        if merge_keys is None or len(merge_keys) == 0:
-            issue = ValidationIssue(
-                issue_type=IssueType.DATA_INTEGRITY,
-                severity=IssueSeverity.CRITICAL,
-                table_name='fact_table',
-                description="No merge keys provided for update operation",
-                suggested_fix="Provide valid merge keys for update operation"
-            )
-            report.add_issue(issue)
+
+        # Récupération des clés primaires depuis les métadonnées
+        primary_keys = self._get_primary_key_columns()
+
+        # Si pas de clés primaires définies, pas de validation supplémentaire nécessaire
+        # (la mise à jour se fera par INSERT simple)
+        if not primary_keys:
             return
-        # Vérification que les clés de jointure sont présentes dans le jeu de données
+
+        # Vérification que les clés primaires sont présentes dans le DataFrame
         if df is not None:
-            missing_keys = [key for key in merge_keys if key not in df.columns]
+            missing_keys = [key for key in primary_keys if key not in df.columns]
             if missing_keys:
                 issue = ValidationIssue(
                     issue_type=IssueType.SCHEMA_INCONSISTENCY,
+                    severity=IssueSeverity.CRITICAL,
+                    table_name='fact_table',
+                    description=f"Primary keys not found in DataFrame: {missing_keys}",
+                    suggested_fix="Ensure all primary keys are present in the DataFrame"
+                )
+                report.add_issue(issue)
+                return
+
+            # Vérification des doublons parmi les valeurs de clés primaires dans le DataFrame
+            if len(primary_keys) == 1:
+                duplicate_count = df[primary_keys[0]].duplicated().sum()
+            else:
+                duplicate_count = df.duplicated(subset=primary_keys).sum()
+
+            if duplicate_count > 0:
+                issue = ValidationIssue(
+                    issue_type=IssueType.DATA_INTEGRITY,
                     severity=IssueSeverity.HIGH,
                     table_name='fact_table',
-                    description=f"Merge keys not found in DataFrame: {missing_keys}",
-                    suggested_fix="Ensure all merge keys are present in the DataFrame"
+                    description=f"Found {duplicate_count} duplicate primary key values in DataFrame",
+                    suggested_fix="Remove duplicate entries based on primary key columns",
+                    affected_rows=duplicate_count
                 )
                 report.add_issue(issue)
     
@@ -1145,6 +1165,25 @@ class DatabaseAuditor:
         """Check if a column exists in fact_table."""
         fact_columns = self._get_fact_table_columns()
         return column_name in fact_columns
+
+    # Méthode auxiliaire d'extraction des colonnes marquées comme clés primaires
+    def _get_primary_key_columns(self) -> List[str]:
+        """Get all column names that are marked as primary keys in metadata.
+
+        Récupère la liste des colonnes définies comme clés primaires dans la table
+        des métadonnées. Cette méthode est nécessaire car DatabaseAuditor n'hérite
+        pas de BaseSchemaManager.
+
+        Returns:
+            List of primary key column names. Empty list if no primary keys defined.
+        """
+        try:
+            result = self.conn.execute(
+                "SELECT name FROM metadata WHERE is_primary_key = true"
+            ).fetchall()
+            return [row[0] for row in result]
+        except:
+            return []
     
     # Méthode auxiliaire de vérification de la compatibilité des types entre eux
     def _types_are_compatible(self, expected_type: str, actual_type: str) -> bool:

@@ -218,6 +218,27 @@ class BaseSchemaManager(ABC):
         except:
             return False
 
+    # Méthode d'extraction de toutes les colonnes marquées comme clés primaires
+    def _get_primary_key_columns(self) -> List[str]:
+        """
+        Get all column names that are marked as primary keys in metadata.
+
+        Returns:
+            List of primary key column names. Empty list if no primary keys defined.
+
+        Example:
+            >>> manager._get_primary_key_columns()
+            ['user_id', 'timestamp']
+        """
+        try:
+            # Requête pour récupérer les noms des colonnes marquées comme clés primaires
+            result = self.conn.execute(
+                "SELECT name FROM metadata WHERE is_primary_key = true"
+            ).fetchall()
+            return [row[0] for row in result]
+        except:
+            return []
+
     # Méthodes de gestion des métadonnées
     # Méthode d'ajout d'une colonne aux méta-données
     def _add_column_to_metadata(self, column: str, df: pd.DataFrame, label: Optional[str] = None) -> None:

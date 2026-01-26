@@ -15,7 +15,7 @@ import shutil
 import duckdb
 
 # Import des gestionnaires
-from .auditor import DatabaseAuditor, ValidationLevel, ValidationReport
+from .auditor import DatabaseAuditor, ValidationLevel, ValidationReport, ValidationIssue
 from .managers.dimension_manager import DimensionManager
 from .deleter_v2 import DatabaseDeleterV2
 # Import des utilitaires
