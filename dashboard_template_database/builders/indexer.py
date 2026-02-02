@@ -2,9 +2,10 @@
 # Modules de base
 import os
 import re
+import pandas as pd
 from pathlib import Path
-from typing import List, Dict, Optional, Set, Tuple
-from collections import Counter, defaultdict
+from typing import List, Dict, Optional, Set
+from collections import defaultdict
 # DuckDB
 import duckdb
 # SQL parsing
@@ -158,7 +159,7 @@ class IndexManager:
             raise
     
     # Méthode d'énumération des indices
-    def list_indexes(self, table_name: Optional[str] = None) -> List[Dict]:
+    def list_indexes(self, table_name: Optional[str] = None) -> pd.DataFrame:
         """
         List all indexes or indexes for a specific table.
         
@@ -181,29 +182,9 @@ class IndexManager:
                 query = "SELECT * FROM duckdb_indexes()"
             
             # Exécution de la requête
-            result = self.conn.execute(query).fetchall()
+            result_df = self.conn.execute(query).fetchdf()
             
-            # Conversion en liste de dictionnaires
-            indexes = []
-            # Parcours du résultat
-            for row in result:
-                # Parsing du résultat
-                indexes.append({
-                    'database_name': row[0],
-                    'database_oid': row[1],
-                    'schema_name': row[2],
-                    'schema_oid': row[3],
-                    'table_name': row[4],
-                    'table_oid': row[5],
-                    'index_name': row[6],
-                    'index_oid': row[7],
-                    'is_unique': row[8],
-                    'is_primary': row[9],
-                    'expressions': row[10],
-                    'sql': row[11]
-                })
-            
-            return indexes
+            return result_df
             
         except Exception as e:
             # Logging
