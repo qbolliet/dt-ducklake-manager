@@ -18,8 +18,8 @@ from dashboard_template_database.operations.managers.transaction_manager import 
 from dashboard_template_database.operations.auditor import (
     DatabaseAuditor, ValidationLevel, IssueType, IssueSeverity
 )
-from dashboard_template_database.operations.updater_v2 import DatabaseUpdaterV2
-from dashboard_template_database.operations.deleter_v2 import DatabaseDeleterV2
+from dashboard_template_database.operations.updater import DatabaseUpdaterV2
+from dashboard_template_database.operations.deleter import DatabaseDeleterV2
 from dashboard_template_database.operations.recovery import (
     DatabaseRecoveryManager, RecoveryStrategy, BackupType
 )

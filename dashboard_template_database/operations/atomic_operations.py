@@ -14,8 +14,8 @@ import duckdb
 from .managers.transaction_manager import (
     TransactionManager, TransactionOperation, TransactionState
 )
-from .updater_v2 import DatabaseUpdaterV2
-from .deleter_v2 import DatabaseDeleterV2
+from .updater import DatabaseUpdaterV2
+from .deleter import DatabaseDeleterV2
 from .recovery import DatabaseRecoveryManager, RecoveryOperation, RecoveryStrategy
 from .auditor import DatabaseAuditor, ValidationLevel
 

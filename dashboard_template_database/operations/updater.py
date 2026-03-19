@@ -4,81 +4,143 @@ import os
 import pandas as pd
 import numpy as np
 from pathlib import Path
-# Types
-from typing import Dict, List, Optional, Literal
+from typing import Dict, List, Optional, Literal, Any, Tuple
 # DuckDB
 import duckdb
-# Traitement en parallèle
-from concurrent.futures import ThreadPoolExecutor, as_completed
-import threading
 
-# Import des éléments du module
-# Import du module de construction du schéma
-from ..builders.schema import SchemaBuilder
-# Import du module d'indexation
+# Import des gestionnaires
+from .managers.base_manager import BaseSchemaManager
+from .managers.dimension_manager import DimensionManager
+from .managers.data_manager import DataManager
+from .managers.transaction_manager import (
+    TransactionManager, TransactionOperation, TransactionState
+)
+from .auditor import DatabaseAuditor, ValidationLevel, IssueSeverity
+
+# Import des utilitaires
+from ..utils.data_processing import remove_dataframe_duplicates
 from ..builders.indexer import IndexManager
-# Import de l'utilitaire de logging
-from ..utils.logger import _init_logger
-# Utilitaires de traitement des données
-from ..utils.data_processing import (map_python_to_sql_type, remove_dataframe_duplicates, 
-                                      build_database_duplicate_removal_query)
 
 # Emplacement du fichier
 FILE_PATH = Path(os.path.abspath(__file__))
 
 
-# Classe de mise à jour de la base de données
-class DatabaseUpdater:
+# Classe de mise à jour d'une base de données
+class DatabaseUpdaterV2(BaseSchemaManager):
     """
-    A class to handle incremental updates to DuckDB databases.
+    Refactored database updater using the new modular architecture.
     
-    Supports updating metadata, fact tables, and dimension tables while maintaining
-    consistency and handling type conflicts. Includes duplicate removal and index management.
+    Provides atomic, transactional updates to DuckDB databases with proper
+    validation, error recovery, and state consistency. Uses specialized managers
+    for different aspects of database operations.
+    
+    Attributes:
+        dimension_mgr (DimensionManager): Manages dimension table operations
+        data_mgr (DataManager): Manages fact table operations
+        transaction_mgr (TransactionManager): Manages transactions and rollback
+        auditor (DatabaseAuditor): Validates database state and operations
+        max_workers (int): Maximum number of parallel workers
+        batch_size (int): Size of batches for processing large datasets
     """
     # Initialisation
     def __init__(self, 
-                 connection: duckdb.DuckDBPyConnection,
+                 connection: Optional[duckdb.DuckDBPyConnection] = None, 
+                 path: Optional[os.PathLike]=None,
                  categorical_threshold: Optional[int] = 50,
                  log_filename: Optional[os.PathLike] = None,
                  max_workers: int = 4,
-                 batch_size: int = 10000):
+                 batch_size: int = 10000,
+                 enable_validation: bool = True):
         """
-        Initialize the DatabaseUpdater.
+        Initialize the refactored database updater.
         
         Args:
             connection: DuckDB connection object
-            categorical_threshold: Maximum unique values for categorical columns
+            categorical_threshold: Threshold for determining categorical variables
             log_filename: Path to log file
             max_workers: Maximum number of parallel workers
             batch_size: Size of batches for processing
+            enable_validation: Whether to enable pre/post operation validation
+            
+        Example:
+            >>> conn = duckdb.connect('database.db')
+            >>> updater = DatabaseUpdaterV2(conn, max_workers=8, enable_validation=True)
         """
-        # Initialisation des arguments
-        self.conn = connection
-        self.categorical_threshold = categorical_threshold
+        # Initialisation du parent
+        super().__init__(connection=connection, path=path, categorical_threshold=categorical_threshold, log_filename=log_filename)
+        
+        # Initialisation des gestionnaires spécialisés
+        self.dimension_mgr = DimensionManager(
+            connection=connection, path=path, categorical_threshold=categorical_threshold, log_filename=log_filename, max_workers=max_workers
+        )
+        
+        self.data_mgr = DataManager(
+            connection=connection, path=path, categorical_threshold=categorical_threshold, log_filename=log_filename, batch_size=batch_size
+        )
+        
+        self.transaction_mgr = TransactionManager(
+            connection=connection, path=path, categorical_threshold=categorical_threshold, log_filename=log_filename
+        )
+        
+        self.auditor = DatabaseAuditor(
+            connection=connection, path=path, categorical_threshold=categorical_threshold, log_filename=log_filename
+        ) if enable_validation else None
+        
+        # Configuration
         self.max_workers = max_workers
         self.batch_size = batch_size
-        
-        # Initialisation du logger
-        if log_filename is None:
-            log_filename = os.path.join(FILE_PATH.parents[2], "logs/database_updater.log")
-        self.logger = _init_logger(filename=log_filename)
-        
-        # Cache pour les métadonnées
-        self._metadata_cache = None
-        
-        # Verrou pour les opérations thread-safe
-        self._lock = threading.Lock()
+        self.enable_validation = enable_validation
     
-    # Méthode de mise à jour de la base de données
+    # Méthode de validation d'une opération
+    def validate_operation(self, operation_type: str, **kwargs) -> bool:
+        """
+        Validate update operations before execution.
+        
+        Args:
+            operation_type: Type of operation to validate
+            **kwargs: Operation-specific parameters
+            
+        Returns:
+            True if operation is valid
+        """
+        # Absence de validation si un auditeur n'est pas spécifié ou si elle n'est pas permise
+        if not self.enable_validation or not self.auditor:
+            return True
+        
+        # Validation par l'auditeur
+        validation_report = self.auditor.validate_operation_preconditions(operation_type, **kwargs)
+        
+        # Vérification des problèmes critiques
+        if validation_report.get_critical_issues_count() > 0:
+            # Logging
+            self.logger.error(f"Critical validation issues found for {operation_type} operation:")
+            # Logging des erreurs critiques
+            for issue in validation_report.get_issues_by_severity(IssueSeverity.CRITICAL):
+                self.logger.error(f"  - {issue.description}")
+            return False
+        
+        # Avertissements pour les problèmes de priorité haute
+        high_issues = validation_report.get_issues_by_severity(IssueSeverity.HIGH)
+        if high_issues:
+            # Logging
+            self.logger.warning(f"High priority validation issues found for {operation_type} operation:")
+            # Logging des problèmes de priorité haute
+            for issue in high_issues:
+                self.logger.warning(f"  - {issue.description}")
+        
+        return True
+    
+    # Méthode principale de mise à jour
     def update_database(self,
                        update_df: pd.DataFrame,
                        check_duplicates_db: bool = True,
                        check_duplicates_update: bool = True,
                        keep: Literal[False, 'first', 'last'] = False,
                        index_config: Optional[Dict] = None,
-                       use_batch_processing: bool = True) -> None:
+                       use_batch_processing: bool = True,
+                       use_transaction: bool = True) -> bool:
         """
-        Update the entire database with new data with support for batch and parallel processing.
+        Update the entire database with new data using atomic operations.
         
         Args:
             update_df: DataFrame containing update data
@@ -87,624 +149,812 @@ class DatabaseUpdater:
             keep: Which duplicates to keep when removing duplicates
             index_config: Dictionary containing index configuration
             use_batch_processing: Whether to use batch processing for large datasets
+            use_transaction: Whether to use database transactions
+            
+        Returns:
+            True if update was successful, False otherwise
+            
+        Example:
+            >>> success = updater.update_database(
+            ...     new_data_df,
+            ...     check_duplicates_db=True,
+            ...     use_transaction=True
+            ... )
+            >>> if success:
+            ...     print("Database updated successfully")
         """
-        # Logging
-        self.logger.info(f"Starting database update with {len(update_df)} rows")
-        
-        # Étape 1: Suppression des doublons dans les données de mise à jour si demandée
-        if check_duplicates_update:
-            update_df = remove_dataframe_duplicates(update_df, keep, self.logger, 'update')
-        
-        # Étape 2: Suppression des doublons dans la base de données existante si demandée
-        if check_duplicates_db:
-            self._remove_duplicates_from_database(keep)
-        
-        # Détermination si on utilise le traitement par batch
-        should_use_batches = use_batch_processing and len(update_df) > self.batch_size
-        
-        if should_use_batches:
+        # Validation préalable
+        if not self.validate_operation('update', df=update_df):
             # Logging
-            self.logger.info(f"Using batch processing with batch size {self.batch_size}")
-            # Traitement par lots
-            self._process_database_update_in_batches(update_df, index_config)
-        else:
-            # Traitement direct pour les petites données
-            self._process_database_update_direct(update_df, index_config)
-        
-        # Invalidation du cache des métadonnées
-        self._metadata_cache = None
-        
-        # Logging
-        self.logger.info("Database update completed")
-    
-    # Méthode de processing de la mise à jour en batch
-    def _process_database_update_in_batches(self, update_df: pd.DataFrame, index_config: Optional[Dict]) -> None:
-        """
-        Process database update in batches for large datasets.
-        
-        Args:
-            update_df: DataFrame containing update data
-            index_config: Dictionary containing index configuration
-        """
-        # Étape 3: Mise à jour des métadonnées (une seule fois pour toutes les données)
-        self.update_metadata(update_df)
-        
-        # Étape 4: Mise à jour des tables de dimensions (une seule fois avec toutes les valeurs uniques)
-        self.update_dimension_tables(update_df)
-        
-        # Étape 5: Mise à jour de la table de faits par lots
-        def process_fact_table_batch(batch_df):
-            self.update_fact_table(batch_df)
-        
-        self._process_large_dataframe_in_batches(update_df, process_fact_table_batch)
-        
-        # Étape 6: Mise à jour des index si spécifiés
-        if index_config is not None:
-            self.update_indexes(index_config)
-    
-    # Méthode de processing direct de la mise à jour
-    def _process_database_update_direct(self, update_df: pd.DataFrame, index_config: Optional[Dict]) -> None:
-        """
-        Process database update directly without batching.
-        
-        Args:
-            update_df: DataFrame containing update data
-            index_config: Dictionary containing index configuration
-        """
-        # Étape 3: Mise à jour des métadonnées
-        self.update_metadata(update_df)
-        
-        # Étape 4: Mise à jour des tables de dimensions (avec parallélisation interne si applicable)
-        self.update_dimension_tables(update_df)
-        
-        # Étape 5: Mise à jour de la table de faits
-        self.update_fact_table(update_df)
-        
-        # Étape 6: Mise à jour des index si spécifiés
-        if index_config is not None:
-            self.update_indexes(index_config)
-    
-    
-    # Méthode de mise à jour des métadonnées
-    def update_metadata(self, update_df: pd.DataFrame, column_labels: Optional[Dict[str, str]] = None) -> None:
-        """
-        Update metadata table with new columns and resolve type conflicts.
-        
-        Args:
-            update_df: DataFrame containing new data
-            column_labels: Dictionary mapping column names to custom labels. If None, uses default labels.
-        """
-        # Logging
-        self.logger.info("Updating metadata table")
-        
-        # Chargement des métadonnées actuelles
-        current_metadata = self._load_current_metadata()
-        current_columns = set(current_metadata['name'].values) if len(current_metadata) > 0 else set()
-        new_columns = set(update_df.columns)
-        
-        # Identification des nouvelles colonnes
-        columns_to_add = new_columns - current_columns
-        
-        # Ajout des nouvelles colonnes aux métadonnées
-        for col in columns_to_add:
-            label = column_labels.get(col) if column_labels else None
-            self._add_column_to_metadata(col, update_df, label)
-        
-        # Vérification des conflits de types pour les colonnes existantes
-        for col in current_columns.intersection(new_columns):
-            self._resolve_type_conflicts(col, update_df, current_metadata)
-    
-    # Méthode de mise à jour de la table des faits
-    def update_fact_table(self, update_df: pd.DataFrame) -> None:
-        """
-        Update fact table with new columns, rows, and type changes.
-        
-        Args:
-            update_df: DataFrame containing update data
-        """
-        # Logging
-        self.logger.info("Updating fact table")
-        
-        # Récupération de la structure actuelle de la fact table
-        try:
-            current_columns = [col[0] for col in self.conn.execute("DESCRIBE fact_table").fetchall()]
-        except:
-            # Table n'existe pas encore
-            current_columns = []
-        
-        # Mise à jour préalable des tables de dimension avec les nouvelles valeurs catégorielles
-        self._ensure_dimension_values_exist(update_df)
-        
-        # Conversion des colonnes catégorielles en utilisant les valeurs des tables de dimension
-        prepared_df = self._prepare_dataframe_for_fact_table(update_df)
-        
-        # Ajout des colonnes manquantes
-        new_columns = set(prepared_df.columns) - set(current_columns)
-        for col in new_columns:
-            self._add_column_to_fact_table(col, prepared_df)
-        
-        # Mise à jour des types de colonnes si nécessaire
-        for col in prepared_df.columns:
-            self._update_column_type_in_fact_table(col, prepared_df)
-        
-        # Ajout/mise à jour des lignes
-        if len(current_columns) > 0:
-            # Mise à jour avec upsert basé sur toutes les colonnes communes
-            merge_keys = list(set(prepared_df.columns).intersection(set(current_columns)))
-            self._upsert_to_fact_table(prepared_df, merge_keys)
-        else:
-            # Création de la table avec les données
-            self._create_fact_table_with_data(prepared_df)
-        
-        # Suppression des colonnes ne contenant que des nulles, des index et des tables de dimension associées
-        null_only_columns = self._get_null_only_columns()
-        if null_only_columns:
-            self.delete_columns(null_only_columns)
-        
-        # Nettoyage des entrées orphelines dans les tables de dimension
-        self._cleanup_dimension_orphaned_entries()
-
-        # Détection post-upsert des variables devenues catégorielles
-        self._detect_new_categorical_variables_after_upsert()
-    
-    # Méthode de mise à jour des tables de dimension
-    def update_dimension_tables(self, update_df: pd.DataFrame) -> None:
-        """
-        Update dimension tables using unified logic with internal parallelization.
-        Leverages _update_dimension_values for robust table management.
-        
-        Args:
-            update_df: DataFrame containing update data
-        """
-        # Logging
-        self.logger.info("Updating dimension tables")
-        
-        # Chargement des métadonnées actuelles
-        current_metadata = self._load_current_metadata()
-        
-        # Classification des colonnes par statut catégoriel
-        categorical_columns = []
-        non_categorical_columns = []
-        
-        for _, row in current_metadata.iterrows():
-            col_name = row['name']
-            if col_name in update_df.columns:
-                if row['is_categorical']:
-                    categorical_columns.append(col_name)
-                elif row['python_type'] == 'object':
-                    non_categorical_columns.append(col_name)
-        
-        # Traitement des colonnes catégorielles existantes avec parallélisation si possible
-        # Note: La parallélisation n'est utilisée que pour les mises à jour pures des dimensions
-        # qui n'affectent pas la fact table pour éviter les conflits de concurrence
-        if len(categorical_columns) > 1 and self.max_workers > 1:
-            # Traitement parallèle (uniquement pour les dimensions existantes)
-            columns_and_values = [(col, update_df[col]) for col in categorical_columns]
-            self._parallel_dimension_update(columns_and_values)
-        else:
-            # Traitement séquentiel
-            for col_name in categorical_columns:
-                self._update_dimension_values(col_name, update_df[col_name])
-        
-        # Traitement des colonnes non-catégorielles (vérification si elles deviennent catégorielles)
-        for col_name in non_categorical_columns:
-            self._check_and_convert_to_categorical(col_name, update_df[col_name])
-        
-        # Vérification des colonnes catégorielles qui pourraient dépasser le seuil
-        for col_name in categorical_columns:
-            self._check_convert_to_non_categorical(col_name, update_df[col_name])
-    
-    # Méthodes auxilaire convertissant une variable en catégorielle si elle en satisfait les conditions
-    def _check_and_convert_to_categorical(self, col_name: str, values: pd.Series) -> None:
-        """
-        Check if a non-categorical column should become categorical and convert if needed.
-        
-        Args:
-            col_name: Column name
-            values: Series with column values
-        """
-        if self._check_categorical_threshold(values, self.categorical_threshold):
-            
-            # Création de la table de dimension via _update_dimension_values
-            self._update_dimension_values(col_name, values)
-            
-            # Mise à jour du statut catégoriel
-            self._update_categorical_status(col_name, True)
-
-            # Remplacement des labels par les valeurs de la table de dimension dans la fact table
-            self._convert_fact_table_dimension_mapping(col_name, values_to_labels=False)  
-            
-            # Logging
-            self.logger.info(f"Converted {col_name} to categorical with dim_{col_name}")
-    
-    # Méthode de conversion vers le statut non-catégoriel
-    def _check_convert_to_non_categorical(self, col_name: str, values: pd.Series) -> None:
-        """
-        Check if a categorical column should become non-categorical and convert if needed.
-        
-        Args:
-            col_name: Column name
-            values: Series with column values
-        """
-        if not self._check_categorical_threshold(values, self.categorical_threshold):
-            # Nom de la table de dimension
-            table_name = f"dim_{col_name}"
-            
-            # Remplacement des valeurs par les labels dans la fact table
-            self._convert_fact_table_dimension_mapping(col_name, values_to_labels=True)
-            
-            # Suppression de la table de dimension
-            self.conn.execute(f"DROP TABLE IF EXISTS {table_name}")
-            
-            # Mise à jour du statut dans les métadonnées
-            self._update_categorical_status(col_name, False)
-            
-            self.logger.info(f"Converted {col_name} to non-categorical - dropped {table_name}") 
-
-    # Méthode auxiliaire convertissant une variable catégorielle en variable non catégorielle si elle excède un certain seuil
-    def _check_categorical_threshold(self, col_name: str, values: pd.Series) -> None:
-        """
-        Check if a categorical column exceeds threshold and convert to non-categorical if needed.
-        
-        Args:
-            col_name: Column name
-            values: Series with column values
-        """
-        # Nom de la table de dimension
-        table_name = f"dim_{col_name}"
-        
-        # Récupération des valeurs existantes
-        try:
-            existing_result = self.conn.execute(f"SELECT label FROM {table_name}").fetchdf()
-            existing_values = set(existing_result['label']) if len(existing_result) > 0 else set()
-        except:
-            existing_values = set()
-        
-        # Calcul du nombre total de valeurs uniques
-        new_values = set(values.dropna().unique())
-        total_count = len(existing_values.union(new_values))
-        
-        # Vérification du seuil
-        if total_count > self.categorical_threshold:
+            self.logger.error("Pre-update validation failed")
             return False
-        else :
-            return True 
-    
-    
-    # Méthode auxiliaire de mise à jour du statut catégoriel dans les méta-données
-    def _update_categorical_status(self, col_name: str, is_categorical: bool) -> None:
-        """
-        Update categorical status in metadata.
         
-        Args:
-            col_name: Column name
-            is_categorical: New categorical status
-        """
-        # Exécution de la requête de mise à jour
-        self.conn.execute(
-            "UPDATE metadata SET is_categorical = ? WHERE name = ?",
-            [is_categorical, col_name]
-        )
-    
-    # Méthode générique de conversion entre valeurs et labels dans la table des faits
-    def _convert_fact_table_dimension_mapping(self, col_name: str, values_to_labels: bool = True) -> None:
-        """
-        Convert between dimension values and labels in the fact table.
+        # Logging
+        self.logger.info(f"Starting database update with {len(update_df)} rows (transaction: {use_transaction})")
         
+        # Utilisation de la transaction pour la mise à jour de la base de données
+        if use_transaction:
+            return self._update_database_transactional(
+                update_df, check_duplicates_db, check_duplicates_update, 
+                keep, index_config, use_batch_processing
+            )
+        # Sinon mise à jour directe
+        else:
+            return self._update_database_direct(
+                update_df, check_duplicates_db, check_duplicates_update,
+                keep, index_config, use_batch_processing
+            )
+    
+    # Méthode de mise à jour de la base de données de manière transactionnelle
+    def _update_database_transactional(self,
+                                     update_df: pd.DataFrame,
+                                     check_duplicates_db: bool,
+                                     check_duplicates_update: bool,
+                                     keep: Literal[False, 'first', 'last'],
+                                     index_config: Optional[Dict],
+                                     use_batch_processing: bool) -> bool:
+        """Perform transactional database update with validation and rollback.
+
+        Executes the update within a transaction, allowing rollback on failure.
+        Steps: preprocess → duplicate removal → metadata → fact table → dimensions → indexes.
+
         Args:
-            col_name: Column name
-            values_to_labels: If True, converts values→labels; if False, converts labels→values
+            update_df: DataFrame containing the update data.
+            check_duplicates_db: Whether to check and remove duplicates in database.
+            check_duplicates_update: Whether to check and remove duplicates in update data.
+            keep: Duplicate handling strategy ('first', 'last', or False).
+            index_config: Optional index configuration dictionary.
+            use_batch_processing: Whether to use batch processing for large datasets.
+
+        Returns:
+            True if update succeeded and committed, False otherwise.
         """
-        # Nom de la table de dimension
-        table_name = f"dim_{col_name}"
+        
+        # Début de la transaction
+        tx_id = self.transaction_mgr.begin_transaction("Database update with validation and rollback")
         
         try:
-            # Récupération du mapping de la table de dimension
-            dim_result = self.conn.execute(f"SELECT value, label FROM {table_name}").fetchdf()
+            # Étape 1: Suppression des doublons dans les données de mise à jour
+            if check_duplicates_update:
+                # Initialisation de l'opération de transaction
+                operation = TransactionOperation(
+                    operation_type='preprocess',
+                    operation_func=self._remove_update_duplicates,
+                    operation_args=(update_df, keep),
+                    description="Remove duplicates from update data"
+                )
+                
+                # Annulation de la transaction si l'opération ne peut être ajoutée
+                if not self.transaction_mgr.add_operation(tx_id, **operation.__dict__):
+                    self.transaction_mgr.rollback_transaction(tx_id)
+                    return False
+                
+                # Annulation de la transaction si l'opération ne peut être exécutée
+                if not self.transaction_mgr.execute_operation(tx_id):
+                    self.transaction_mgr.rollback_transaction(tx_id)
+                    return False
+                
+                # Récupération des données nettoyées
+                update_df = self._get_cleaned_update_data(update_df, keep)
             
-            if len(dim_result) > 0:
-                # Création d'une vue temporaire pour le mapping
-                self.conn.register('temp_dim_mapping', dim_result)
+            # Étape 2: Suppression des doublons dans la base de données
+            if check_duplicates_db:
+                # Initialisation de l'opération de transacti
+                operation = TransactionOperation(
+                    operation_type='cleanup',
+                    operation_func=self._remove_database_duplicates,
+                    operation_args=(keep,),
+                    rollback_func=self._restore_database_state,
+                    description="Remove duplicates from existing database"
+                )
                 
-                if values_to_labels:
-                    # Conversion values → labels (pour revenir aux données originales)
-                    update_query = f"""
-                        UPDATE fact_table 
-                        SET {col_name} = (
-                            SELECT label FROM temp_dim_mapping 
-                            WHERE temp_dim_mapping.value = fact_table.{col_name}
-                        )
-                        WHERE {col_name} IS NOT NULL
-                    """
-                    operation = "values to labels"
-                else:
-                    # Conversion labels → values (pour utiliser les index de dimension)
-                    update_query = f"""
-                        UPDATE fact_table 
-                        SET {col_name} = (
-                            SELECT value FROM temp_dim_mapping 
-                            WHERE temp_dim_mapping.label = fact_table.{col_name}
-                        )
-                        WHERE {col_name} IS NOT NULL
-                    """
-                    operation = "labels to values"
+                # Annulation de la transaction si l'opération ne peut être ajoutée
+                if not self.transaction_mgr.add_operation(tx_id, **operation.__dict__):
+                    self.transaction_mgr.rollback_transaction(tx_id)
+                    return False
                 
-                # Exécution de la mise à jour
-                self.conn.execute(update_query)
+                # Annulation de la transaction si l'opération ne peut être exécutée
+                if not self.transaction_mgr.execute_operation(tx_id):
+                    self.transaction_mgr.rollback_transaction(tx_id)
+                    return False
+            
+            # Création d'un savepoint avant les modifications majeures
+            self.transaction_mgr.create_savepoint(tx_id, "before_major_updates")
+            
+            # Étape 3: Mise à jour des métadonnées
+            # Initialisation de l'opération de transaction
+            operation = TransactionOperation(
+                operation_type='metadata_update',
+                operation_func=self._update_metadata_safe,
+                operation_args=(update_df,),
+                rollback_func=self._rollback_metadata_changes,
+                description="Update metadata table"
+            )
+            
+            # Annulation de la transaction si l'opération ne peut être ajoutée
+            if not self.transaction_mgr.add_operation(tx_id, **operation.__dict__):
+                self.transaction_mgr.rollback_transaction(tx_id)
+                return False
+            
+            # Annulation de la transaction si l'opération ne peut être exécutée
+            if not self.transaction_mgr.execute_operation(tx_id):
+                self.transaction_mgr.rollback_transaction(tx_id)
+                return False
+            
+            # Étape 4: Mise à jour de la table de faits (avant les dimensions pour refléter l'état actuel)
+            # Mise à jour en batch si spécifié
+            if use_batch_processing and len(update_df) > self.batch_size:
+                # Initialisation de l'opération de transaction
+                operation = TransactionOperation(
+                    operation_type='fact_update_batch',
+                    operation_func=self._update_fact_table_batch,
+                    operation_args=(update_df,),
+                    rollback_func=self._rollback_fact_changes,
+                    description="Update fact table (batch processing)"
+                )
+            else:
+                # Initialisation de l'opération de transaction
+                operation = TransactionOperation(
+                    operation_type='fact_update_direct',
+                    operation_func=self._update_fact_table_direct,
+                    operation_args=(update_df,),
+                    rollback_func=self._rollback_fact_changes,
+                    description="Update fact table (direct)"
+                )
+
+            # Annulation de la transaction si l'opération ne peut être ajoutée
+            if not self.transaction_mgr.add_operation(tx_id, **operation.__dict__):
+                self.transaction_mgr.rollback_transaction(tx_id)
+                return False
+
+            # Annulation de la transaction si l'opération ne peut être exécutée
+            if not self.transaction_mgr.execute_operation(tx_id):
+                self.transaction_mgr.rollback_transaction(tx_id)
+                return False
+
+            # Étape 5: Mise à jour des tables de dimensions (après fact table pour refléter les données actuelles)
+            # Initialisation de l'opération de transaction
+            operation = TransactionOperation(
+                operation_type='dimension_update',
+                operation_func=self._update_dimensions_safe,
+                operation_args=(update_df,),
+                rollback_func=self._rollback_dimension_changes,
+                description="Update dimension tables"
+            )
+
+            # Annulation de la transaction si l'opération ne peut être ajoutée
+            if not self.transaction_mgr.add_operation(tx_id, **operation.__dict__):
+                self.transaction_mgr.rollback_transaction(tx_id)
+                return False
+
+            # Annulation de la transaction si l'opération ne peut être exécutée
+            if not self.transaction_mgr.execute_operation(tx_id):
+                self.transaction_mgr.rollback_transaction(tx_id)
+                return False
+
+            # Étape 5b: Nettoyage des entrées orphelines dans les tables de dimension
+            cleanup_operation = TransactionOperation(
+                operation_type='dimension_cleanup',
+                operation_func=self.dimension_mgr.cleanup_orphaned_dimension_entries,
+                operation_args=(),
+                description="Clean orphaned dimension entries"
+            )
+
+            if not self.transaction_mgr.add_operation(tx_id, **cleanup_operation.__dict__):
+                self.transaction_mgr.rollback_transaction(tx_id)
+                return False
+
+            if not self.transaction_mgr.execute_operation(tx_id):
+                self.transaction_mgr.rollback_transaction(tx_id)
+                return False
+
+            # Étape 6: Mise à jour des index
+            # Si un index est spécifié
+            if index_config:
+                # Initialisation de l'opération de transaction
+                operation = TransactionOperation(
+                    operation_type='index_update',
+                    operation_func=self._update_indexes_safe,
+                    operation_args=(index_config,),
+                    rollback_func=self._rollback_index_changes,
+                    description="Update database indexes"
+                )
                 
-                # Suppression de la vue temporaire
-                self.conn.execute('DROP VIEW temp_dim_mapping')
+                # Annulation de la transaction si l'opération ne peut être ajoutée
+                if not self.transaction_mgr.add_operation(tx_id, **operation.__dict__):
+                    self.transaction_mgr.rollback_transaction(tx_id)
+                    return False
                 
+                # Annulation de la transaction si l'opération ne peut être exécutée
+                if not self.transaction_mgr.execute_operation(tx_id):
+                    self.transaction_mgr.rollback_transaction(tx_id)
+                    return False
+            
+            # Validation post-update
+            if self.enable_validation and self.auditor:
+                # Validation de la base de données
+                validation_report = self.auditor.validate_database(ValidationLevel.STANDARD)
+                
+                # Vérification des problèmes critiques
+                if validation_report.get_critical_issues_count() > 0:
+                    # Logging
+                    self.logger.error("Critical issues found after update, rolling back")
+                    # Annulation de la transaction
+                    self.transaction_mgr.rollback_transaction(tx_id)
+                    return False
+            
+            # Commit de la transaction
+            if self.transaction_mgr.commit_transaction(tx_id):
                 # Logging
-                self.logger.info(f"Converted {operation} for {col_name} in fact table")
-                
+                self.logger.info("Database update completed successfully")
+                # Invaliation du cache
+                self._invalidate_metadata_cache()
+                return True
+            else:
+                # Logging
+                self.logger.error("Failed to commit transaction")
+                return False
+            
         except Exception as e:
             # Logging
-            self.logger.error(f"Error converting dimension mapping for {col_name}: {e}")
+            self.logger.error(f"Error during transactional update: {e}")
+            # Annulation de la transaction
+            self.transaction_mgr.rollback_transaction(tx_id)
+            return False
     
-    # Méthode de détection des variables devenues catégorielles après l'upsert
-    def _detect_new_categorical_variables_after_upsert(self) -> None:
-        """
-        Detect variables that became categorical after the upsert and create dimension tables.
-        """
-        # Chargement des méta-données
-        current_metadata = self._load_current_metadata()
-        
-        # Parcours des colonnes non-catégorielles dans les métadonnées
-        non_categorical_cols = current_metadata[
-            (current_metadata['is_categorical'] == False) &
-            (current_metadata['python_type'] == 'object')
-        ]
-        # Parcours des colonnes
-        for _, row in non_categorical_cols.iterrows():
-            # Nom de la colonne
-            col_name = row['name']
-            
-            try:
-                # Vérification que la colonne existe dans la fact table
-                fact_columns = [col[0] for col in self.conn.execute("DESCRIBE fact_table").fetchall()]
-                if col_name not in fact_columns:
-                    continue
-                
-                # Récupération des valeurs uniques de la colonne
-                unique_labels_query = f"SELECT DISTINCT {col_name} as label FROM fact_table WHERE {col_name} IS NOT NULL ORDER BY {col_name}"
-                unique_labels_result = self.conn.execute(unique_labels_query).fetchdf()
-                
-                if len(unique_labels_result) > 0:
-                    # Conversion en catégorielle si nécessaire
-                    self._check_and_convert_to_categorical(col_name=col_name, values=unique_labels_result['label'])
+    # Méthode auxiliaire de mise à jour directe de la base de données
+    def _update_database_direct(self,
+                              update_df: pd.DataFrame,
+                              check_duplicates_db: bool,
+                              check_duplicates_update: bool,
+                              keep: Literal[False, 'first', 'last'],
+                              index_config: Optional[Dict],
+                              use_batch_processing: bool) -> bool:
+        """Perform direct database update without transaction wrapping.
 
-            except Exception as e:
-                # Logging
-                self.logger.error(f"Error detecting categorical status for {col_name} after upsert: {e}")
-    
-    # Méthode de mise à jour des index
-    def update_indexes(self, index_config: Dict) -> None:
-        """
-        Update database indexes by removing old ones and creating new ones.
-        
+        Suitable for simple updates where rollback capability is not needed.
+        Faster but no automatic rollback on partial failure.
+
         Args:
-            index_config: Dictionary containing index configuration
-        """
-        # Logging
-        self.logger.info("Updating indexes")
-        
-        # Création d'un gestionnaire d'index
-        index_manager = IndexManager(connection=self.conn)
-        
-        # Suppression de tous les index existants (sauf les index système)
-        try:
-            # Récupération des index existants
-            existing_indexes = self.conn.execute("""
-                SELECT name FROM sqlite_master 
-                WHERE type = 'index' AND name NOT LIKE 'sqlite_%'
-            """).fetchall()
-            # Parcours des index
-            for idx in existing_indexes:
-                try:
-                    index_manager.drop_index(idx[0])
-                    self.logger.info(f"Dropped index {idx[0]}")
-                except Exception as e:
-                    self.logger.warning(f"Cannot drop index {idx[0]}: {e}")
-        except Exception as e:
-            self.logger.warning(f"Error retrieving existing indexes: {e}")
-        
-        # Création des nouveaux index selon la configuration
-        try:
-            index_manager.create_fact_table_indexes("fact_table", index_config)
-            self.logger.info("Successfully created indexes based on configuration")
-        except Exception as e:
-            self.logger.error(f"Error creating indexes: {e}")
-    
-    # Méthodes pour le traitement par lots et la parallélisation
-    # Méthode de processing en batchs
-    def _process_large_dataframe_in_batches(self, df: pd.DataFrame, 
-                                          process_func, batch_size: Optional[int] = None) -> None:
-        """
-        Process large pandas DataFrames in batches.
-        
-        Args:
-            df: DataFrame to process
-            process_func: Processing function to apply to each batch
-            batch_size: Batch size (uses self.batch_size by default)
-        """
-        # Initialisation de la taille des batchs
-        batch_size = batch_size or self.batch_size
-        
-        # Logging
-        self.logger.info(f"Processing {len(df)} rows in batches of {batch_size}")
-        # Parcours des observations du jeu de données en batch
-        for i in range(0, len(df), batch_size):
-            # Circonscription du batch
-            batch_start = i
-            batch_end = min(i + batch_size, len(df))
-            batch_df = df.iloc[batch_start:batch_end].copy()
-            
-            try:
-                # Processing du batch
-                process_func(batch_df)
-            except Exception as e:
-                # Logging
-                self.logger.error(f"Error processing batch {batch_start}-{batch_end}: {e}")
-    
-    # Méthode de mise à jour en parallèle des tables de dimension
-    def _parallel_dimension_update(self, columns_and_values: List[tuple]) -> None:
-        """
-        Parallel update of dimension tables.
-        
-        Args:
-            columns_and_values: List of tuples (column_name, unique_values)
-        """
-        # Logging
-        self.logger.info(f"Parallel update of {len(columns_and_values)} dimensions")
-        
-        with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
-            # Soumission des tâches
-            future_to_dimension = {
-                executor.submit(self._update_dimension_values, col_name, values): col_name
-                for col_name, values in columns_and_values
-            }
-            
-            # Récupération des résultats
-            for future in as_completed(future_to_dimension):
-                dimension = future_to_dimension[future]
-                try:
-                    future.result()
-                except Exception as e:
-                    self.logger.error(f"Error during parallel update of {dimension}: {e}")
-    
-    # Méthode de chargement des méta-données
-    def _load_current_metadata(self) -> pd.DataFrame:
-        """
-        Load current metadata from the database.
-        
+            update_df: DataFrame containing the update data.
+            check_duplicates_db: Whether to check and remove duplicates in database.
+            check_duplicates_update: Whether to check and remove duplicates in update data.
+            keep: Duplicate handling strategy ('first', 'last', or False).
+            index_config: Optional index configuration dictionary.
+            use_batch_processing: Whether to use batch processing for large datasets.
+
         Returns:
-            DataFrame containing current metadata
+            True if update completed successfully, False otherwise.
         """
-        # Chargement de la table si elle n'est pas en cache
-        if self._metadata_cache is None:
-            try:
-                # Chargement
-                self._metadata_cache = self.conn.execute("SELECT * FROM metadata").fetchdf()
-            except:
-                # Si la table n'existe pas encore, on l'initialise vide
-                self._metadata_cache = pd.DataFrame(columns=['name', 'label', 'python_type', 'sql_type', 'is_categorical'])
-        
-        return self._metadata_cache
+        try:
+            # Suppression des doublons dans les données de mise à jour
+            if check_duplicates_update:
+                update_df = remove_dataframe_duplicates(update_df, keep, self.logger, 'update')
+            
+            # Suppression des doublons dans la base de données
+            if check_duplicates_db:
+                self._remove_database_duplicates(keep)
+            
+            # Mise à jour des métadonnées
+            if not self._update_metadata_safe(update_df):
+                return False
+
+            # Mise à jour de la table de faits (avant les dimensions pour refléter l'état actuel)
+            # Mise à jour par batch si spécifié
+            if use_batch_processing and len(update_df) > self.batch_size:
+                if not self._update_fact_table_batch(update_df):
+                    return False
+            else:
+                if not self._update_fact_table_direct(update_df):
+                    return False
+
+            # Mise à jour des tables de dimensions (après fact table pour refléter les données actuelles)
+            if not self._update_dimensions_safe(update_df):
+                return False
+
+            # Nettoyage des entrées orphelines dans les tables de dimension
+            self.dimension_mgr.cleanup_orphaned_dimension_entries()
+
+            # Mise à jour des index
+            if index_config:
+                if not self._update_indexes_safe(index_config):
+                    return False
+
+            # Nettoyage final
+            self._cleanup_orphaned_data()
+            
+            # Logging
+            self.logger.info("Database update completed successfully (direct mode)")
+            # Invalidation du cache des méta-données
+            self._invalidate_metadata_cache()
+            return True
+            
+        except Exception as e:
+            # Logging
+            self.logger.error(f"Error during direct update: {e}")
+            return False
     
-    
-    # Méthode de préparation du DataFrame pour la fact table
-    def _prepare_dataframe_for_fact_table(self, df: pd.DataFrame) -> pd.DataFrame:
-        """
-        Prepare DataFrame for fact table by converting categorical labels to dimension table indices.
-        
+    # Méthodes de mise à jour sécurisées
+    # Méthode auxiliaire de mise à jour des méta-données
+    def _update_metadata_safe(self, update_df: pd.DataFrame) -> bool:
+        """Safely update metadata table with type conflict resolution.
+
         Args:
-            df: DataFrame to prepare
-            
+            update_df: DataFrame whose columns may require metadata updates.
+
         Returns:
-            Prepared DataFrame with categorical values as indices
+            True if metadata updated successfully, False on error.
         """
-        # Copie indépendante du jeu de données
-        prepared_df = df.copy()
-        # Chargement des méta-données
-        current_metadata = self._load_current_metadata()
-        
-        # Parcours des colonnes catégorielles
-        for _, row in current_metadata.iterrows():
-            # Nom de la colonne
-            col_name = row['name']
-            # Statut catégoriel
-            is_categorical = row['is_categorical']
+        try:
+            # Chargement des métadonnées actuelles
+            current_metadata = self._load_current_metadata()
+            current_columns = set(current_metadata['name'].values) if len(current_metadata) > 0 else set()
+            new_columns = set(update_df.columns)
             
-            if is_categorical and col_name in prepared_df.columns:
+            # Vérification des conflits de types pour les colonnes existantes
+            for col in current_columns.intersection(new_columns):
+                self._resolve_type_conflicts(col, update_df, current_metadata)
+            
+            return True
+            
+        except Exception as e:
+            # Logging
+            self.logger.error(f"Error updating metadata: {e}")
+            return False
+    
+    # Méthode auxiliaire de mise à jour des tables de dimension
+    def _update_dimensions_safe(self, update_df: pd.DataFrame) -> bool:
+        """Safely update dimension tables with categorical threshold checks.
+
+        Handles conversion between categorical and non-categorical status
+        based on unique value counts relative to the threshold.
+
+        Args:
+            update_df: DataFrame containing potential dimension updates.
+
+        Returns:
+            True if dimensions updated successfully, False on error.
+        """
+        try:
+            # Chargement des métadonnées
+            current_metadata = self._load_current_metadata()
+
+            # Classification des colonnes par statut catégoriel
+            categorical_columns = {}
+            non_categorical_columns = {}
+            
+            # Parcours des colonnes
+            for _, row in current_metadata.iterrows():
+                " Extraction du nom de la colonne"
+                col_name = row['name']
+                if col_name in update_df.columns:
+                    # Vérification du statut catégoriel
+                    if row['is_categorical']:
+                        categorical_columns[col_name] = update_df[col_name]
+                    elif row['python_type'] == 'object':
+                        non_categorical_columns[col_name] = update_df[col_name]
+            
+            # Mise à jour des dimensions existantes
+            if categorical_columns:
+                results = self.dimension_mgr.batch_update_dimensions(
+                    categorical_columns, 
+                    use_parallel=(len(categorical_columns) > 1 and self.max_workers > 1)
+                )
+                
+                # Vérification des résultats
+                for col_name, added_count in results.items():
+                    if added_count < 0:  # Erreur
+                        # Logging
+                        self.logger.error(f"Failed to update dimension for {col_name}")
+                        return False
+            
+            # Vérification des conversions vers catégoriel
+            for col_name, values in non_categorical_columns.items():
+                # Vérification du seuil
+                if self._check_categorical_threshold(values):
+                    # Conversion en catégoriel
+                    if not self.dimension_mgr.convert_to_categorical(col_name, values):
+                        # Logging
+                        self.logger.warning(f"Failed to convert {col_name} to categorical")
+            
+            # Vérification des conversions vers non-catégoriel
+            for col_name, values in categorical_columns.items():
+                # Vérification du seuil
+                if not self._check_categorical_threshold(values):
+                    # Conversion en non-catégroeil
+                    if not self.dimension_mgr.convert_to_non_categorical(col_name):
+                        # Logging
+                        self.logger.warning(f"Failed to convert {col_name} to non-categorical")
+            
+            return True
+            
+        except Exception as e:
+            # Logging
+            self.logger.error(f"Error updating dimensions: {e}")
+            return False
+    
+    # Méthode auxiliaire de mise à jour directe de la table des faits
+    def _update_fact_table_direct(self, update_df: pd.DataFrame) -> bool:
+        """Update fact table directly without batch processing.
+
+        Uses primary keys from metadata to determine INSERT vs UPSERT strategy:
+        - No primary keys defined: Always INSERT
+        - Primary keys defined and values exist: UPSERT
+        - Primary keys defined but no existing values: INSERT
+
+        Args:
+            update_df: DataFrame containing the data to upsert.
+
+        Returns:
+            True if fact table updated successfully, False on error.
+        """
+        try:
+            # Préparation des données pour la fact table
+            prepared_df = self._prepare_dataframe_for_fact_table(update_df)
+
+            # Récupération des clés primaires depuis les métadonnées
+            primary_keys = self._get_primary_key_columns()
+
+            # Détermination de la stratégie d'insertion/mise à jour basée sur les clés primaires
+            if not primary_keys:
+                # Pas de clés primaires définies → toujours INSERT
+                inserted = self.data_mgr.insert_data(prepared_df, use_batch=False)
+                self.logger.info(f"Fact table insert (no primary keys): {inserted} rows")
+            else:
+                # Vérification que les clés primaires sont présentes dans le DataFrame
+                missing_keys = [key for key in primary_keys if key not in prepared_df.columns]
+                if missing_keys:
+                    self.logger.error(f"Primary keys missing in DataFrame: {missing_keys}")
+                    return False
+
+                # Vérification si des valeurs de clés primaires existent déjà dans la fact_table
+                if self._primary_key_values_exist(prepared_df, primary_keys):
+                    # UPSERT avec les clés primaires comme merge_keys
+                    inserted, updated = self.data_mgr.upsert_data(prepared_df, primary_keys, use_batch=False)
+                    self.logger.info(f"Fact table upsert: {inserted} inserted, {updated} updated")
+                else:
+                    # INSERT car pas de valeurs existantes correspondantes
+                    inserted = self.data_mgr.insert_data(prepared_df, use_batch=False)
+                    self.logger.info(f"Fact table insert (new primary key values): {inserted} rows")
+
+            return True
+
+        except Exception as e:
+            # Logging
+            self.logger.error(f"Error updating fact table: {e}")
+            return False
+    
+    # Méthode auxiliaire de la mise à jour par batch de la table des faits
+    def _update_fact_table_batch(self, update_df: pd.DataFrame) -> bool:
+        """Update fact table using batch processing for large datasets.
+
+        Uses primary keys from metadata to determine INSERT vs UPSERT strategy:
+        - No primary keys defined: Always INSERT
+        - Primary keys defined and values exist: UPSERT
+        - Primary keys defined but no existing values: INSERT
+
+        Args:
+            update_df: DataFrame containing the data to upsert in batches.
+
+        Returns:
+            True if fact table updated successfully, False on error.
+        """
+        try:
+            # Préparation des données pour la fact table
+            prepared_df = self._prepare_dataframe_for_fact_table(update_df)
+
+            # Récupération des clés primaires depuis les métadonnées
+            primary_keys = self._get_primary_key_columns()
+
+            # Détermination de la stratégie d'insertion/mise à jour basée sur les clés primaires
+            if not primary_keys:
+                # Pas de clés primaires définies → toujours INSERT
+                inserted = self.data_mgr.insert_data(prepared_df, use_batch=True)
+                self.logger.info(f"Fact table batch insert (no primary keys): {inserted} rows")
+            else:
+                # Vérification que les clés primaires sont présentes dans le DataFrame
+                missing_keys = [key for key in primary_keys if key not in prepared_df.columns]
+                if missing_keys:
+                    self.logger.error(f"Primary keys missing in DataFrame: {missing_keys}")
+                    return False
+
+                # Vérification si des valeurs de clés primaires existent déjà dans la fact_table
+                if self._primary_key_values_exist(prepared_df, primary_keys):
+                    # UPSERT avec les clés primaires comme merge_keys
+                    inserted, updated = self.data_mgr.upsert_data(prepared_df, primary_keys, use_batch=True)
+                    self.logger.info(f"Fact table batch upsert: {inserted} inserted, {updated} updated")
+                else:
+                    # INSERT car pas de valeurs existantes correspondantes
+                    inserted = self.data_mgr.insert_data(prepared_df, use_batch=True)
+                    self.logger.info(f"Fact table batch insert (new primary key values): {inserted} rows")
+
+            return True
+
+        except Exception as e:
+            # Logging
+            self.logger.error(f"Error updating fact table in batch: {e}")
+            return False
+
+    # Méthode auxiliaire de vérification de l'existence de valeurs de clés primaires
+    def _primary_key_values_exist(self, df: pd.DataFrame, primary_keys: List[str]) -> bool:
+        """Check if any primary key values from DataFrame exist in fact_table.
+
+        Vérifie si au moins une combinaison de valeurs de clés primaires présente
+        dans le DataFrame existe déjà dans la fact_table. Cette vérification permet
+        de déterminer si une opération UPSERT ou INSERT doit être effectuée.
+
+        Args:
+            df: DataFrame containing data with primary key columns.
+            primary_keys: List of primary key column names.
+
+        Returns:
+            True if at least one row's primary key values exist in fact_table.
+
+        Example:
+            >>> df = pd.DataFrame({'id': [1, 2, 3], 'value': ['a', 'b', 'c']})
+            >>> updater._primary_key_values_exist(df, ['id'])
+            True  # Si id=1, 2, ou 3 existe dans fact_table
+        """
+        try:
+            # Vérification de l'existence de la fact_table
+            if not self._table_exists('fact_table'):
+                return False
+
+            # Vérification que la fact_table n'est pas vide
+            count = self.conn.execute("SELECT COUNT(*) FROM fact_table").fetchone()[0]
+            if count == 0:
+                return False
+
+            # Construction de la condition de jointure pour les clés primaires composites
+            conditions = " AND ".join([f"f.{key} = update_data.{key}" for key in primary_keys])
+
+            # Enregistrement temporaire du DataFrame pour la requête SQL
+            self.conn.register('update_data', df)
+
+            # Requête pour compter les correspondances entre les clés primaires
+            query = f"""
+                SELECT COUNT(*) FROM fact_table f
+                WHERE EXISTS (
+                    SELECT 1 FROM update_data
+                    WHERE {conditions}
+                )
+            """
+
+            result = self.conn.execute(query).fetchone()[0]
+
+            # Nettoyage de l'enregistrement temporaire
+            self.conn.unregister('update_data')
+
+            return result > 0
+
+        except Exception as e:
+            self.logger.error(f"Error checking primary key existence: {e}")
+            # En cas d'erreur, on retourne False pour favoriser l'INSERT
+            return False
+
+    # Méthode auxiliaire de mise à jour des index
+    def _update_indexes_safe(self, index_config: Dict) -> bool:
+        """Safely update database indexes based on configuration.
+
+        Args:
+            index_config: Dictionary containing index configuration.
+                - drop_existing: Whether to drop existing indexes first.
+
+        Returns:
+            True if indexes updated successfully, False on error.
+        """
+        try:
+            # Création d'un gestionnaire d'index
+            index_manager = IndexManager(connection=self.conn)
+            
+            # Suppression des index existants (optionnel selon configuration)
+            if index_config.get('drop_existing', True):
                 try:
-                    # Récupération des valeurs et labels de la table de dimension
-                    dim_table = f"dim_{col_name}"
-                    dim_result = self.conn.execute(f"SELECT value, label FROM {dim_table}").fetchdf()
-                    
-                    if len(dim_result) > 0:
-                        # Création du mapping label -> value pour convertir les labels en values
-                        label_to_value = dict(zip(dim_result['label'], dim_result['value']))
-                        
-                        # Remplacement des labels par les values de la dimension
-                        # Toutes les valeurs devraient maintenant exister grâce à car la mise à jour des tables de dimension est réalisé avant et grace à _ensure_dimension_values_exist
-                        prepared_df[col_name] = prepared_df[col_name].map(label_to_value)
-                        
-                        # Vérification des valeurs non mappées (ne devrait pas arriver normalement)
-                        unmapped_mask = prepared_df[col_name].isna()
-                        if unmapped_mask.any():
-                            unmapped_count = unmapped_mask.sum()
+                    # Recherche des index existants
+                    existing_indexes = self.conn.execute("""
+                        SELECT name FROM sqlite_master 
+                        WHERE type = 'index' AND name NOT LIKE 'sqlite_%'
+                    """).fetchall()
+                    # Parcours des index
+                    for idx in existing_indexes:
+                        try:
+                            # Suppression des index
+                            index_manager.drop_index(idx[0])
+                        except Exception as e:
                             # Logging
-                            self.logger.error(f"Found {unmapped_count} unmapped labels in {col_name} after dimension update. "
-                                            f"This indicates an error in the dimension update process.")
-                            # Remplace par -1 comme fallback
-                            prepared_df[col_name] = prepared_df[col_name].fillna(-1)
-                        
-                        # Conversion vers le type approprié selon le type des values dans la dimension
-                        if len(dim_result) > 0 and dim_result['value'].dtype in ['int64', 'int32']:
-                            prepared_df[col_name] = prepared_df[col_name].astype('int64')
-                        else:
-                            # Garde le type original si les values ne sont pas des entiers
-                            pass
-                    else:
-                        # Table de dimension vide - garder les valeurs originales temporairement
-                        self.logger.warning(f"Dimension table {dim_table} is empty, keeping original values")
-                    
+                            self.logger.warning(f"Cannot drop index {idx[0]}: {e}")
                 except Exception as e:
                     # Logging
-                    self.logger.warning(f"Could not convert categorical column {col_name}: {e}")
-        
-        return prepared_df
-    
-    # Méthode de mise à jour préalable des tables de dimension avec les nouvelles valeurs
-    def _ensure_dimension_values_exist(self, df: pd.DataFrame) -> None:
-        """
-        Ensure all categorical values from the DataFrame exist in their respective dimension tables.
-        This method should be called before preparing the DataFrame for the fact table.
-        
-        Args:
-            df: DataFrame containing the data to be inserted
-        """
-        # Extraction des métadonnées
-        current_metadata = self._load_current_metadata()
-        
-        # Parcours des colonnes catégorielles
-        for _, row in current_metadata.iterrows():
-            # Extraction du nom de la colonne
-            col_name = row['name']
-            # Extraction du statut catégoriel
-            is_categorical = row['is_categorical']
+                    self.logger.warning(f"Error retrieving existing indexes: {e}")
             
-            if is_categorical and col_name in df.columns:
-                # Mise à jour des valeurs de dimension avec les nouvelles valeurs
-                self._update_dimension_values(col_name, df[col_name])
-    
-    
-    # Méthode de déduplication de la base de données
-    def _remove_duplicates_from_database(self, keep: Literal[False, 'first', 'last']) -> int:
-        """
-        Remove duplicates from the existing fact table.
-        
-        Args:
-            keep: Strategy for keeping duplicates
+            # Création des nouveaux index
+            index_manager.create_fact_table_indexes("fact_table", index_config)
+            # Logging
+            self.logger.info("Successfully updated indexes")
+            return True
             
+        except Exception as e:
+            # Logging
+            self.logger.error(f"Error updating indexes: {e}")
+            return False
+    
+    # Méthodes de rollback
+    # Méthode auxiliaire de rollback des changements de métadonnées
+    def _rollback_metadata_changes(self) -> bool:
+        """Rollback metadata changes by invalidating cache.
+
         Returns:
-            Number of rows removed
+            True if rollback succeeded, False on error.
         """
         try:
+            # Invalidation du cache pour forcer le rechargement
+            self._invalidate_metadata_cache()
+            # Logging
+            self.logger.info("Metadata changes rolled back")
+            return True
+        except Exception as e:
+            # Logging
+            self.logger.error(f"Error rolling back metadata changes: {e}")
+            return False
+    
+    # Méthode auxiliaire de rollback des changements de dimensions
+    def _rollback_dimension_changes(self) -> bool:
+        """Rollback dimension table changes (handled by DuckDB transaction).
+
+        Returns:
+            True if rollback succeeded, False on error.
+        """
+        try:
+            # Les changements de dimension sont gérés par la transaction DuckDB
+            self.logger.info("Dimension changes rolled back")
+            return True
+        except Exception as e:
+            # Logging
+            self.logger.error(f"Error rolling back dimension changes: {e}")
+            return False
+    
+    # Méthode auxiliaire de rollback des changements de la fact table.
+    def _rollback_fact_changes(self) -> bool:
+        """Rollback fact table changes (handled by DuckDB transaction).
+
+        Returns:
+            True if rollback succeeded, False on error.
+        """
+        try:
+            # Les changements de fact table sont gérés par la transaction DuckDB
+            # Logging
+            self.logger.info("Fact table changes rolled back")
+            return True
+        except Exception as e:
+            # Logging
+            self.logger.error(f"Error rolling back fact table changes: {e}")
+            return False
+    
+    # Méthode auxiliaire de rollback des changements d'index.
+    def _rollback_index_changes(self) -> bool:
+        """Rollback index changes (handled by DuckDB transaction).
+
+        Returns:
+            True if rollback succeeded, False on error.
+        """
+        try:
+            # Les changements d'index sont gérés par la transaction DuckDB
+            # Logging
+            self.logger.info("Index changes rolled back")
+            return True
+        except Exception as e:
+            # Logging
+            self.logger.error(f"Error rolling back index changes: {e}")
+            return False
+    
+    # Méthodes utilitaires
+    # Méthode auxiliaire de préparation du jeu de données pour la table des faits
+    def _prepare_dataframe_for_fact_table(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Prepare DataFrame for fact table insertion.
+
+        Converts categorical columns to their dimension table values
+        and handles unmapped values.
+
+        Args:
+            df: Original DataFrame to prepare.
+
+        Returns:
+            Prepared DataFrame with categorical columns mapped to dimension values.
+        """
+        try:
+            # Copie du DataFrame
+            prepared_df = df.copy()
+            
+            # Chargement des métadonnées
+            current_metadata = self._load_current_metadata()
+            
+            # Conversion des colonnes catégorielles
+            for _, row in current_metadata.iterrows():
+                col_name = row['name']
+                is_categorical = row['is_categorical']
+                
+                if is_categorical and col_name in prepared_df.columns:
+                    # Mise à jour préalable de la dimension
+                    self.dimension_mgr.update_dimension_values(col_name, prepared_df[col_name])
+                    
+                    # Récupération du mapping
+                    mapping_df = self.dimension_mgr.get_dimension_mapping(col_name)
+                    
+                    if mapping_df is not None and len(mapping_df) > 0:
+                        label_to_value = dict(zip(mapping_df['label'], mapping_df['value']))
+                        prepared_df[col_name] = prepared_df[col_name].map(label_to_value)
+                        
+                        # Gestion des valeurs non mappées
+                        unmapped_mask = prepared_df[col_name].isna()
+                        if unmapped_mask.any():
+                            self.logger.warning(f"Found {unmapped_mask.sum()} unmapped values in {col_name}")
+                            prepared_df[col_name] = prepared_df[col_name].fillna(-1)
+            
+            return prepared_df
+            
+        except Exception as e:
+            # Logging
+            self.logger.error(f"Error preparing DataFrame for fact table: {e}")
+            return df
+    
+    # Méthode auxiliaire de suppression des doublons des données de mise à jour
+    def _remove_update_duplicates(self, update_df: pd.DataFrame, keep: Literal[False, 'first', 'last']) -> bool:
+        """Remove duplicates from update DataFrame.
+
+        Args:
+            update_df: DataFrame to deduplicate.
+            keep: Strategy for keeping duplicates ('first', 'last', or False).
+
+        Returns:
+            True if deduplication succeeded, False on error.
+        """
+        try:
+            # Cette méthode modifie le DataFrame en place via la référence
+            cleaned_df = remove_dataframe_duplicates(update_df, keep, self.logger, 'update')
+            return True
+        except Exception as e:
+            # Logging
+            self.logger.error(f"Error removing update duplicates: {e}")
+            return False
+    
+    # Méthode auxiliaire de nettoyage des données mises à jour
+    def _get_cleaned_update_data(self, update_df: pd.DataFrame, keep: Literal[False, 'first', 'last']) -> pd.DataFrame:
+        """Get deduplicated update data.
+
+        Args:
+            update_df: Original DataFrame with potential duplicates.
+            keep: Strategy for keeping duplicates ('first', 'last', or False).
+
+        Returns:
+            DataFrame with duplicates removed according to keep strategy.
+        """
+        return remove_dataframe_duplicates(update_df, keep, self.logger, 'update')
+    
+    # Méthode auxiliaire de suppression des doublons dans la base de données
+    def _remove_database_duplicates(self, keep: Literal[False, 'first', 'last']) -> bool:
+        """Remove duplicate rows from the database fact table.
+
+        Args:
+            keep: Strategy for keeping duplicates ('first', 'last', or False).
+
+        Returns:
+            True if deduplication succeeded, False on error.
+        """
+        try:
+            from ..utils.data_processing import build_database_duplicate_removal_query
+            
             # Récupération du nombre initial de lignes
             initial_count = self.conn.execute("SELECT COUNT(*) FROM fact_table").fetchone()[0]
             
-            # Récupération des colonnes (exclure 'value' si elle existe)
+            # Récupération des colonnes
             all_columns = [col[0] for col in self.conn.execute("DESCRIBE fact_table").fetchall()]
             columns_to_check = [col for col in all_columns if col != 'value']
             
             if not columns_to_check:
-                return 0
+                return True
             
-            # Construction de la requête de suppression des doublons
+            # Construction et exécution de la requête de suppression des doublons
             delete_query = build_database_duplicate_removal_query(columns_to_check, keep, 'fact_table')
-            
             self.conn.execute(delete_query)
             
             # Calcul des lignes supprimées
@@ -712,631 +962,151 @@ class DatabaseUpdater:
             removed_count = initial_count - final_count
             
             if removed_count > 0:
-                self.logger.warning(f"Duplicate removal (database): {removed_count} rows removed")
+                # Logging
+                self.logger.info(f"Database duplicate removal: {removed_count} rows removed")
             
-            return removed_count
+            return True
             
         except Exception as e:
-            self.logger.error(f"Error removing duplicates from database: {e}")
-            return 0
+            # Logging
+            self.logger.error(f"Error removing database duplicates: {e}")
+            return False
     
-    # Méthode d'ajout des informations d'une colonne à la table des métadonnées
-    def _add_column_to_metadata(self, column: str, df: pd.DataFrame, label: Optional[str] = None) -> None:
+    # Méthode auxuliaire de restoration de la base de données
+    def _restore_database_state(self) -> bool:
+        """Restore database state (placeholder - handled by DuckDB transaction).
+
+        Returns:
+            True (actual restoration handled by database transaction rollback).
         """
-        Add a new column to metadata.
+        # Cette méthode est un placeholder pour la restauration d'état
+        # En pratique, cela serait géré par la transaction DuckDB
+        self.logger.info("Database state restoration handled by transaction")
+        return True
+    
+    # Méthode auxiliaire de nettoyage des données orphelines
+    def _cleanup_orphaned_data(self) -> None:
+        """Clean up orphaned data after update operations.
+
+        Removes orphaned dimension entries and drops null-only columns.
+        """
+        try:
+            # Nettoyage des entrées orphelines dans les dimensions
+            removed_counts = self.dimension_mgr.cleanup_orphaned_dimension_entries()
+            
+            if removed_counts:
+                self.logger.info(f"Cleaned orphaned dimension entries: {removed_counts}")
+            
+            # Suppression des colonnes ne contenant que des nulles
+            null_only_columns = self._get_null_only_columns()
+            if null_only_columns:
+                dropped_columns = self.data_mgr.drop_columns(null_only_columns)
+                if dropped_columns:
+                    self.logger.info(f"Dropped null-only columns: {dropped_columns}")
+            
+        except Exception as e:
+            self.logger.error(f"Error cleaning orphaned data: {e}")
+    
+    # Méthodes publiques additionnelles
+    # Méthode d'extraction du statut de la base de données
+    def get_update_status(self) -> Dict[str, Any]:
+        """
+        Get the status of the database update system.
+        
+        Returns:
+            Dictionary containing system status information
+            
+        Example:
+            >>> status = updater.get_update_status()
+            >>> print(f"System health: {status['health_status']}")
+        """
+        try:
+            status = {
+                'timestamp': pd.Timestamp.now(),
+                'health_status': 'unknown',
+                'active_transactions': 0,
+                'validation_enabled': self.enable_validation,
+                'batch_size': self.batch_size,
+                'max_workers': self.max_workers
+            }
+            
+            # Vérification des transactions actives
+            active_txs = self.transaction_mgr.list_active_transactions()
+            status['active_transactions'] = len(active_txs)
+            
+            # Vérification de la santé de la base de données
+            if self.auditor:
+                health_check = self.auditor.get_quick_health_check()
+                status['health_status'] = health_check.get('status', 'unknown')
+                status['database_info'] = health_check
+            
+            # Statistiques de la fact table
+            if self._table_exists('fact_table'):
+                table_stats = self.data_mgr.get_table_stats()
+                status['fact_table_stats'] = table_stats
+            
+            return status
+            
+        except Exception as e:
+            # Logging
+            self.logger.error(f"Error getting update status: {e}")
+            return {'error': str(e), 'timestamp': pd.Timestamp.now()}
+    
+    # Méthode de validation de l'état de la base de données
+    def validate_database_state(self, validation_level: ValidationLevel = ValidationLevel.STANDARD) -> Any:
+        """
+        Validate the current state of the database.
         
         Args:
-            column: Column name
-            df: DataFrame containing the column
-            label: Custom label for the column. If None, defaults to formatted column name.
+            validation_level: Level of validation to perform
+            
+        Returns:
+            ValidationReport from the auditor
+            
+        Example:
+            >>> report = updater.validate_database_state(ValidationLevel.COMPREHENSIVE)
+            >>> if report.get_critical_issues_count() > 0:
+            ...     print("Critical issues detected!")
         """
-        # Identification du type de la colonne
-        dtype = str(df[column].dtype)
-        # Conversion du type en SQL
-        sql_type = map_python_to_sql_type(dtype)
-        # Définition si la variable est catégorielle
-        is_categorical = (
-            dtype == 'object' and 
-            df[column].nunique() <= self.categorical_threshold
-        )
-        
-        # Création de la table metadata si elle n'existe pas
-        self.conn.execute("""
-            CREATE TABLE IF NOT EXISTS metadata (
-                name VARCHAR,
-                label VARCHAR,
-                python_type VARCHAR,
-                sql_type VARCHAR,
-                is_categorical BOOLEAN
-            )
-        """)
-        
-        # Insertion de la nouvelle colonne
-        if label is None:
-            label = column.replace('_', ' ').title()
-        # Exécution de la requête
-        self.conn.execute("""
-            INSERT INTO metadata (name, label, python_type, sql_type, is_categorical)
-            VALUES (?, ?, ?, ?, ?)
-        """, [column, label, dtype, sql_type, is_categorical])
-        # Logging
-        self.logger.info(f"Added column {column} to metadata")
-    
-    # Méthode de résolutions des conflits de types
-    def _resolve_type_conflicts(self, column: str, df: pd.DataFrame, 
-                               current_metadata: pd.DataFrame) -> None:
-        """
-        Resolve type conflicts using the least restrictive strategy.
-        
-        Args:
-            column: Column name
-            df: DataFrame with new data
-            current_metadata: Current metadata
-        """
-        # Identification du type actuel de la colonne dans la base de données
-        current_type = current_metadata[current_metadata['name'] == column]['python_type'].values[0]
-        # Identification du nouveau type
-        new_type = str(df[column].dtype)
-        # Ne fait rien si inchangé
-        if current_type == new_type:
+        # Vérification qu'un auditeur est renseigné
+        if not self.auditor:
+            # Logging
+            self.logger.warning("Validation disabled - no auditor available")
             return None
         
-        # Hiérarchie des types (du plus contraignant au moins contraignant)
-        type_hierarchy = {
-            'bool': 1,
-            'int64': 2,
-            'float64': 3,
-            'object': 4
-        }
-        
-        current_level = type_hierarchy.get(current_type, 0)
-        new_level = type_hierarchy.get(new_type, 0)
-        
-        # Sélection du type le moins contraignant
-        if new_level > current_level:
-            resolved_type = new_type
-        else:
-            resolved_type = current_type
-        
-        # Conversion en type SQL
-        sql_type = map_python_to_sql_type(resolved_type)
-        # Mise à jour des métadonnées
-        self.conn.execute("""
-            UPDATE metadata 
-            SET python_type = ?, sql_type = ?
-            WHERE name = ?
-        """, [resolved_type, sql_type, column])
-        # Logging
-        self.logger.info(f"Type conflict resolution for {column}: {current_type} -> {resolved_type}")
+        return self.auditor.validate_database(validation_level)
     
-    
-    # Méthode d'ajout d'une nouvelle colonne à la table des faits
-    def _add_column_to_fact_table(self, column: str, df: pd.DataFrame) -> None:
+    # Méthode d'optimisation de la base de données
+    def optimize_database(self) -> bool:
         """
-        Add a new column to the fact table.
-        
-        Args:
-            column: Column name
-            df: DataFrame containing the column
-        """
-        # Identification du type de la colonne
-        dtype = str(df[column].dtype)
-        # Conversion du type en SQL
-        sql_type = map_python_to_sql_type(dtype)
-        
-        # Ajout de la colonne avec des valeurs NULL (seront remplacées dans l'upsert)
-        alter_query = f"ALTER TABLE fact_table ADD COLUMN {column} {sql_type} DEFAULT NULL"
-        # Exécution de la requête
-        self.conn.execute(alter_query)
-        # Logging
-        self.logger.info(f"Added column {column} to fact table")
-    
-    # Mise à jour du type de la colonne dans la table des faist
-    def _update_column_type_in_fact_table(self, column: str, df: pd.DataFrame) -> None:
-        """
-        Update column type in fact table using DuckDB ALTER TABLE syntax.
-        
-        Args:
-            column: Column name
-            df: DataFrame with the new data type
-        """
-        try:
-            # Récupération du type actuel de la colonne
-            current_columns = self.conn.execute("DESCRIBE fact_table").fetchall()
-            current_type = None
-            for col_info in current_columns:
-                if col_info[0] == column:
-                    current_type = col_info[1]
-                    break
-            
-            # Détermination du nouveau type SQL
-            new_dtype = str(df[column].dtype)
-            new_sql_type = map_python_to_sql_type(new_dtype)
-            
-            # Mise à jour du type si nécessaire
-            if current_type and current_type.upper() != new_sql_type.upper():
-                # Création de la requête
-                alter_query = f"ALTER TABLE fact_table ALTER {column} SET DATA TYPE {new_sql_type}"
-                # Exécution de la requête
-                self.conn.execute(alter_query)
-                # Logging
-                self.logger.info(f"Updated column {column} type from {current_type} to {new_sql_type}")
-        except Exception as e:
-            # Logging
-            self.logger.warning(f"Could not update column type for {column}: {e}")
-    
-    # Méthode de création de la table des faits avec les données
-    def _create_fact_table_with_data(self, df: pd.DataFrame) -> None:
-        """
-        Create the fact table with data.
-        
-        Args:
-            df: DataFrame with data
-        """
-        # Enregistrement d'une table temporaires qui recopie le jeu de données
-        self.conn.register('temp_fact_creation', df)
-        # Recopie dans la table des faits
-        self.conn.execute("""
-            CREATE TABLE fact_table AS 
-            SELECT * FROM temp_fact_creation
-        """)
-        # Suppression de la table temporaire
-        self.conn.execute('DROP VIEW temp_fact_creation')
-        
-        # Logging du nombre de lignes ajoutées
-        rows_added = len(df)
-        self.logger.info(f"Created fact table with {rows_added} rows")
-    
-    # Méthode d'insertion et de mise à jour de données dans la table des faits
-    def _upsert_to_fact_table(self, df: pd.DataFrame, merge_keys: List[str]) -> None:
-        """
-        Upsert data into the fact table.
-        
-        Args:
-            df: DataFrame to insert/update
-            merge_keys: Columns used to identify duplicates
-        """
-        # Enregistrement d'une vue temporaire du jeu de données
-        self.conn.register('temp_upsert', df)
-        
-        # Construction des conditions de jointure
-        merge_condition = " AND ".join([f"f.{key} = t.{key}" for key in merge_keys])
-        
-        # Comptage des mises à jour
-        update_count_query = f"""
-            SELECT COUNT(*) FROM fact_table f
-            WHERE EXISTS (
-                SELECT 1 FROM temp_upsert t
-                WHERE {merge_condition}
-            )
-        """
-        rows_updated = self.conn.execute(update_count_query).fetchone()[0]
-        
-        # Mise à jour des lignes existantes
-        if rows_updated > 0:
-            existing_columns = [col[0] for col in self.conn.execute("DESCRIBE fact_table").fetchall()]
-            update_columns = [col for col in df.columns if col in existing_columns and col not in merge_keys]
-            
-            if update_columns:
-                set_clause = ", ".join([f"f.{col} = t.{col}" for col in update_columns])
-                # Construction de la requête
-                update_query = f"""
-                    UPDATE fact_table f
-                    SET {set_clause}
-                    FROM temp_upsert t
-                    WHERE {merge_condition}
-                """
-                # Exécution de la requête
-                self.conn.execute(update_query)
-        
-        # Insertion des nouvelles lignes
-        initial_count = self.conn.execute("SELECT COUNT(*) FROM fact_table").fetchone()[0]
-        # Construction de la requête
-        insert_query = f"""
-            INSERT INTO fact_table
-            SELECT t.* FROM temp_upsert t
-            WHERE NOT EXISTS (
-                SELECT 1 FROM fact_table f
-                WHERE {merge_condition}
-            )
-        """
-        # Exécution de la requête
-        self.conn.execute(insert_query)
-        
-        # Comptage du nombre de lignes ajoutées
-        final_count = self.conn.execute("SELECT COUNT(*) FROM fact_table").fetchone()[0]
-        rows_added = final_count - initial_count
-        
-        # Suppression de la vue temporaire
-        self.conn.execute("DROP VIEW temp_upsert")
-        
-        # Logging
-        self.logger.info(f"Upsert completed: {rows_added} rows added, {rows_updated} rows updated")
-    
-    # Méthode de mise à jour d'une table de dimension
-    def _update_dimension_values(self, dimension_name: str, labels: pd.Series) -> None:
-        """
-        Update values of a dimension table.
-        
-        Args:
-            dimension_name: Dimension name
-            labels: Series with new labels
-        """
-        with self._lock:
-            # Nom de la table de dimension
-            table_name = f"dim_{dimension_name}"
-            
-            # Création de la table si elle n'existe pas
-            self.conn.execute(f"""
-                CREATE TABLE IF NOT EXISTS {table_name} (
-                    value VARCHAR PRIMARY KEY,
-                    label VARCHAR
-                )
-            """)
-            
-            # Récupération des valeurs existantes
-            try:
-                # Exécution de la requête
-                dim_result = self.conn.execute(f"SELECT value, label FROM {table_name}").fetchdf()
-                existing_labels = set(dim_result['label'])
-                existing_values = set(dim_result['value'])
-            except:
-                existing_labels = set()
-                existing_values = set()
-            
-            # Identification des nouvelles valeurs
-            unique_labels = set(labels.dropna().unique()) if isinstance(labels, pd.Series) else set(labels)
-            new_labels = unique_labels - existing_labels
-            # Construction des nouvelles valeurs 
-            if len(existing_values) > 0:
-                max_value = max(existing_values)
-                new_values = list(range(max_value + 1, max_value + 1 + len(new_labels)))
-            else:
-                new_values = list(range(len(new_labels)))
-            # Insertion des nouvelles valeurs et labels
-            values_added = 0
-            for value, label in zip(new_values, new_labels):
-                try:
-                    self.conn.execute(f"""
-                        INSERT INTO {table_name} (value, label) 
-                        VALUES (?, ?)
-                        ON CONFLICT (value) DO NOTHING
-                    """, [str(value), str(label)])
-                    values_added += 1
-                except Exception as e:
-                    # Logging
-                    self.logger.warning(f"Cannot insert {value} into {table_name}: {e}")
-            
-            if values_added > 0:
-                # Logging
-                self.logger.info(f"Added {values_added} new values to {table_name}")
-
-    # Méthode de suppression de colonnes avec gestion rigoureuse des dépendances
-    def delete_columns(self, columns: List[str], use_transaction: bool = True) -> None:
-        """
-        Delete columns from fact table and update related tables.
-        
-        Args:
-            columns: List of column names to delete
-            use_transaction: Whether to use database transaction for atomicity
-            
-        Example:
-            >>> deleter.delete_columns(['old_column1', 'old_column2'])
-        """       
-        # Vérification des colonnes existantes
-        existing_columns = self._get_fact_table_columns()
-        valid_columns = np.intersect1d(existing_columns, columns).tolist()
-
-        # Initialisation du booléen d'erreur
-        has_errors=False
-        
-        # Utilisation de transaction pour l'atomicité si demandée
-        if use_transaction:
-            try:
-                # Commencement de la transaction
-                self.conn.execute("BEGIN TRANSACTION")
-                # Logging
-                self.logger.info("Transaction commencée pour la suppression des colonnes")
-            except Exception as e:
-                # Logging
-                self.logger.warning(f"Impossible de commencer une transaction: {e}")
-                # Fallback
-                use_transaction = False
-        
-        try:
-            # Parcours des colonnes existantes à supprimer
-            for column in valid_columns:
-                try:                   
-                    # Suppression de la colonne de la fact table
-                    alter_query = f"ALTER TABLE fact_table DROP COLUMN {column}"
-                    self.conn.execute(alter_query)
-                    
-                    # Si c'est une dimension, suppression de la table associée
-                    # Nom de la table de dimension
-                    table_name = f"dim_{column}"
-                    # Suppression de la table de dimension
-                    self.conn.execute(f"DROP TABLE IF EXISTS {table_name}")
-                    
-                    # Suppression des index pour les colonnes non-catégorielles
-                    self._drop_column_indexes(column)
-                    
-                    # Suppression des métadonnées
-                    self.delete_column_metadata(column)
-                    
-                    # Logging
-                    self.logger.info(f"Successfully deleted column {column}")
-                    
-                except Exception as e:
-                    has_errors=True
-                    # Logging
-                    self.logger.error(f"Failed to delete column {column}: {e}")
-                    # En cas d'erreur, continuer avec les autres colonnes
-                    # Le rollback sera géré à la fin si nécessaire
-        
-            # Nettoyage final des index orphelins
-            self._cleanup_orphaned_indexes()
-            
-            # Commit de la transaction si tout s'est bien passé
-            if use_transaction:
-                # S'il n'y a pas d'erreur, exécution de la suppression
-                if not has_errors:
-                    # Exécution de la transaction
-                    self.conn.execute("COMMIT")
-                    # Logging
-                    self.logger.info("Transaction commitée avec succès")
-                else:
-                    # Annulation de la transaction
-                    self.conn.execute("ROLLBACK")
-                    # Logging
-                    self.logger.warning("Transaction annulée à cause d'erreurs")
-                    
-        except Exception as e:
-            # Gestion des erreurs globales
-            self.logger.error(f"Erreur globale lors de la suppression des colonnes: {e}")
-            # Si on utilise une transaction, annulation à cuase de l'erreir
-            if use_transaction:
-                try:
-                    # Annulation de la transaction
-                    self.conn.execute("ROLLBACK")
-                    # Logging
-                    self.logger.info("Transaction annulée à cause d'une erreur globale")
-                except Exception:
-                    pass
-
-    # Méthode de suppression des métadonnées d'une colonne
-    def delete_column_metadata(self, column_name: str) -> None:
-        """
-        Delete metadata for a specific column.
-        
-        Args:
-            column_name: Name of the column
-        """
-        try:
-            # Requête de suppression des méta-données
-            delete_query = "DELETE FROM metadata WHERE name = ?"
-            # Exécution de la requête
-            self.conn.execute(delete_query, [column_name])
-            # Logging
-            self.logger.info(f"Deleted metadata for column {column_name}")
-            
-        except Exception as e:
-            # Logging
-            self.logger.error(f"Failed to delete metadata for column {column_name}: {e}")
-            raise
-    
-    # Méthode de suppression des index liés à une colonne
-    def _drop_column_indexes(self, column: str) -> List[str]:
-        """
-        Drop all indexes that involve the specified column.
-        
-        Args:
-            column: Column name
-            
-        Returns:
-            List of dropped index names
-            
-        Example:
-            >>> dropped = deleter._drop_column_indexes('category')
-            >>> print(f"Dropped indexes: {dropped}")
-        """
-        # Initialisation de la liste des indices supprimés
-        dropped_indexes = []
-        
-        try:
-            # Recherche des index utilisant cette colonne
-            index_query = """
-                SELECT index_name, expressions 
-                FROM duckdb_indexes() 
-                WHERE expressions LIKE ?
-            """
-            # Exécution de la requête
-            indexes = self.conn.execute(index_query, [f'%{column}%']).fetchall()
-            # Parcours des index à supprimer
-            for index_name, expressions in indexes:
-                try:
-                    # Suppression de l'index
-                    drop_query = f"DROP INDEX IF EXISTS {index_name}"
-                    self.conn.execute(drop_query)
-                    dropped_indexes.append(index_name)
-                    # Logging
-                    self.logger.info(f"Index supprimé: {index_name} (expressions: {expressions})")
-                    
-                except Exception as e:
-                    # Logging
-                    self.logger.error(f"Erreur lors de la suppression de l'index {index_name}: {e}")
-            if dropped_indexes :
-                # Logging
-                self.logger.info(f"Index supprimés pour {column}: {dropped_indexes}")
-            
-        except Exception as e:
-            # Logging
-            self.logger.error(f"Erreur lors de la recherche des index pour {column}: {e}")
-
-            if dropped_indexes :
-                # Logging
-                self.logger.info(f"Index supprimés pour {column}: {dropped_indexes}")
-    
-    # Méthode de nettoyage des index orphelins
-    def _cleanup_orphaned_indexes(self) -> List[str]:
-        """
-        Clean up indexes that reference non-existent columns.
+        Perform database optimization operations.
         
         Returns:
-            List of cleaned up index names
+            True if optimization was successful
             
         Example:
-            >>> cleaned = deleter._cleanup_orphaned_indexes()
+            >>> success = updater.optimize_database()
+            >>> if success:
+            ...     print("Database optimized successfully")
         """
-        
         try:
-            # Récupération des colonnes existantes dans fact_table
-            existing_columns = set(self._get_fact_table_columns())
+            # Optimisation de la fact table
+            if not self.data_mgr.optimize_table():
+                self.logger.warning("Failed to optimize fact table")
             
-            # Récupération de tous les index
-            all_indexes = self.conn.execute("""
-                SELECT index_name, expressions 
-                FROM duckdb_indexes()
-            """).fetchall()
+            # Nettoyage des données orphelines
+            self._cleanup_orphaned_data()
             
-            # Parcours des indices
-            for index_name, expressions in all_indexes:
-                # Vérification si l'index référence des colonnes qui n'existent plus
-                should_drop = False
-                
-                # Vérification si l'index référence des colonnes supprimées
-                # Analyse des colonnes potentiellement référencées dans l'expression
-                referenced_columns = []
-                for col in existing_columns:
-                    if col in expressions or f"fact_table.{col}" in expressions:
-                        referenced_columns.append(col)
-                
-                # Si l'index ne référence aucune colonne existante, il est orphelin
-                if not referenced_columns and "fact_table" in expressions:
-                    should_drop = True
-                
-                if should_drop:
-                    try:
-                        # Suppression de l'indice
-                        self.conn.execute(f"DROP INDEX IF EXISTS {index_name}")
-                        # Logging
-                        self.logger.info(f"Index orphelin supprimé: {index_name}")
-                    except Exception as e:
-                        # Logging
-                        self.logger.error(f"Erreur lors de la suppression de l'index orphelin {index_name}: {e}")
+            # Nettoyage des anciennes transactions
+            cleaned_txs = self.transaction_mgr.cleanup_old_transactions()
+            if cleaned_txs > 0:
+                self.logger.info(f"Cleaned up {cleaned_txs} old transactions")
+            
+            # Logging
+            self.logger.info("Database optimization completed")
+            return True
             
         except Exception as e:
             # Logging
-            self.logger.error(f"Erreur lors du nettoyage des index orphelins: {e}")
-    
-    # Méthode d'obtention des colonnes de la table de faits
-    def _get_fact_table_columns(self) -> List[str]:
-        """Get list of columns in fact table."""
-        result = self.conn.execute("DESCRIBE fact_table").fetchall()
-        return [row[0] for row in result]
-    
-    # Méthode d'identification des colonnes ne contenant que des valeurs nulles
-    def _get_null_only_columns(self) -> List[str]:
-        """
-        Get list of columns that contain only null values in the fact table.
-        
-        Returns:
-            List of column names that contain only null values
-        """
-        # Initialisation de la liste des colonnes vides
-        null_only_columns = []
-        
-        try:
-            # Récupération des colonnes de la fact table
-            columns = self._get_fact_table_columns()
-            # Parcours des données
-            for column in columns:
-                # Vérification si la colonne ne contient que des valeurs nulles
-                query = f"SELECT COUNT(*) FROM fact_table WHERE {column} IS NOT NULL"
-                non_null_count = self.conn.execute(query).fetchone()[0]
-                # Ajout à la liste si ne contient que des colonnes nulles
-                if non_null_count == 0:
-                    null_only_columns.append(column)
-            # Logging
-            if null_only_columns:
-                self.logger.info(f"Columns containing only null values detected: {null_only_columns}")
-                
-        except Exception as e:
-            self.logger.error(f"An error occured while detecting null values: {e}")
-        
-        return null_only_columns
-    
-    # Méthode de nettoyage des entrées orphelines dans les tables de dimension
-    def _cleanup_dimension_orphaned_entries(self) -> None:
-        """
-        Clean up dimension table entries that are no longer referenced in the fact table.
-        """
-        try:
-            # Chargement des métadonnées pour identifier les colonnes catégorielles
-            current_metadata = self._load_current_metadata()
-            
-            # Parcours des colonnes catégorielles
-            for _, row in current_metadata.iterrows():
-                col_name = row['name']
-                is_categorical = row['is_categorical']
-                # Nettotage des variables catégorielles
-                if is_categorical:
-                    self._cleanup_single_dimension_orphaned_entries(col_name)
-                    
-        except Exception as e:
-            # Logging
-            self.logger.error(f"An error occured while cleaning orphaned dimension entries: {e}")
-    
-    # Méthode de nettoyage des entrées orphelines pour une dimension spécifique
-    def _cleanup_single_dimension_orphaned_entries(self, col_name: str) -> None:
-        """
-        Clean up orphaned entries for a specific dimension table.
-        
-        Args:
-            col_name: Column name associated with the dimension table
-        """
-        # Nom de la table de dimension
-        table_name = f"dim_{col_name}"
-        
-        try:
-            # Vérification que la table de dimension existe
-            dimension_exists = self.conn.execute(f"""
-                SELECT COUNT(*) FROM information_schema.tables 
-                WHERE table_name = '{table_name}'
-            """).fetchone()[0] > 0
-            
-            if dimension_exists:
-                # Vérification que la colonne existe dans la fact table
-                fact_columns = self._get_fact_table_columns()
-                if col_name not in fact_columns:
-                    # Si la colonne n'existe plus dans la fact table, supprimer toute la dimension
-                    self.conn.execute(f"DROP TABLE IF EXISTS {table_name}")
-                    # Logging
-                    self.logger.info(f"Table de dimension {table_name} supprimée car la colonne {col_name} n'existe plus")
-                
-                # Suppression des entrées orphelines (valeurs qui ne sont plus référencées dans la fact table)
-                cleanup_query = f"""
-                    DELETE FROM {table_name}
-                    WHERE value NOT IN (
-                        SELECT DISTINCT {col_name} 
-                        FROM fact_table 
-                        WHERE {col_name} IS NOT NULL
-                    )
-                """
-                
-                # Comptage des entrées avant suppression
-                count_before = self.conn.execute(f"SELECT COUNT(*) FROM {table_name}").fetchone()[0]
-                
-                # Exécution de la suppression
-                self.conn.execute(cleanup_query)
-                
-                # Comptage des entrées après suppression
-                count_after = self.conn.execute(f"SELECT COUNT(*) FROM {table_name}").fetchone()[0]
-                
-                removed_count = count_before - count_after
-                # Logging
-                if removed_count > 0:
-                    self.logger.info(f"Removed {removed_count} orphaned entries from {table_name}")
-                    
-        except Exception as e:
-            # Logging
-            self.logger.error(f"An error occured while cleaning orphaned entries from {table_name}: {e}")
+            self.logger.error(f"Error during database optimization: {e}")
+            return False
