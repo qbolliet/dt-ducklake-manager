@@ -56,14 +56,14 @@ def test_init_with_path(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# Tests de export_fact_table — export sans partitionnement
+# Tests de export_table — export sans partitionnement
 # ---------------------------------------------------------------------------
 
 # Test de l'export à plat d'une table vers un fichier Parquet unique
 def test_export_fact_table_flat(exporter_with_schema, tmp_path):
-    """Test that export_fact_table creates a single Parquet file without partitioning."""
+    """Test that export_table creates a single Parquet file without partitioning."""
     output_path = str(tmp_path / "fact.parquet")
-    exporter_with_schema.export_fact_table('fact_table', output_path)
+    exporter_with_schema.export_table('fact_table', output_path)
 
     # Le fichier doit exister
     assert os.path.exists(output_path)
@@ -75,23 +75,23 @@ def test_export_fact_table_flat_readable(exporter_with_schema, tmp_path):
     import pandas as pd
 
     output_path = str(tmp_path / "fact.parquet")
-    exporter_with_schema.export_fact_table('fact_table', output_path)
+    exporter_with_schema.export_table('fact_table', output_path)
 
     df = pd.read_parquet(output_path)
     assert len(df) > 0
 
 
 # ---------------------------------------------------------------------------
-# Tests de export_fact_table — export avec partitionnement
+# Tests de export_table — export avec partitionnement
 # ---------------------------------------------------------------------------
 
 # Test de l'export avec partitionnement sur une colonne catégorielle
 def test_export_fact_table_partitioned(exporter_with_schema, tmp_path):
-    """Test that export_fact_table creates partitioned subdirectories."""
+    """Test that export_table creates partitioned subdirectories."""
     output_dir = str(tmp_path / "fact_partitioned")
     # La colonne 'category' est présente dans la fact_table (après remplacement par des IDs)
     # On partitionne sur la colonne 'id' qui est numérique et petite
-    exporter_with_schema.export_fact_table('fact_table', output_dir, partition_keys=['id'])
+    exporter_with_schema.export_table('fact_table', output_dir, partition_keys=['id'])
 
     # Le répertoire de sortie doit exister
     assert os.path.isdir(output_dir)
@@ -107,7 +107,7 @@ def test_export_fact_table_partitioned(exporter_with_schema, tmp_path):
 def test_export_fact_table_partitioned_hive_format(exporter_with_schema, tmp_path):
     """Test that partitioned export follows the Hive partitioning naming convention."""
     output_dir = str(tmp_path / "fact_hive")
-    exporter_with_schema.export_fact_table('fact_table', output_dir, partition_keys=['id'])
+    exporter_with_schema.export_table('fact_table', output_dir, partition_keys=['id'])
 
     subdirs = [
         d for d in os.listdir(output_dir)
@@ -118,7 +118,7 @@ def test_export_fact_table_partitioned_hive_format(exporter_with_schema, tmp_pat
 
 
 # ---------------------------------------------------------------------------
-# Tests des cas d'erreur de export_fact_table
+# Tests des cas d'erreur de export_table
 # ---------------------------------------------------------------------------
 
 # Test que ValueError est levé pour une table inexistante
@@ -126,7 +126,7 @@ def test_export_fact_table_nonexistent_table(exporter_with_schema, tmp_path):
     """Test that ValueError is raised when the table does not exist."""
     output_path = str(tmp_path / "output.parquet")
     with pytest.raises(ValueError, match="n'existe pas"):
-        exporter_with_schema.export_fact_table('nonexistent_table', output_path)
+        exporter_with_schema.export_table('nonexistent_table', output_path)
 
 
 # Test que ValueError est levé pour une clé de partition invalide
@@ -134,7 +134,7 @@ def test_export_fact_table_invalid_partition_key(exporter_with_schema, tmp_path)
     """Test that ValueError is raised when a partition key is not a column."""
     output_dir = str(tmp_path / "bad_partition")
     with pytest.raises(ValueError, match="clés de partitionnement"):
-        exporter_with_schema.export_fact_table(
+        exporter_with_schema.export_table(
             'fact_table', output_dir, partition_keys=['nonexistent_column']
         )
 
