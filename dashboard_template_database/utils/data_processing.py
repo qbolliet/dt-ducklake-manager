@@ -35,45 +35,56 @@ def map_python_to_sql_type(dtype: str) -> str:
     return type_mapping.get(dtype, 'VARCHAR')
 
 # Fonction de suppression des duplicats d'un jeu de donnéess
-def remove_dataframe_duplicates(df: pd.DataFrame, 
+def remove_dataframe_duplicates(df: pd.DataFrame,
                                keep: Literal[False, 'first', 'last'],
                                logger: Optional[logging.Logger] = None,
-                               source: str = "DataFrame") -> pd.DataFrame:
+                               source: str = "DataFrame",
+                               primary_keys: Optional[List[str]] = None) -> pd.DataFrame:
     """
-    Remove duplicates from a DataFrame excluding the 'value' column.
-    
+    Remove duplicates from a DataFrame based on primary keys or all columns.
+
     Args:
         df (pd.DataFrame): DataFrame to process
         keep (Literal[False, 'first', 'last']): Strategy for keeping duplicates
         logger (Optional[logging.Logger]): Logger instance for tracking
         source (str): Data source identifier for logging
-        
+        primary_keys (Optional[List[str]]): List of column names to use as the
+            duplicate detection key. If provided and non-empty, only these columns
+            are used to identify duplicates. If None or empty, all columns are used.
+
     Returns:
         pd.DataFrame: DataFrame without duplicates
-        
+
     Examples:
         >>> df = pd.DataFrame({'A': [1, 1, 2], 'B': ['x', 'x', 'y']})
         >>> result = remove_dataframe_duplicates(df, keep='first')
         >>> len(result)
         2
+
+        >>> df = pd.DataFrame({'id': [1, 1, 2], 'value': [10, 99, 30]})
+        >>> result = remove_dataframe_duplicates(df, keep='first', primary_keys=['id'])
+        >>> len(result)
+        2
     """
     # Comptage du nombre d'observations initial
     initial_count = len(df)
-    
-    # Identification des colonnes à vérifier (toutes sauf 'value' si elle existe)
-    columns_to_check = [col for col in df.columns if col != 'value']
-    
-    # Suppression des doublons selon la stratégie choisie
-    if keep == False:
-        df_cleaned = df.drop_duplicates(subset=columns_to_check, keep=False)
+
+    # Sélection des colonnes servant à identifier les doublons :
+    # - Si des clés primaires sont fournies, on les utilise exclusivement
+    # - Sinon, toutes les colonnes du DataFrame sont utilisées
+    if primary_keys:
+        columns_to_check = primary_keys
     else:
-        df_cleaned = df.drop_duplicates(subset=columns_to_check, keep=keep)
-    
+        columns_to_check = list(df.columns)
+
+    # Suppression des doublons selon la stratégie choisie
+    df_cleaned = df.drop_duplicates(subset=columns_to_check, keep=keep)
+
     # Comptage des observations supprimées et logging
     removed_count = initial_count - len(df_cleaned)
     if removed_count > 0 and logger:
-        logger.warning(f"Suppression des doublons ({source}): {removed_count} observations supprimées")
-    
+        logger.warning(f"Removing duplicates from {source}: {removed_count} removed observations")
+
     return df_cleaned
 
 # Fonction de construction de la requête de suppression des duplicats

@@ -1,6 +1,7 @@
 # Importation des modules
 # Modules de base
 import os
+import warnings
 import numpy as np
 import pandas as pd
 import logging
@@ -11,6 +12,8 @@ import s3fs
 #from moto import mock_aws
 # Module de tests
 import pytest
+# Modules du package
+from dashboard_template_database.builders import DuckdbTablesBuilder
 
 # Initialisation d'un jeu de données d'exemple
 @pytest.fixture
@@ -136,12 +139,16 @@ def temp_files(sample_df, tmp_path):
 # Fixture pour DataFrame avec doublons
 @pytest.fixture
 def sample_df_with_duplicates():
-    """Create a sample DataFrame with duplicates for testing."""
+    """Create a sample DataFrame with duplicates for testing.
+
+    Rows 0&3 and rows 1&4 are fully identical (including 'value'), so they are
+    detected as duplicates regardless of the column subset used for deduplication.
+    """
     return pd.DataFrame({
         'id': [1, 2, 3, 1, 2],  # Doublons sur id 1 et 2
         'category': ['A', 'B', 'A', 'A', 'B'],
         'status': ['active', 'inactive', 'active', 'active', 'inactive'],
-        'value': [10.0, 20.0, 30.0, 40.0, 50.0]
+        'value': [10.0, 20.0, 30.0, 10.0, 20.0]  # Même valeur pour les lignes dupliquées
     })
 
 # Fixture pour DataFrame avec colonne 'value'
@@ -154,3 +161,38 @@ def sample_df_with_value_column():
         'status': ['active', 'inactive', 'active', 'active'],
         'value': [10.0, 20.0, 30.0, 40.0]  # Valeurs différentes pour les doublons
     })
+
+# Fixture pour DataFrame avec clés primaires et plusieurs colonnes de valeurs
+@pytest.fixture
+def sample_df_with_primary_keys():
+    """Create a sample DataFrame with primary keys and multiple value columns for testing.
+
+    Rows 0 and 3 are duplicates on 'id' but differ on the 'value' column,
+    which allows testing that deduplication based on primary_keys correctly
+    identifies them as duplicates regardless of the 'value' difference.
+    """
+    return pd.DataFrame({
+        'id': [1, 2, 3, 1],
+        'category': ['A', 'B', 'C', 'A'],
+        'value': [10.0, 20.0, 30.0, 99.0],
+        'lower_bound': [1.0, 2.0, 3.0, 1.0],
+        'upper_bound': [5.0, 6.0, 7.0, 5.0],
+    })
+
+# Fixture fournissant une connexion DuckDB avec un schéma déjà construit
+@pytest.fixture
+def built_duckdb_schema(sample_df):
+    """Provide an in-memory DuckDB connection with a fully built schema.
+
+    The schema is built from sample_df with categorical_threshold=4 and
+    primary_keys=['id'], ready to be used with ParquetExporter or IndexManager.
+    """
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        builder = DuckdbTablesBuilder(
+            sample_df,
+            categorical_threshold=4,
+            primary_keys=['id'],
+        )
+    builder.build_duckdb_schema()
+    return builder.conn

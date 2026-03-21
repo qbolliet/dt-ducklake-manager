@@ -1,17 +1,23 @@
 # Importation des modules
 # Modules de base
+import warnings
 import pandas as pd
 import numpy as np
 # Module de tests
 import pytest
 # Modules du package à tester
 from dashboard_template_database.builders import SchemaBuilder
+from dashboard_template_database.utils.data_processing import map_python_to_sql_type
 
 # Initialisation d'une instance de la classe utilisée dans l'ensemble des tests
 @pytest.fixture
 def schema_builder(sample_df):
     """Initialization of the SchemaBuilder class."""
-    return SchemaBuilder(sample_df, categorical_threshold=4)
+    # Suppression du UserWarning lié à l'absence de clés primaires : ce comportement
+    # est testé séparément dans test_warning_when_no_primary_keys.
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        return SchemaBuilder(sample_df, categorical_threshold=4)
 
 # Fonction de test de l'initialisation de la classe
 def test_schema_builder_initialization(schema_builder, sample_df):
@@ -25,12 +31,12 @@ def test_schema_builder_initialization(schema_builder, sample_df):
 def test_map_python_to_sql_type():
     """Test the mapping between python and SQL types."""
     # Vérification du mapping de chaque type
-    assert SchemaBuilder._map_python_to_sql_type('object') == 'VARCHAR'
-    assert SchemaBuilder._map_python_to_sql_type('int64') == 'INTEGER'
-    assert SchemaBuilder._map_python_to_sql_type('float64') == 'DOUBLE'
-    assert SchemaBuilder._map_python_to_sql_type('datetime64[ns]') == 'TIMESTAMP'
-    assert SchemaBuilder._map_python_to_sql_type('bool') == 'BOOLEAN'
-    assert SchemaBuilder._map_python_to_sql_type('unknown_type') == 'VARCHAR'
+    assert map_python_to_sql_type('object') == 'VARCHAR'
+    assert map_python_to_sql_type('int64') == 'INTEGER'
+    assert map_python_to_sql_type('float64') == 'DOUBLE'
+    assert map_python_to_sql_type('datetime64[ns]') == 'TIMESTAMP'
+    assert map_python_to_sql_type('bool') == 'BOOLEAN'
+    assert map_python_to_sql_type('unknown_type') == 'VARCHAR'
 
 # Fonction de test de la création de la table des méta-données
 def test_create_metadata_table(schema_builder):
@@ -106,8 +112,61 @@ def test_build_complete_schema(schema_builder, column_labels):
     """Test the build of the complete scheme."""
     # Construction du schéma
     metadata, dim_tables, fact_table = schema_builder.build(column_labels)
-    
+
     # Vérification du type de chacun des éléments du schéma
     assert isinstance(metadata, pd.DataFrame)
     assert isinstance(dim_tables, dict)
     assert isinstance(fact_table, pd.DataFrame)
+
+
+# ---------------------------------------------------------------------------
+# Tests liés à categorical_threshold=None (nouveau comportement par défaut)
+# ---------------------------------------------------------------------------
+
+# Test que categorical_threshold=None ne produit aucune colonne catégorielle
+def test_categorical_threshold_none_no_categorical_columns(sample_df):
+    """Test that no column is marked categorical when categorical_threshold=None."""
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        builder = SchemaBuilder(sample_df, categorical_threshold=None)
+
+    metadata = builder.create_metadata_table()
+
+    # Aucune colonne ne doit être marquée comme catégorielle
+    assert not metadata['is_categorical'].any()
+
+
+# Test que categorical_threshold=None produit un dictionnaire de dimensions vide
+def test_categorical_threshold_none_empty_dimension_tables(sample_df):
+    """Test that no dimension tables are created when categorical_threshold=None."""
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        builder = SchemaBuilder(sample_df, categorical_threshold=None)
+
+    builder.create_metadata_table()
+    dim_tables = builder.create_dimension_tables()
+
+    # Le dictionnaire des tables de dimension doit être vide
+    assert isinstance(dim_tables, dict)
+    assert len(dim_tables) == 0
+
+
+# ---------------------------------------------------------------------------
+# Tests de l'avertissement lié à l'absence de clés primaires
+# ---------------------------------------------------------------------------
+
+# Test que UserWarning est levé quand aucune clé primaire n'est fournie
+def test_warning_when_no_primary_keys(sample_df):
+    """Test that a UserWarning is raised when no primary keys are specified."""
+    with pytest.warns(UserWarning, match="Aucune clé primaire"):
+        SchemaBuilder(sample_df, categorical_threshold=4)
+
+
+# Test qu'aucun avertissement n'est levé quand des clés primaires sont fournies
+def test_no_warning_when_primary_keys_provided(sample_df):
+    """Test that no UserWarning is raised when primary_keys is provided."""
+    # Traiter les warnings comme des erreurs pour détecter toute émission non attendue
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", UserWarning)
+        # Ne doit pas lever d'exception
+        SchemaBuilder(sample_df, categorical_threshold=4, primary_keys=['id'])

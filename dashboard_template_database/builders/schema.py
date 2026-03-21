@@ -1,6 +1,7 @@
 # Importation des modules
 # Modules de base
 import os
+import warnings
 import pandas as pd
 from pathlib import Path
 from typing import Dict, Optional, Tuple, Union, List
@@ -29,19 +30,22 @@ class SchemaBuilder:
     """
 
     # Initialisation
-    def __init__(self, df: pd.DataFrame, categorical_threshold: Optional[int] = 50, primary_keys: Optional[List[str]] = None, log_filename: Optional[os.PathLike] = None) -> None:
+    def __init__(self, df: pd.DataFrame, categorical_threshold: Optional[int] = None, primary_keys: Optional[List[str]] = None, log_filename: Optional[os.PathLike] = None) -> None:
         """
         Initialize the SchemaBuilder with a DataFrame and optional parameters.
 
         Args:
             df (pd.DataFrame): The input dataset.
-            categorical_threshold (int, optional): Maximum number of unique values
-                                                   for a column to be considered categorical. Defaults to 50.
+            categorical_threshold (Optional[int]): Maximum number of unique values
+                for a column to be considered categorical. When None (default), no
+                dimension tables are created and all object columns are marked as
+                non-categorical. Pass an integer (e.g. 50) to restore the previous
+                behaviour.
             primary_keys (List[str], optional): List of column names to use as primary key.
-                                                Can be a single column or composite key.
-                                                Defaults to None (no primary key).
+                Can be a single column or composite key. Defaults to None (no primary key).
+                When None, deduplication will use all columns and a UserWarning is raised.
             log_filename (os.PathLike, optional): Path to the log file. Defaults to
-                                                  a file named `schema_builder.log` in a logs directory.
+                a file named `schema_builder.log` in a logs directory.
 
         Examples:
             >>> # Single primary key
@@ -50,8 +54,14 @@ class SchemaBuilder:
             >>> # Composite primary key
             >>> builder = SchemaBuilder(df, primary_keys=['date', 'country', 'indicator'])
 
-            >>> # No primary key (default)
+            >>> # No primary key — raises UserWarning
             >>> builder = SchemaBuilder(df)
+
+            >>> # Threshold disabled — no dimension tables are created
+            >>> builder = SchemaBuilder(df, categorical_threshold=None, primary_keys=['id'])
+
+            >>> # Threshold enabled — behaves like the original default
+            >>> builder = SchemaBuilder(df, categorical_threshold=50, primary_keys=['id'])
         """
         # Initialisation des arguments
         # Jeu de données
@@ -80,6 +90,19 @@ class SchemaBuilder:
             self.primary_keys = primary_keys
         else:
             self.primary_keys = []
+
+        # Avertissement en l'absence de clés primaires : la déduplication portera sur
+        # l'ensemble des colonnes, ce qui peut produire des résultats inattendus lorsque
+        # plusieurs colonnes de valeurs (value, lower_bound, upper_bound…) diffèrent
+        # entre deux lignes qui représentent pourtant le même enregistrement.
+        if not self.primary_keys:
+            warnings.warn(
+                "No primary key specified. The deduplication will apply to "
+                "all columns. Passez primary_keys=['col1', ...] to "
+                "avoid this warning.",
+                UserWarning,
+                stacklevel=2,
+            )
 
         # Initialisation du logger
         if log_filename is None:
@@ -138,18 +161,20 @@ class SchemaBuilder:
             if dtype == 'object' :
                 # Calcul du nombre de modalités
                 n_modalities = self.df[col].nunique()
-                # Si le nombre de modalités dans la colonne est inférieur au seuil, la variable est catégorielle
-                if  n_modalities <= self.categorical_threshold:
-                    # Mise à jour du type de la variable
-                    metadata['is_categorical'] = True
-                    # Logging
-                    self.logger.info(f"The column '{col}' is of type 'object' and the number of modalities {n_modalities} satisfies the categorical threshold criteria {self.categorical_threshold}")
-                    # Mise à jour des modalités
-                    # metadata['modalities'] = str(self.df[col].dropna().unique().tolist())
-                else :
-                    # Logging
-                    self.logger.warning(f"The column '{col}' is  of type 'object' but the number of modalities {n_modalities} exceeds the categorical threshold criteria {self.categorical_threshold}")
-            
+                # Vérification du seuil : si categorical_threshold vaut None, aucune colonne
+                # n'est traitée comme catégorielle, quel que soit son nombre de modalités.
+                if self.categorical_threshold is not None :
+                    if n_modalities <= self.categorical_threshold:
+                        # Mise à jour du type de la variable
+                        metadata['is_categorical'] = True
+                        # Logging
+                        self.logger.info(f"The column '{col}' is of type 'object' and the number of modalities {n_modalities} satisfies the categorical threshold criteria {self.categorical_threshold}")
+                        # Mise à jour des modalités
+                        # metadata['modalities'] = str(self.df[col].dropna().unique().tolist())
+                    else :
+                        # Logging
+                        self.logger.warning(f"The column '{col}' is  of type 'object' but the number of modalities {n_modalities} exceeds the categorical threshold criteria {self.categorical_threshold}")
+                
             # Ajout au dictionnaire
             list_metadata.append(metadata)            
         

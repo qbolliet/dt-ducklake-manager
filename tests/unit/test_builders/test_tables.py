@@ -1,4 +1,7 @@
 # Importation des modules
+# Modules de base
+import warnings
+import pandas as pd
 # DuckDB
 import duckdb
 # Module de tests
@@ -11,18 +14,26 @@ from dashboard_template_database.builders import DuckdbTablesBuilder
 @pytest.fixture
 def duckdb_builder(sample_df):
     """Initialization of the DuckdbTablesBuilder class."""
-    return DuckdbTablesBuilder(sample_df)
+    # Suppression du UserWarning lié à l'absence de clés primaires : ce comportement
+    # est testé séparément dans test_warning_propagated_from_duckdb_builder.
+    # categorical_threshold=4 garantit la création de tables de dimension pour category
+    # et status (qui ont respectivement 3 et 2 modalités dans sample_df).
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        return DuckdbTablesBuilder(sample_df, categorical_threshold=4)
 
 # Test de l'initialisation du constructeur
 def test_duckdb_builder_initialization(sample_df):
     """Test the initialization of the DuckdbTablesBuilder class."""
-    # Vérification de la connexion en mémoire
-    builder = DuckdbTablesBuilder(sample_df)
-    assert isinstance(builder.conn, duckdb.DuckDBPyConnection)
-    
-    # Vérification de la connexion à un fichier
-    builder = DuckdbTablesBuilder(sample_df, path=':memory:')
-    assert isinstance(builder.conn, duckdb.DuckDBPyConnection)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        # Vérification de la connexion en mémoire
+        builder = DuckdbTablesBuilder(sample_df)
+        assert isinstance(builder.conn, duckdb.DuckDBPyConnection)
+
+        # Vérification de la connexion à un fichier
+        builder = DuckdbTablesBuilder(sample_df, path=':memory:')
+        assert isinstance(builder.conn, duckdb.DuckDBPyConnection)
 
 # Test de la création de la table des méta-données
 def test_create_duckdb_metadata_table(duckdb_builder):
@@ -75,11 +86,13 @@ def test_create_duckdb_fact_table(duckdb_builder):
     assert 'status' in result.columns
     
     # Vérification des clés étrangères
+    # Les valeurs de la fact table sont des entiers (index de la dim table) ; celles
+    # de la dim table sont des VARCHAR en DuckDB → comparaison après cast en entier.
     dim_category = duckdb_builder.conn.execute("SELECT * FROM dim_category").fetchdf()
     dim_status = duckdb_builder.conn.execute("SELECT * FROM dim_status").fetchdf()
-    
-    assert set(result['category'].unique()) <= set(dim_category['value'])
-    assert set(result['status'].unique()) <= set(dim_status['value'])
+
+    assert set(result['category'].unique()) <= set(dim_category['value'].astype(int))
+    assert set(result['status'].unique()) <= set(dim_status['value'].astype(int))
 
 # Test de la création de l'ensemble du schéma
 def test_build_duckdb_schema(duckdb_builder):
@@ -115,76 +128,101 @@ def test_display_schema(duckdb_builder, caplog):
 # Test de la suppression des doublons avec check_duplicates=True et keep=False
 def test_build_schema_remove_all_duplicates(sample_df_with_duplicates):
     """Test duplicate removal with check_duplicates=True and keep=False."""
-    builder = DuckdbTablesBuilder(sample_df_with_duplicates)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        builder = DuckdbTablesBuilder(sample_df_with_duplicates)
     initial_count = len(builder.df)
-    
+
     # Construction du schéma avec suppression de tous les doublons
     builder.build_duckdb_schema(check_duplicates=True, keep=False)
-    
+
     final_count = len(builder.df)
     assert final_count < initial_count
 
 # Test de la suppression des doublons avec check_duplicates=True et keep='first'
 def test_build_schema_keep_first_duplicate(sample_df_with_duplicates):
     """Test duplicate removal with check_duplicates=True and keep='first'."""
-    builder = DuckdbTablesBuilder(sample_df_with_duplicates)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        builder = DuckdbTablesBuilder(sample_df_with_duplicates)
     initial_count = len(builder.df)
-    
+
     # Construction du schéma en gardant le premier doublon
     builder.build_duckdb_schema(check_duplicates=True, keep='first')
-    
+
     final_count = len(builder.df)
     assert final_count <= initial_count
 
 # Test de la suppression des doublons avec check_duplicates=True et keep='last'
 def test_build_schema_keep_last_duplicate(sample_df_with_duplicates):
     """Test duplicate removal with check_duplicates=True and keep='last'."""
-    builder = DuckdbTablesBuilder(sample_df_with_duplicates)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        builder = DuckdbTablesBuilder(sample_df_with_duplicates)
     initial_count = len(builder.df)
-    
+
     # Construction du schéma en gardant le dernier doublon
     builder.build_duckdb_schema(check_duplicates=True, keep='last')
-    
+
     final_count = len(builder.df)
     assert final_count <= initial_count
 
 # Test de la conservation des données avec check_duplicates=False
 def test_build_schema_no_duplicate_check(sample_df_with_duplicates):
     """Test no duplicate removal with check_duplicates=False."""
-    builder = DuckdbTablesBuilder(sample_df_with_duplicates)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        builder = DuckdbTablesBuilder(sample_df_with_duplicates)
     initial_count = len(builder.df)
-    
+
     # Construction du schéma sans vérification des doublons
     builder.build_duckdb_schema(check_duplicates=False)
-    
+
     final_count = len(builder.df)
     assert final_count == initial_count
 
 # Test du logging des doublons supprimés
 def test_duplicate_removal_logging(sample_df_with_duplicates, caplog):
     """Test logging of removed duplicates."""
-    builder = DuckdbTablesBuilder(sample_df_with_duplicates)
-    
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        builder = DuckdbTablesBuilder(sample_df_with_duplicates)
+
     # Construction du schéma avec suppression des doublons
     builder.build_duckdb_schema(check_duplicates=True, keep=False)
-    
+
     # Vérification que le logging a eu lieu
     assert "Suppression des doublons" in caplog.text
-    assert "observations ont été supprimées" in caplog.text
+    assert "observations supprimées" in caplog.text
 
-# Test de la gestion des colonnes 'value' dans la suppression des doublons
-def test_duplicate_check_excludes_value_column(sample_df_with_value_column):
-    """Test that duplicate check excludes 'value' column."""
-    builder = DuckdbTablesBuilder(sample_df_with_value_column)
+# Test que la déduplication se base sur les clés primaires quand elles sont fournies
+def test_duplicate_check_uses_primary_keys(sample_df):
+    """Test that duplicate detection uses primary_keys when provided.
+
+    A duplicate row with the same 'id' but a different 'value' is injected after
+    the builder is initialized (init validates PK uniqueness on the original df).
+    With primary_keys=['id'], build_duckdb_schema must identify the rows as duplicates
+    and remove the extra one, even though 'value' differs between them.
+    """
+    # Initialisation avec sample_df dont les ids sont uniques → validation OK
+    builder = DuckdbTablesBuilder(sample_df, categorical_threshold=4, primary_keys=['id'])
+
+    # Injection d'un doublon après l'initialisation : même id=1, valeur différente
+    duplicate_row = builder.df.iloc[[0]].copy()
+    duplicate_row['value'] = 99.99
+    builder.df = pd.concat([builder.df, duplicate_row], ignore_index=True)
+
     initial_count = len(builder.df)
-    
-    # Construction du schéma avec suppression des doublons
+    assert initial_count == len(sample_df) + 1
+
+    # Construction du schéma avec déduplication basée sur les clés primaires
     builder.build_duckdb_schema(check_duplicates=True, keep='first')
-    
-    # Vérification que les doublons ont été traités correctement
-    # (en excluant la colonne 'value' de la vérification)
+
+    # Le doublon sur id=1 (value=99.99) doit avoir été supprimé
     final_count = len(builder.df)
-    assert final_count <= initial_count
+    assert final_count < initial_count
+    # Chaque valeur d'identifiant ne doit apparaître qu'une seule fois
+    assert builder.df['id'].nunique() == len(builder.df)
 
 # Vérification de la génération d'erreur pour des tables absentes
 @pytest.mark.parametrize("table_name", ['invalid_table', 'nonexistent'])
@@ -192,3 +230,31 @@ def test_query_nonexistent_table(duckdb_builder, table_name):
     """Test error raised for non-existent tables."""
     with pytest.raises(duckdb.Error):
         duckdb_builder.conn.execute(f"SELECT * FROM {table_name}")
+
+
+# ---------------------------------------------------------------------------
+# Nouveaux tests liés aux changements de comportement par défaut
+# ---------------------------------------------------------------------------
+
+# Test que categorical_threshold=None ne crée aucune table de dimension
+def test_categorical_threshold_none_no_dim_tables(sample_df):
+    """Test that no dimension tables are created in DuckDB when categorical_threshold=None."""
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        builder = DuckdbTablesBuilder(sample_df, categorical_threshold=None)
+
+    builder.build_duckdb_schema()
+
+    # Récupération de l'ensemble des tables créées
+    tables = [row[0] for row in builder.conn.execute("SHOW TABLES").fetchall()]
+
+    # Aucune table de dimension (préfixe 'dim_') ne doit exister
+    dim_tables = [t for t in tables if t.startswith('dim_')]
+    assert len(dim_tables) == 0
+
+
+# Test que DuckdbTablesBuilder propage bien le UserWarning de SchemaBuilder
+def test_warning_propagated_from_duckdb_builder(sample_df):
+    """Test that DuckdbTablesBuilder raises UserWarning when primary_keys is absent."""
+    with pytest.warns(UserWarning, match="Aucune clé primaire"):
+        DuckdbTablesBuilder(sample_df, categorical_threshold=4)

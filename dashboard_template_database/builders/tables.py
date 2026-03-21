@@ -29,7 +29,7 @@ class DuckdbTablesBuilder(SchemaBuilder):
     """
 
     # Initialisation
-    def __init__(self, df: pd.DataFrame, categorical_threshold: Optional[int] = 50, primary_keys: Optional[List[str]] = None, connection: Optional[duckdb.DuckDBPyConnection] = None, path : Optional[os.PathLike]=None, log_filename: Optional[os.PathLike] = os.path.join(FILE_PATH.parents[2], "logs/duckdb_schema_builder.log")):
+    def __init__(self, df: pd.DataFrame, categorical_threshold: Optional[int] = None, primary_keys: Optional[List[str]] = None, connection: Optional[duckdb.DuckDBPyConnection] = None, path : Optional[os.PathLike]=None, log_filename: Optional[os.PathLike] = os.path.join(FILE_PATH.parents[2], "logs/duckdb_schema_builder.log")):
         """
         Initialize the DuckdbTablesBuilder class.
 
@@ -212,9 +212,18 @@ class DuckdbTablesBuilder(SchemaBuilder):
             keep (Literal[False, 'first', 'last']): Which duplicates to keep. Defaults to False.
 
         """
-        # Vérification et suppression des doublons sur self.df si demandé
+        # Vérification et suppression des doublons sur self.df si demandé.
+        # Les clés primaires sont transmises à la fonction de déduplication afin que
+        # la détection des doublons porte uniquement sur ces colonnes identifiantes,
+        # en ignorant les colonnes de valeurs (value, lower_bound, upper_bound, etc.).
         if check_duplicates:
-            self.df = remove_dataframe_duplicates(self.df, keep, self.logger, "DataFrame principal")
+            self.df = remove_dataframe_duplicates(
+                self.df,
+                keep,
+                self.logger,
+                "DataFrame principal",
+                primary_keys=self.primary_keys if self.primary_keys else None,
+            )
         
         # Création de la table des méta-données
         self.create_duckdb_metadata_table(
