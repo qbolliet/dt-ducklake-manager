@@ -549,8 +549,12 @@ class TransactionManager(BaseSchemaManager):
             return True
             
         except Exception as e:
-            # Logging
-            self.logger.error(f"Failed to create savepoint '{savepoint_name}': {e}")
+            # Avertissement non-bloquant : les SAVEPOINTs ne sont pas supportés dans toutes les
+            # versions de DuckDB. La transaction globale assure le rollback en cas d'échec.
+            self.logger.warning(
+                f"Savepoints are not supported by this version of DuckDB "
+                f"(savepoint '{savepoint_name}' ignored) : {e}"
+            )
             return False
     
     # Méthode d'annulation jusqu'à un savepoint

@@ -356,6 +356,12 @@ class BaseSchemaManager(ABC):
         # Ne fait rien si inchangé
         if current_type == new_type:
             return None
+
+        # Conservation du type existant si toutes les nouvelles valeurs sont nulles :
+        # pandas infère alors 'object' sans information sur le type réel de la colonne,
+        # ce qui écraserait à tort un type numérique connu (ex. float64 → object).
+        if df[column].isna().all():
+            return None
         
         # Hiérarchie des types (du plus contraignant au moins contraignant)
         type_hierarchy = {
@@ -433,7 +439,12 @@ class BaseSchemaManager(ABC):
             True if values should be categorical
         """
         threshold = threshold or self.categorical_threshold
-        unique_count = len(set(values.dropna().unique()))
+        non_null_values = values.dropna()
+        # Une série entièrement nulle ne peut pas être considérée catégorielle :
+        # l'absence de modalités observées ne constitue pas une information de cardinalité.
+        if len(non_null_values) == 0:
+            return False
+        unique_count = len(set(non_null_values.unique()))
         return unique_count <= threshold
     
     @abstractmethod

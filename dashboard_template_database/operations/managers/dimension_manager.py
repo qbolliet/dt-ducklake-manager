@@ -467,12 +467,14 @@ class DimensionManager(BaseSchemaManager):
                 # Comptage initial
                 count_before = self.conn.execute(f"SELECT COUNT(*) FROM {table_name}").fetchone()[0]
                 
-                # Suppression des entrées orphelines
+                # Suppression des entrées orphelines.
+                # Cast explicite en VARCHAR pour garantir la compatibilité de types entre
+                # dim_*.value (VARCHAR) et fact_table.{dim_col} (type quelconque)
                 cleanup_query = f"""
                     DELETE FROM {table_name}
                     WHERE value NOT IN (
-                        SELECT DISTINCT {dim_col} 
-                        FROM fact_table 
+                        SELECT DISTINCT CAST({dim_col} AS VARCHAR)
+                        FROM fact_table
                         WHERE {dim_col} IS NOT NULL
                     )
                 """

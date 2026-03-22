@@ -613,7 +613,9 @@ class DataManager(BaseSchemaManager):
                 update_columns = [col for col in df.columns if col in existing_columns and col not in merge_keys]
                 
                 if update_columns:
-                    set_clause = ", ".join([f"f.{col} = t.{col}" for col in update_columns])
+                    # Noms non-qualifiés côté gauche du SET : DuckDB rejette les qualificateurs
+                    # de table (f.col) dans la clause SET d'un UPDATE ... FROM.
+                    set_clause = ", ".join([f"{col} = t.{col}" for col in update_columns])
                     update_query = f"""
                         UPDATE fact_table f
                         SET {set_clause}
