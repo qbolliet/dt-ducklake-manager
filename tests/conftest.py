@@ -194,5 +194,5 @@ def built_duckdb_schema(sample_df):
             categorical_threshold=4,
             primary_keys=['id'],
         )
-    builder.build_duckdb_schema()
+    builder.build_schema()
     return builder.conn

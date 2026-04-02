@@ -79,7 +79,7 @@ metadata, dimension_tables, fact_table = schema_builder.build()
 duckdb_builder = DuckdbTablesBuilder(df=sample_data)
 
 # Create the schema in DuckDB
-duckdb_builder.build_duckdb_schema()
+duckdb_builder.build_schema()
 
 # Display the schema in DuckDB
 duckdb_builder.display_schema()

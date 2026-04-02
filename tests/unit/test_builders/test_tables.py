@@ -95,10 +95,10 @@ def test_create_duckdb_fact_table(duckdb_builder):
     assert set(result['status'].unique()) <= set(dim_status['value'].astype(int))
 
 # Test de la création de l'ensemble du schéma
-def test_build_duckdb_schema(duckdb_builder):
+def test_build_schema(duckdb_builder):
     """Test the build of the complete scheme."""
     # Création du schéma
-    duckdb_builder.build_duckdb_schema(
+    duckdb_builder.build_schema(
         metadata_table='test_metadata',
         fact_table='test_fact',
         dim_table_prefix='test_dim_'
@@ -117,7 +117,7 @@ def test_build_duckdb_schema(duckdb_builder):
 def test_display_schema(duckdb_builder, caplog):
     """Test the display of the built scheme."""
     # Création du schéma
-    duckdb_builder.build_duckdb_schema()
+    duckdb_builder.build_schema()
     # Affichage du schéma
     duckdb_builder.display_schema()
     
@@ -134,7 +134,7 @@ def test_build_schema_remove_all_duplicates(sample_df_with_duplicates):
     initial_count = len(builder.df)
 
     # Construction du schéma avec suppression de tous les doublons
-    builder.build_duckdb_schema(check_duplicates=True, keep=False)
+    builder.build_schema(check_duplicates=True, keep=False)
 
     final_count = len(builder.df)
     assert final_count < initial_count
@@ -148,7 +148,7 @@ def test_build_schema_keep_first_duplicate(sample_df_with_duplicates):
     initial_count = len(builder.df)
 
     # Construction du schéma en gardant le premier doublon
-    builder.build_duckdb_schema(check_duplicates=True, keep='first')
+    builder.build_schema(check_duplicates=True, keep='first')
 
     final_count = len(builder.df)
     assert final_count <= initial_count
@@ -162,7 +162,7 @@ def test_build_schema_keep_last_duplicate(sample_df_with_duplicates):
     initial_count = len(builder.df)
 
     # Construction du schéma en gardant le dernier doublon
-    builder.build_duckdb_schema(check_duplicates=True, keep='last')
+    builder.build_schema(check_duplicates=True, keep='last')
 
     final_count = len(builder.df)
     assert final_count <= initial_count
@@ -176,7 +176,7 @@ def test_build_schema_no_duplicate_check(sample_df_with_duplicates):
     initial_count = len(builder.df)
 
     # Construction du schéma sans vérification des doublons
-    builder.build_duckdb_schema(check_duplicates=False)
+    builder.build_schema(check_duplicates=False)
 
     final_count = len(builder.df)
     assert final_count == initial_count
@@ -189,7 +189,7 @@ def test_duplicate_removal_logging(sample_df_with_duplicates, caplog):
         builder = DuckdbTablesBuilder(sample_df_with_duplicates)
 
     # Construction du schéma avec suppression des doublons
-    builder.build_duckdb_schema(check_duplicates=True, keep=False)
+    builder.build_schema(check_duplicates=True, keep=False)
 
     # Vérification que le logging a eu lieu
     assert "Suppression des doublons" in caplog.text
@@ -201,7 +201,7 @@ def test_duplicate_check_uses_primary_keys(sample_df):
 
     A duplicate row with the same 'id' but a different 'value' is injected after
     the builder is initialized (init validates PK uniqueness on the original df).
-    With primary_keys=['id'], build_duckdb_schema must identify the rows as duplicates
+    With primary_keys=['id'], build_schema must identify the rows as duplicates
     and remove the extra one, even though 'value' differs between them.
     """
     # Initialisation avec sample_df dont les ids sont uniques → validation OK
@@ -216,7 +216,7 @@ def test_duplicate_check_uses_primary_keys(sample_df):
     assert initial_count == len(sample_df) + 1
 
     # Construction du schéma avec déduplication basée sur les clés primaires
-    builder.build_duckdb_schema(check_duplicates=True, keep='first')
+    builder.build_schema(check_duplicates=True, keep='first')
 
     # Le doublon sur id=1 (value=99.99) doit avoir été supprimé
     final_count = len(builder.df)
@@ -243,7 +243,7 @@ def test_categorical_threshold_none_no_dim_tables(sample_df):
         warnings.simplefilter("ignore", UserWarning)
         builder = DuckdbTablesBuilder(sample_df, categorical_threshold=None)
 
-    builder.build_duckdb_schema()
+    builder.build_schema()
 
     # Récupération de l'ensemble des tables créées
     tables = [row[0] for row in builder.conn.execute("SHOW TABLES").fetchall()]
@@ -306,10 +306,10 @@ def test_create_duckdb_fact_table_with_partition_by(sample_df):
         assert 'fact_table' in tables
 
 
-# Test de build_duckdb_schema avec partition_by
+# Test de build_schema avec partition_by
 @pytest.mark.skipif(not _ducklake_available(), reason="Extension ducklake non disponible")
-def test_build_duckdb_schema_with_partition_by(sample_df):
-    """Test that build_duckdb_schema propagates partition_by to create_duckdb_fact_table."""
+def test_build_schema_with_partition_by(sample_df):
+    """Test that build_schema propagates partition_by to create_duckdb_fact_table."""
     import duckdb as _ddb
     import tempfile, os
 
@@ -328,7 +328,7 @@ def test_build_duckdb_schema_with_partition_by(sample_df):
             builder = DuckdbTablesBuilder(sample_df, categorical_threshold=4, connection=conn)
 
         # Vérification que le schéma complet se construit sans erreur avec partition_by
-        builder.build_duckdb_schema(partition_by=['category'])
+        builder.build_schema(partition_by=['category'])
 
         tables = [row[0] for row in conn.execute("SHOW TABLES").fetchall()]
         assert 'metadata' in tables

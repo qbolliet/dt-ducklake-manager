@@ -44,7 +44,7 @@
 #         db_builder = DuckdbTablesBuilder(df)
         
 #         # 3. Construction du schéma
-#         db_builder.build_duckdb_schema(
+#         db_builder.build_schema(
 #             metadata_table='test_metadata',
 #             fact_table='test_fact',
 #             dim_table_prefix='test_dim_'
@@ -82,7 +82,7 @@
             
 #             # Création des tables DuckDB
 #             db_builder = DuckdbTablesBuilder(df)
-#             db_builder.build_duckdb_schema()
+#             db_builder.build_schema()
             
 #             # Vérification des données
 #             fact_data = db_builder.conn.execute("SELECT * FROM fact_table").fetchdf()
