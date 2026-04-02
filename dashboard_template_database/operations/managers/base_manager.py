@@ -260,10 +260,10 @@ class BaseSchemaManager(ABC):
             df[column].nunique() <= self.categorical_threshold
         )
         
-        # Création de la table metadata si elle n'existe pas
+        # Création de la table metadata si elle n'existe pas.
         self.conn.execute("""
             CREATE TABLE IF NOT EXISTS metadata (
-                name VARCHAR PRIMARY KEY,
+                name VARCHAR,
                 label VARCHAR,
                 python_type VARCHAR,
                 sql_type VARCHAR,
@@ -271,20 +271,36 @@ class BaseSchemaManager(ABC):
                 is_primary_key BOOLEAN DEFAULT FALSE
             )
         """)
-        
+
         # Insertion de la nouvelle colonne
         if label is None:
             label = column.replace('_', ' ').title()
-        
-        self.conn.execute("""
-            INSERT INTO metadata (name, label, python_type, sql_type, is_categorical, is_primary_key)
-            VALUES (?, ?, ?, ?, ?, FALSE)
-            ON CONFLICT (name) DO UPDATE SET
-                label = excluded.label,
-                python_type = excluded.python_type,
-                sql_type = excluded.sql_type,
-                is_categorical = excluded.is_categorical
-        """, [column, label, dtype, sql_type, is_categorical])
+
+        # Upsert manuel
+        # Vérification de l'existence de la colonne avant d'insérer ou de mettre à jour.
+        existing_count = self.conn.execute(
+            "SELECT COUNT(*) FROM metadata WHERE name = ?", [column]
+        ).fetchone()[0]
+
+        if existing_count == 0:
+            # Colonne absente : insertion
+            self.conn.execute(
+                """
+                INSERT INTO metadata (name, label, python_type, sql_type, is_categorical, is_primary_key)
+                VALUES (?, ?, ?, ?, ?, FALSE)
+                """,
+                [column, label, dtype, sql_type, is_categorical],
+            )
+        else:
+            # Colonne déjà présente : mise à jour des champs variables
+            self.conn.execute(
+                """
+                UPDATE metadata
+                SET label = ?, python_type = ?, sql_type = ?, is_categorical = ?
+                WHERE name = ?
+                """,
+                [label, dtype, sql_type, is_categorical, column],
+            )
         
         # Invalidation du cache
         self._invalidate_metadata_cache()

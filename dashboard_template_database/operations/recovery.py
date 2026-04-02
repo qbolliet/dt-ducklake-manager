@@ -870,7 +870,7 @@ class DatabaseRecoveryManager:
             if "missing" in issue.description.lower() and issue.table_name == 'metadata':
                 self.conn.execute("""
                     CREATE TABLE IF NOT EXISTS metadata (
-                        name VARCHAR PRIMARY KEY,
+                        name VARCHAR,
                         label VARCHAR,
                         python_type VARCHAR,
                         sql_type VARCHAR,

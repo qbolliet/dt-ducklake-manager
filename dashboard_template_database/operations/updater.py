@@ -18,7 +18,6 @@ from .auditor import DatabaseAuditor, ValidationLevel, IssueSeverity
 
 # Import des utilitaires
 from ..utils.data_processing import remove_dataframe_duplicates
-from ..builders.indexer import IndexManager
 
 # Emplacement du fichier
 FILE_PATH = Path(os.path.abspath(__file__))
@@ -42,53 +41,65 @@ class DatabaseUpdaterV2(BaseSchemaManager):
         batch_size (int): Size of batches for processing large datasets
     """
     # Initialisation
-    def __init__(self, 
-                 connection: Optional[duckdb.DuckDBPyConnection] = None, 
-                 path: Optional[os.PathLike]=None,
+    def __init__(self,
+                 connection: Optional[duckdb.DuckDBPyConnection] = None,
+                 path: Optional[os.PathLike] = None,
                  categorical_threshold: Optional[int] = 50,
                  log_filename: Optional[os.PathLike] = None,
                  max_workers: int = 4,
                  batch_size: int = 10000,
-                 enable_validation: bool = True):
+                 enable_validation: bool = True,
+                 ducklake_catalog_alias: str = 'db',
+                 ducklake_schema: str = 'main'):
         """
         Initialize the refactored database updater.
-        
+
         Args:
             connection: DuckDB connection object
+            path: Path to the DuckDB database file
             categorical_threshold: Threshold for determining categorical variables
             log_filename: Path to log file
             max_workers: Maximum number of parallel workers
             batch_size: Size of batches for processing
             enable_validation: Whether to enable pre/post operation validation
-            
-        Example:
-            >>> conn = duckdb.connect('database.db')
+            ducklake_catalog_alias: Alias used in the DuckLake ATTACH statement.
+                Passed to maintenance calls (``ducklake_merge_adjacent_files`` etc.).
+                Defaults to ``'db'``.
+            ducklake_schema: DuckLake schema name used in maintenance calls.
+                Defaults to ``'main'``.
+
+        Examples:
+            >>> conn = DuckLakeConnector('catalog.ducklake', 'data/').connect()
             >>> updater = DatabaseUpdaterV2(conn, max_workers=8, enable_validation=True)
         """
         # Initialisation du parent
         super().__init__(connection=connection, path=path, categorical_threshold=categorical_threshold, log_filename=log_filename)
-        
+
         # Initialisation des gestionnaires spécialisés
         self.dimension_mgr = DimensionManager(
             connection=connection, path=path, categorical_threshold=categorical_threshold, log_filename=log_filename, max_workers=max_workers
         )
-        
+
         self.data_mgr = DataManager(
             connection=connection, path=path, categorical_threshold=categorical_threshold, log_filename=log_filename, batch_size=batch_size
         )
-        
+
         self.transaction_mgr = TransactionManager(
             connection=connection, path=path, categorical_threshold=categorical_threshold, log_filename=log_filename
         )
-        
+
         self.auditor = DatabaseAuditor(
             connection=connection, path=path, categorical_threshold=categorical_threshold, log_filename=log_filename
         ) if enable_validation else None
-        
+
         # Configuration
         self.max_workers = max_workers
         self.batch_size = batch_size
         self.enable_validation = enable_validation
+
+        # Configuration DuckLake pour les appels de maintenance (compaction)
+        self.ducklake_catalog_alias = ducklake_catalog_alias
+        self.ducklake_schema = ducklake_schema
     
     # Méthode de validation d'une opération
     def validate_operation(self, operation_type: str, **kwargs) -> bool:
@@ -131,36 +142,33 @@ class DatabaseUpdaterV2(BaseSchemaManager):
     
     # Méthode principale de mise à jour
     def update_database(self,
-                       update_df: pd.DataFrame,
-                       check_duplicates_db: bool = True,
-                       check_duplicates_update: bool = True,
-                       keep: Literal[False, 'first', 'last'] = False,
-                       index_config: Optional[Dict] = None,
-                       use_batch_processing: bool = True,
-                       use_transaction: bool = True) -> bool:
+                        update_df: pd.DataFrame,
+                        check_duplicates_db: bool = True,
+                        check_duplicates_update: bool = True,
+                        keep: Literal[False, 'first', 'last'] = False,
+                        use_batch_processing: bool = True,
+                        use_transaction: bool = True,
+                        compact_after_update: bool = True) -> bool:
         """
         Update the entire database with new data using atomic operations.
-        
+
         Args:
             update_df: DataFrame containing update data
             check_duplicates_db: Whether to check duplicates in existing database
             check_duplicates_update: Whether to check duplicates in update DataFrame
             keep: Which duplicates to keep when removing duplicates
-            index_config: Dictionary containing index configuration
             use_batch_processing: Whether to use batch processing for large datasets
             use_transaction: Whether to use database transactions
-            
+            compact_after_update: Whether to run DuckLake compaction (merge small delta
+                files and rewrite delete files) immediately after a successful update.
+                Adds write latency but keeps read performance optimal. Defaults to True.
+
         Returns:
             True if update was successful, False otherwise
-            
-        Example:
-            >>> success = updater.update_database(
-            ...     new_data_df,
-            ...     check_duplicates_db=True,
-            ...     use_transaction=True
-            ... )
-            >>> if success:
-            ...     print("Database updated successfully")
+
+        Examples:
+            >>> success = updater.update_database(new_data_df)
+            >>> success = updater.update_database(new_data_df, compact_after_update=True)
         """
         # Validation préalable
         if not self.validate_operation('update', df=update_df):
@@ -185,36 +193,36 @@ class DatabaseUpdaterV2(BaseSchemaManager):
         # Utilisation de la transaction pour la mise à jour de la base de données
         if use_transaction:
             return self._update_database_transactional(
-                update_df, check_duplicates_db, check_duplicates_update, 
-                keep, index_config, use_batch_processing
+                update_df, check_duplicates_db, check_duplicates_update,
+                keep, use_batch_processing, compact_after_update
             )
         # Sinon mise à jour directe
         else:
             return self._update_database_direct(
                 update_df, check_duplicates_db, check_duplicates_update,
-                keep, index_config, use_batch_processing
+                keep, use_batch_processing, compact_after_update
             )
     
     # Méthode de mise à jour de la base de données de manière transactionnelle
     def _update_database_transactional(self,
-                                     update_df: pd.DataFrame,
-                                     check_duplicates_db: bool,
-                                     check_duplicates_update: bool,
-                                     keep: Literal[False, 'first', 'last'],
-                                     index_config: Optional[Dict],
-                                     use_batch_processing: bool) -> bool:
+                                      update_df: pd.DataFrame,
+                                      check_duplicates_db: bool,
+                                      check_duplicates_update: bool,
+                                      keep: Literal[False, 'first', 'last'],
+                                      use_batch_processing: bool,
+                                      compact_after_update: bool) -> bool:
         """Perform transactional database update with validation and rollback.
 
         Executes the update within a transaction, allowing rollback on failure.
-        Steps: preprocess → duplicate removal → metadata → fact table → dimensions → indexes.
+        Steps: preprocess → duplicate removal → metadata → fact table → dimensions.
 
         Args:
             update_df: DataFrame containing the update data.
             check_duplicates_db: Whether to check and remove duplicates in database.
             check_duplicates_update: Whether to check and remove duplicates in update data.
             keep: Duplicate handling strategy ('first', 'last', or False).
-            index_config: Optional index configuration dictionary.
             use_batch_processing: Whether to use batch processing for large datasets.
+            compact_after_update: Whether to run DuckLake compaction after commit.
 
         Returns:
             True if update succeeded and committed, False otherwise.
@@ -358,33 +366,11 @@ class DatabaseUpdaterV2(BaseSchemaManager):
                 self.transaction_mgr.rollback_transaction(tx_id)
                 return False
 
-            # Étape 6: Mise à jour des index
-            # Si un index est spécifié
-            if index_config:
-                # Initialisation de l'opération de transaction
-                operation = TransactionOperation(
-                    operation_type='index_update',
-                    operation_func=self._update_indexes_safe,
-                    operation_args=(index_config,),
-                    rollback_func=self._rollback_index_changes,
-                    description="Update database indexes"
-                )
-                
-                # Annulation de la transaction si l'opération ne peut être ajoutée
-                if not self.transaction_mgr.add_operation(tx_id, **operation.__dict__):
-                    self.transaction_mgr.rollback_transaction(tx_id)
-                    return False
-                
-                # Annulation de la transaction si l'opération ne peut être exécutée
-                if not self.transaction_mgr.execute_operation(tx_id):
-                    self.transaction_mgr.rollback_transaction(tx_id)
-                    return False
-            
             # Validation post-update
             if self.enable_validation and self.auditor:
                 # Validation de la base de données
                 validation_report = self.auditor.validate_database(ValidationLevel.STANDARD)
-                
+
                 # Vérification des problèmes critiques
                 if validation_report.get_critical_issues_count() > 0:
                     # Logging
@@ -392,13 +378,16 @@ class DatabaseUpdaterV2(BaseSchemaManager):
                     # Annulation de la transaction
                     self.transaction_mgr.rollback_transaction(tx_id)
                     return False
-            
+
             # Commit de la transaction
             if self.transaction_mgr.commit_transaction(tx_id):
                 # Logging
                 self.logger.info("Database update completed successfully")
-                # Invaliation du cache
+                # Invalidation du cache
                 self._invalidate_metadata_cache()
+                # Compaction DuckLake optionnelle après commit (fusion des petits fichiers delta)
+                if compact_after_update:
+                    self._run_ducklake_compaction()
                 return True
             else:
                 # Logging
@@ -414,12 +403,12 @@ class DatabaseUpdaterV2(BaseSchemaManager):
     
     # Méthode auxiliaire de mise à jour directe de la base de données
     def _update_database_direct(self,
-                              update_df: pd.DataFrame,
-                              check_duplicates_db: bool,
-                              check_duplicates_update: bool,
-                              keep: Literal[False, 'first', 'last'],
-                              index_config: Optional[Dict],
-                              use_batch_processing: bool) -> bool:
+                                update_df: pd.DataFrame,
+                                check_duplicates_db: bool,
+                                check_duplicates_update: bool,
+                                keep: Literal[False, 'first', 'last'],
+                                use_batch_processing: bool,
+                                compact_after_update: bool) -> bool:
         """Perform direct database update without transaction wrapping.
 
         Suitable for simple updates where rollback capability is not needed.
@@ -465,18 +454,16 @@ class DatabaseUpdaterV2(BaseSchemaManager):
             # Nettoyage des entrées orphelines dans les tables de dimension
             self.dimension_mgr.cleanup_orphaned_dimension_entries()
 
-            # Mise à jour des index
-            if index_config:
-                if not self._update_indexes_safe(index_config):
-                    return False
-
             # Nettoyage final
             self._cleanup_orphaned_data()
-            
+
             # Logging
             self.logger.info("Database update completed successfully (direct mode)")
             # Invalidation du cache des méta-données
             self._invalidate_metadata_cache()
+            # Compaction DuckLake optionnelle (fusion des petits fichiers delta)
+            if compact_after_update:
+                self._run_ducklake_compaction()
             return True
             
         except Exception as e:
@@ -773,52 +760,41 @@ class DatabaseUpdaterV2(BaseSchemaManager):
             # En cas d'erreur, on traite toutes les lignes comme des insertions
             return df.copy(), df.iloc[0:0].copy()
 
-    # Méthode auxiliaire de mise à jour des index
-    def _update_indexes_safe(self, index_config: Dict) -> bool:
-        """Safely update database indexes based on configuration.
+    # Méthode auxiliaire de compaction DuckLake
+    def _run_ducklake_compaction(self, fact_table: str = 'fact_table') -> None:
+        """Trigger DuckLake compaction on the fact table after a successful update.
+
+        Merges small adjacent Parquet delta files and rewrites delete files to
+        maintain optimal read performance. Failures are non-fatal: a warning is
+        logged and execution continues normally.
+
+        The catalog alias and schema are read from ``self.ducklake_catalog_alias``
+        and ``self.ducklake_schema``, which can be set at construction time.
 
         Args:
-            index_config: Dictionary containing index configuration.
-                - drop_existing: Whether to drop existing indexes first.
+            fact_table: Name of the fact table to compact. Defaults to ``'fact_table'``.
 
-        Returns:
-            True if indexes updated successfully, False on error.
+        Examples:
+            >>> updater._run_ducklake_compaction()
+            >>> updater._run_ducklake_compaction('my_fact_table')
         """
+        # Extraction des alias et du schéma
+        alias = self.ducklake_catalog_alias
+        schema = self.ducklake_schema
         try:
-            # Création d'un gestionnaire d'index
-            index_manager = IndexManager(connection=self.conn)
-            
-            # Suppression des index existants (optionnel selon configuration)
-            if index_config.get('drop_existing', True):
-                try:
-                    # Recherche des index existants
-                    # Récupération des index via la fonction de catalogue DuckDB
-                    existing_indexes = self.conn.execute("""
-                        SELECT index_name FROM duckdb_indexes()
-                    """).fetchall()
-                    # Parcours des index
-                    for idx in existing_indexes:
-                        try:
-                            # Suppression des index
-                            index_manager.drop_index(idx[0])
-                        except Exception as e:
-                            # Logging
-                            self.logger.warning(f"Cannot drop index {idx[0]}: {e}")
-                except Exception as e:
-                    # Logging
-                    self.logger.warning(f"Error retrieving existing indexes: {e}")
-            
-            # Création des nouveaux index
-            index_manager.create_fact_table_indexes("fact_table", index_config)
-            # Logging
-            self.logger.info("Successfully updated indexes")
-            return True
-            
+            # Fusion des petits fichiers delta adjacents
+            self.conn.execute(
+                f"CALL {alias}.ducklake_merge_adjacent_files('{schema}', '{fact_table}')"
+            )
+            # Réécriture des fichiers de suppression (delete files) pour optimiser les lectures
+            self.conn.execute(
+                f"CALL {alias}.ducklake_rewrite_data_files('{schema}', '{fact_table}')"
+            )
+            self.logger.info(f"Compaction DuckLake terminée pour '{fact_table}'")
         except Exception as e:
-            # Logging
-            self.logger.error(f"Error updating indexes: {e}")
-            return False
-    
+            # Erreur non bloquante : la compaction est une optimisation, pas une étape critique
+            self.logger.warning(f"Compaction DuckLake échouée (non bloquant) : {e}")
+
     # Méthodes de rollback
     # Méthode auxiliaire de rollback des changements de métadonnées
     def _rollback_metadata_changes(self) -> bool:

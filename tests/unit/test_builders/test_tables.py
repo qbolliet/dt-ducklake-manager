@@ -258,3 +258,79 @@ def test_warning_propagated_from_duckdb_builder(sample_df):
     """Test that DuckdbTablesBuilder raises UserWarning when primary_keys is absent."""
     with pytest.warns(UserWarning, match="Aucune clé primaire"):
         DuckdbTablesBuilder(sample_df, categorical_threshold=4)
+
+
+# ---------------------------------------------------------------------------
+# Tests liés au paramètre partition_by (nécessite l'extension DuckLake)
+# ---------------------------------------------------------------------------
+
+def _ducklake_available() -> bool:
+    """Vérifie si l'extension DuckLake est disponible dans l'environnement de test."""
+    try:
+        import duckdb as _ddb
+        conn = _ddb.connect(':memory:')
+        conn.execute("INSTALL ducklake; LOAD ducklake;")
+        conn.close()
+        return True
+    except Exception:
+        return False
+
+
+# Test de la création de la fact table avec partitionnement
+@pytest.mark.skipif(not _ducklake_available(), reason="Extension ducklake non disponible")
+def test_create_duckdb_fact_table_with_partition_by(sample_df):
+    """Test that create_duckdb_fact_table accepts partition_by without error."""
+    import duckdb as _ddb
+    # Création d'une connexion DuckLake temporaire
+    conn = _ddb.connect(':memory:')
+    conn.execute("INSTALL ducklake; LOAD ducklake;")
+
+    import tempfile, os
+    with tempfile.TemporaryDirectory() as tmpdir:
+        catalog = os.path.join(tmpdir, 'test.ducklake')
+        data_dir = os.path.join(tmpdir, 'data')
+        os.makedirs(data_dir)
+        conn.execute(f"ATTACH 'ducklake:{catalog}' AS db (DATA_PATH '{data_dir}')")
+        conn.execute("USE db.main")
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", UserWarning)
+            builder = DuckdbTablesBuilder(sample_df, categorical_threshold=4, connection=conn)
+
+        builder.create_duckdb_metadata_table()
+        builder.create_duckdb_dimension_tables()
+        # Vérification que partition_by est accepté sans erreur et que la table est créée
+        builder.create_duckdb_fact_table(partition_by=['category'])
+
+        tables = [row[0] for row in conn.execute("SHOW TABLES").fetchall()]
+        assert 'fact_table' in tables
+
+
+# Test de build_duckdb_schema avec partition_by
+@pytest.mark.skipif(not _ducklake_available(), reason="Extension ducklake non disponible")
+def test_build_duckdb_schema_with_partition_by(sample_df):
+    """Test that build_duckdb_schema propagates partition_by to create_duckdb_fact_table."""
+    import duckdb as _ddb
+    import tempfile, os
+
+    conn = _ddb.connect(':memory:')
+    conn.execute("INSTALL ducklake; LOAD ducklake;")
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        catalog = os.path.join(tmpdir, 'test.ducklake')
+        data_dir = os.path.join(tmpdir, 'data')
+        os.makedirs(data_dir)
+        conn.execute(f"ATTACH 'ducklake:{catalog}' AS db (DATA_PATH '{data_dir}')")
+        conn.execute("USE db.main")
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", UserWarning)
+            builder = DuckdbTablesBuilder(sample_df, categorical_threshold=4, connection=conn)
+
+        # Vérification que le schéma complet se construit sans erreur avec partition_by
+        builder.build_duckdb_schema(partition_by=['category'])
+
+        tables = [row[0] for row in conn.execute("SHOW TABLES").fetchall()]
+        assert 'metadata' in tables
+        assert 'fact_table' in tables
+        assert 'dim_category' in tables

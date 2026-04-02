@@ -144,24 +144,25 @@ class DimensionManager(BaseSchemaManager):
                 # Nom de la table de dimension
                 table_name = f"dim_{dimension_name}"
                 
-                # Création de la table avec contraintes
+                # Création de la table
+                # L'unicité de 'value' est garantie applicativement par l'utilisation de enumerate() qui produit des indices strictement croissants.
                 self.conn.execute(f"""
                     CREATE TABLE IF NOT EXISTS {table_name} (
-                        value VARCHAR PRIMARY KEY,
+                        value VARCHAR,
                         label VARCHAR
                     )
                 """)
-                
+
                 # Préparation des données uniques
                 unique_values = values.dropna().unique()
-                
-                # Insertion des valeurs avec index automatique
+
+                # Insertion des valeurs avec index automatique.
+                # enumerate() garantit que chaque 'value' est unique → pas de conflit possible.
                 for idx, label in enumerate(unique_values):
-                    self.conn.execute(f"""
-                        INSERT INTO {table_name} (value, label) 
-                        VALUES (?, ?)
-                        ON CONFLICT (value) DO NOTHING
-                    """, [str(idx), str(label)])
+                    self.conn.execute(
+                        f"INSERT INTO {table_name} (value, label) VALUES (?, ?)",
+                        [str(idx), str(label)],
+                    )
                 
                 # Logging
                 self.logger.info(f"Created dimension table {table_name} with {len(unique_values)} unique values")
@@ -224,16 +225,16 @@ class DimensionManager(BaseSchemaManager):
                 else:
                     new_values = list(range(len(new_labels)))
                 
-                # Insertion des nouvelles valeurs
+                # Insertion des nouvelles valeurs.
+                # La valeur numérique 'value' est calculée comme max_existant + offset,
+                # ce qui garantit l'unicité sans contrainte DDL.
                 values_added = 0
                 for value, label in zip(new_values, new_labels):
                     try:
-                        # Exécution de la requête d'insertion
-                        self.conn.execute(f"""
-                            INSERT INTO {table_name} (value, label) 
-                            VALUES (?, ?)
-                            ON CONFLICT (value) DO NOTHING
-                        """, [str(value), str(label)])
+                        self.conn.execute(
+                            f"INSERT INTO {table_name} (value, label) VALUES (?, ?)",
+                            [str(value), str(label)],
+                        )
                         values_added += 1
                     except Exception as e:
                         # Logging

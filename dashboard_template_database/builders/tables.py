@@ -67,11 +67,12 @@ class DuckdbTablesBuilder(SchemaBuilder):
         if not hasattr(self, 'df_metadata'):
             _ = self.create_metadata_table(column_labels)
         
-        # Création de la table avec contraintes explicites et clé primaire
+        # Création de la table avec schéma explicite
+        # L'unicité de 'name' est garantie applicativement par DuckdbTablesBuilder.
         self.conn.register('temp_metadata', self.df_metadata)
         self.conn.execute(f"""
             CREATE TABLE {table_name} (
-                name VARCHAR PRIMARY KEY,
+                name VARCHAR,
                 label VARCHAR,
                 python_type VARCHAR,
                 sql_type VARCHAR,
@@ -111,10 +112,12 @@ class DuckdbTablesBuilder(SchemaBuilder):
             # Enregistrement d'une vue temporaire
             self.conn.register('temp_dim', dim_df)
             
-            # Création d'une table avec contraintes explicites et "value" comme clé primaire
+            # Création d'une table avec schéma explicite.
+            # Pas de contrainte PRIMARY KEY : DuckLake ne supporte pas les contraintes DDL.
+            # L'unicité de 'value' est garantie applicativement par DimensionManager.
             self.conn.execute(f"""
                 CREATE TABLE {table_name} (
-                    value VARCHAR PRIMARY KEY,
+                    value VARCHAR,
                     label VARCHAR
                 )
             """)
@@ -132,24 +135,36 @@ class DuckdbTablesBuilder(SchemaBuilder):
             self.logger.info(f"Successfully registered duckdb dimension table for {dim_name}")
     
     # Méthode de création de la table d'informations
-    def create_duckdb_fact_table(self, table_name: Optional[str] = 'fact_table', table_prefix: Optional[str] = 'dim_', column_labels: Optional[Dict[str, str]] = None) -> None:
+    def create_duckdb_fact_table(self, table_name: Optional[str] = 'fact_table', table_prefix: Optional[str] = 'dim_', column_labels: Optional[Dict[str, str]] = None, partition_by: Optional[List[str]] = None) -> None:
         """
-        Create a fact table in DuckDB with foreign key relationships to dimension tables.
+        Create a fact table in DuckDB with optional Hive partitioning.
 
         Args:
             table_name (Optional[str]): Name of the fact table in DuckDB. Defaults to 'fact_table'.
             table_prefix (Optional[str]): Prefix for dimension table names. Defaults to 'dim_'.
             column_labels (Optional[Dict[str, str]]): Optional mapping of column names to labels.
+            partition_by (Optional[List[str]]): Column names to partition the table by using
+                DuckLake's Hive-style partitioning. Defaults to None (no partitioning).
+
+        Examples:
+            >>> builder.create_duckdb_fact_table()
+            >>> builder.create_duckdb_fact_table(partition_by=['country', 'year'])
         """
         # Création de la table d'informations si elle n'existe pas déjà
         if not hasattr(self, 'df_fact'):
             _ = self.create_fact_table(column_labels)
-        
+
         # Enregistrement de la table comme vue temporaire
         self.conn.register('temp_fact', self.df_fact)
 
-        # Construction de la clause PRIMARY KEY si des clés primaires sont spécifiées
-        if hasattr(self, 'primary_keys') and len(self.primary_keys) > 0:
+        # Inférence du schéma de colonnes depuis la table de métadonnées.
+        # Utilisée dans les deux chemins DDL explicites (avec primary_keys ou avec partition_by).
+        needs_explicit_ddl = (
+            (hasattr(self, 'primary_keys') and len(self.primary_keys) > 0)
+            or partition_by
+        )
+
+        if needs_explicit_ddl:
             # Récupération des types SQL pour chaque colonne depuis la table de métadonnées
             column_definitions = []
             for col in self.df_fact.columns:
@@ -157,16 +172,17 @@ class DuckdbTablesBuilder(SchemaBuilder):
                 sql_type = self.df_metadata.loc[self.df_metadata['name'] == col, 'sql_type'].iloc[0]
                 column_definitions.append(f"{col} {sql_type}")
 
-            # Construction de la clause PRIMARY KEY
-            pk_columns = ', '.join(self.primary_keys)
-            primary_key_clause = f"PRIMARY KEY ({pk_columns})"
+            # Construction de la clause PARTITION BY si des colonnes de partition sont spécifiées.
+            # Pas de clause PRIMARY KEY : DuckLake ne supporte pas les contraintes DDL.
+            partition_clause = (
+                f" PARTITION BY ({', '.join(partition_by)})" if partition_by else ""
+            )
 
-            # Création de la table avec contrainte de clé primaire
+            # Création de la table avec DDL explicite
             query = f"""
                 CREATE TABLE {table_name} (
-                    {', '.join(column_definitions)},
-                    {primary_key_clause}
-                )
+                    {', '.join(column_definitions)}
+                ){partition_clause}
             """
             self.conn.execute(query)
 
@@ -177,10 +193,14 @@ class DuckdbTablesBuilder(SchemaBuilder):
                 FROM temp_fact
             """)
 
-            # Logging
-            self.logger.info(f"Primary key constraint created on fact_table: ({pk_columns})")
+            # Logging des clés logiques (non contraintes DDL)
+            if hasattr(self, 'primary_keys') and len(self.primary_keys) > 0:
+                pk_columns = ', '.join(self.primary_keys)
+                self.logger.info(
+                    f"Logical primary keys registered in the metadata table for the fact_table : ({pk_columns})"
+                )
         else:
-            # Création sans contrainte de clé primaire
+            # Chemin CTAS (sans partition ni clés primaires) : plus performant, pas de DDL intermédiaire
             query = f"""
                 CREATE TABLE {table_name} AS
                 SELECT {', '.join(self.df_fact.columns)}
@@ -199,7 +219,7 @@ class DuckdbTablesBuilder(SchemaBuilder):
         self.logger.info(f"Successfully registered duckdb fact table")
     
     # Méthode de construction du schéma
-    def build_duckdb_schema(self, metadata_table: Optional[str] = 'metadata', fact_table: Optional[str] = 'fact_table', dim_table_prefix: Optional[str] = 'dim_', column_labels: Optional[Dict[str, str]] = None, check_duplicates: bool = True, keep: Literal[False, 'first', 'last'] = False) -> None:
+    def build_schema(self, metadata_table: Optional[str] = 'metadata', fact_table: Optional[str] = 'fact_table', dim_table_prefix: Optional[str] = 'dim_', column_labels: Optional[Dict[str, str]] = None, check_duplicates: bool = True, keep: Literal[False, 'first', 'last'] = False, partition_by: Optional[List[str]] = None) -> None:
         """
         Build the entire schema in DuckDB, including metadata, dimension, and fact tables.
 
@@ -210,7 +230,12 @@ class DuckdbTablesBuilder(SchemaBuilder):
             column_labels (Optional[Dict[str, str]]): Optional mapping of column names to labels.
             check_duplicates (bool): Whether to check and remove duplicates. Defaults to True.
             keep (Literal[False, 'first', 'last']): Which duplicates to keep. Defaults to False.
+            partition_by (Optional[List[str]]): Column names to partition the fact table by.
+                Passed through to ``create_duckdb_fact_table()``. Defaults to None.
 
+        Examples:
+            >>> builder.build_schema()
+            >>> builder.build_schema(partition_by=['country'])
         """
         # Vérification et suppression des doublons sur self.df si demandé.
         # Les clés primaires sont transmises à la fonction de déduplication afin que
@@ -237,11 +262,12 @@ class DuckdbTablesBuilder(SchemaBuilder):
             column_labels=column_labels
         )
         
-        # Création de la table d'informations avec les clés étrangères
+        # Création de la table d'informations avec partitionnement optionnel
         self.create_duckdb_fact_table(
-            table_name=fact_table, 
-            table_prefix=dim_table_prefix, 
-            column_labels=column_labels
+            table_name=fact_table,
+            table_prefix=dim_table_prefix,
+            column_labels=column_labels,
+            partition_by=partition_by,
         )
     
     # Méthode d'affichage du schéma
