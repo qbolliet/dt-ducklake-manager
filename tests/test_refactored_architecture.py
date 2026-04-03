@@ -18,8 +18,8 @@ from dashboard_template_database.operations.managers.transaction_manager import 
 from dashboard_template_database.operations.auditor import (
     DatabaseAuditor, ValidationLevel, IssueType, IssueSeverity
 )
-from dashboard_template_database.operations.updater import DatabaseUpdaterV2
-from dashboard_template_database.operations.deleter import DatabaseDeleterV2
+from dashboard_template_database.operations.updater import DatabaseUpdater
+from dashboard_template_database.operations.deleter import DatabaseDeleter
 from dashboard_template_database.operations.recovery import (
     DatabaseRecoveryManager, RecoveryStrategy, BackupType
 )
@@ -487,12 +487,12 @@ class TestDatabaseAuditor:
         assert len(report.issues) > 0
 
 
-class TestDatabaseUpdaterV2:
-    """Tests pour DatabaseUpdaterV2."""
+class TestDatabaseUpdater:
+    """Tests pour DatabaseUpdater."""
     
     def test_initialization(self, test_db):
         """Test de l'initialisation de l'updater v2."""
-        updater = DatabaseUpdaterV2(test_db, enable_validation=False)
+        updater = DatabaseUpdater(test_db, enable_validation=False)
         
         assert updater.conn is not None
         assert updater.dimension_mgr is not None
@@ -501,7 +501,7 @@ class TestDatabaseUpdaterV2:
     
     def test_database_update_direct(self, test_db, sample_dataframe):
         """Test de mise à jour directe de la base."""
-        updater = DatabaseUpdaterV2(test_db, enable_validation=False)
+        updater = DatabaseUpdater(test_db, enable_validation=False)
         
         # Mise à jour
         success = updater.update_database(
@@ -518,7 +518,7 @@ class TestDatabaseUpdaterV2:
     
     def test_database_update_transactional(self, test_db, sample_dataframe):
         """Test de mise à jour transactionnelle de la base."""
-        updater = DatabaseUpdaterV2(test_db, enable_validation=False)
+        updater = DatabaseUpdater(test_db, enable_validation=False)
         
         # Mise à jour
         success = updater.update_database(
@@ -530,12 +530,12 @@ class TestDatabaseUpdaterV2:
         assert success
 
 
-class TestDatabaseDeleterV2:
-    """Tests pour DatabaseDeleterV2."""
+class TestDatabaseDeleter:
+    """Tests pour DatabaseDeleter."""
     
     def test_initialization(self, test_db):
         """Test de l'initialisation du deleter v2."""
-        deleter = DatabaseDeleterV2(test_db, enable_validation=False)
+        deleter = DatabaseDeleter(test_db, enable_validation=False)
         
         assert deleter.conn is not None
         assert deleter.dimension_mgr is not None
@@ -544,7 +544,7 @@ class TestDatabaseDeleterV2:
     
     def test_delete_rows(self, test_db, sample_dataframe):
         """Test de suppression de lignes."""
-        deleter = DatabaseDeleterV2(test_db, enable_validation=False, auto_cleanup=False)
+        deleter = DatabaseDeleter(test_db, enable_validation=False, auto_cleanup=False)
         
         # Création de données
         test_db.register('temp_data', sample_dataframe)
@@ -560,7 +560,7 @@ class TestDatabaseDeleterV2:
     
     def test_delete_columns(self, test_db, sample_dataframe):
         """Test de suppression de colonnes."""
-        deleter = DatabaseDeleterV2(test_db, enable_validation=False, auto_cleanup=False)
+        deleter = DatabaseDeleter(test_db, enable_validation=False, auto_cleanup=False)
         
         # Création de données
         test_db.register('temp_data', sample_dataframe)

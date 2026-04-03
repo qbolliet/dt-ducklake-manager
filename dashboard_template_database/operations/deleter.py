@@ -24,7 +24,7 @@ from ..utils.data_processing import _build_where_clause
 FILE_PATH = Path(os.path.abspath(__file__))
 
 # Classe de suppression de données dans la base
-class DatabaseDeleterV2(BaseSchemaManager):
+class DatabaseDeleter(BaseSchemaManager):
     """
     Database deleter using modular architecture.
     
@@ -69,7 +69,7 @@ class DatabaseDeleterV2(BaseSchemaManager):
 
         Example:
             >>> conn = DuckLakeConnector('catalog.ducklake', 'data/').connect()
-            >>> deleter = DatabaseDeleterV2(conn, enable_validation=True, auto_cleanup=True)
+            >>> deleter = DatabaseDeleter(conn, enable_validation=True, auto_cleanup=True)
         """
         # Initialisation du parent
         super().__init__(connection=connection, categorical_threshold=categorical_threshold, log_filename=log_filename)

@@ -25,7 +25,7 @@ class DuckLakeConnector:
     and routing the session to the correct schema.
 
     After calling ``connect()``, the returned ``duckdb.DuckDBPyConnection`` can be
-    passed directly to ``DuckdbTablesBuilder``, ``DatabaseUpdaterV2``, or any other
+    passed directly to ``DuckdbTablesBuilder``, ``DatabaseUpdater``, or any other
     class that accepts a ``connection`` parameter.
 
     Attributes:

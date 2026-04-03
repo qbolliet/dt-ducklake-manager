@@ -16,7 +16,7 @@ import duckdb
 # Import des gestionnaires
 from .auditor import DatabaseAuditor, ValidationLevel, ValidationReport, ValidationIssue
 from .managers.dimension_manager import DimensionManager
-from .deleter import DatabaseDeleterV2
+from .deleter import DatabaseDeleter
 # Import des utilitaires
 from ..utils.logger import _init_logger
 
@@ -1086,7 +1086,7 @@ class DatabaseRecoveryManager:
             operations_performed = []
             
             # Utilisation du deleter pour nettoyer            
-            deleter = DatabaseDeleterV2(self.conn, self.categorical_threshold, 
+            deleter = DatabaseDeleter(self.conn, self.categorical_threshold, 
                                       enable_validation=False, auto_cleanup=True)
             # Nettoyage de la base de données
             cleanup_results = deleter.cleanup_database(comprehensive=True)

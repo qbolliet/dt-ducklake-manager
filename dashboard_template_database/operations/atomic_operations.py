@@ -14,8 +14,8 @@ import duckdb
 from .managers.transaction_manager import (
     TransactionManager, TransactionOperation, TransactionState
 )
-from .updater import DatabaseUpdaterV2
-from .deleter import DatabaseDeleterV2
+from .updater import DatabaseUpdater
+from .deleter import DatabaseDeleter
 from .recovery import DatabaseRecoveryManager, RecoveryOperation, RecoveryStrategy
 from .auditor import DatabaseAuditor, ValidationLevel
 
@@ -113,8 +113,8 @@ class AtomicDatabaseOperations:
     Attributes:
         conn (duckdb.DuckDBPyConnection): Database connection
         transaction_mgr (TransactionManager): Transaction manager
-        updater (DatabaseUpdaterV2): Database updater
-        deleter (DatabaseDeleterV2): Database deleter
+        updater (DatabaseUpdater): Database updater
+        deleter (DatabaseDeleter): Database deleter
         recovery_mgr (DatabaseRecoveryManager): Recovery manager
         auditor (DatabaseAuditor): Database auditor
         logger: Logger instance
@@ -163,7 +163,7 @@ class AtomicDatabaseOperations:
             log_filename=log_filename
         )
 
-        self.updater = DatabaseUpdaterV2(
+        self.updater = DatabaseUpdater(
             connection=connection,
             categorical_threshold=categorical_threshold,
             log_filename=log_filename,
@@ -172,7 +172,7 @@ class AtomicDatabaseOperations:
             enable_validation=True
         )
 
-        self.deleter = DatabaseDeleterV2(
+        self.deleter = DatabaseDeleter(
             connection=connection,
             categorical_threshold=categorical_threshold,
             log_filename=log_filename,

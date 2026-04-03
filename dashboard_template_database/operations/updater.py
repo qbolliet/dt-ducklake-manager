@@ -24,7 +24,7 @@ FILE_PATH = Path(os.path.abspath(__file__))
 
 
 # Classe de mise à jour d'une base de données
-class DatabaseUpdaterV2(BaseSchemaManager):
+class DatabaseUpdater(BaseSchemaManager):
     """
     Refactored database updater using the new modular architecture.
     
@@ -69,7 +69,7 @@ class DatabaseUpdaterV2(BaseSchemaManager):
 
         Examples:
             >>> conn = DuckLakeConnector('catalog.ducklake', 'data/').connect()
-            >>> updater = DatabaseUpdaterV2(conn, max_workers=8, enable_validation=True)
+            >>> updater = DatabaseUpdater(conn, max_workers=8, enable_validation=True)
         """
         # Initialisation du parent
         super().__init__(connection=connection, categorical_threshold=categorical_threshold, log_filename=log_filename)
