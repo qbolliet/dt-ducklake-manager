@@ -96,8 +96,9 @@ class DuckLakeMaintenance:
         """
         try:
             # Exécution de la fusion des fichiers
+            # Note : les table functions DuckLake vivent dans le catalogue mémoire.
             self.conn.execute(
-                f"CALL {self.catalog_alias}.ducklake_merge_adjacent_files('{schema}', '{table}')"
+                f"CALL ducklake_merge_adjacent_files('{self.catalog_alias}', '{table}', schema := '{schema}')"
             )
             # Logging
             self.logger.info(f"The merge of the Parquet files is finished : {schema}.{table}")
@@ -125,7 +126,7 @@ class DuckLakeMaintenance:
         try:
             # Exécution de la réécriture des fichiers
             self.conn.execute(
-                f"CALL {self.catalog_alias}.ducklake_rewrite_data_files('{schema}', '{table}')"
+                f"CALL ducklake_rewrite_data_files('{self.catalog_alias}', '{table}', schema := '{schema}')"
             )
             # Logging
             self.logger.info(f"The rewriting of the file deletion is finished : {schema}.{table}")

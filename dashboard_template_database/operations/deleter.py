@@ -39,6 +39,8 @@ class DatabaseDeleterV2(BaseSchemaManager):
         auditor (DatabaseAuditor): Validates database state and operations
         enable_validation (bool): Whether to enable validation
         auto_cleanup (bool): Whether to automatically clean up orphaned data
+        ducklake_catalog_alias (str): Alias of the attached DuckLake catalog
+        ducklake_schema (str): DuckLake schema name
     """
     # Initialisation
     def __init__(self,
@@ -46,7 +48,9 @@ class DatabaseDeleterV2(BaseSchemaManager):
                  categorical_threshold: Optional[int] = 50,
                  log_filename: Optional[os.PathLike] = None,
                  enable_validation: bool = True,
-                 auto_cleanup: bool = True):
+                 auto_cleanup: bool = True,
+                 ducklake_catalog_alias: str = 'db',
+                 ducklake_schema: str = 'main'):
         """
         Initialize the refactored database deleter.
 
@@ -58,6 +62,10 @@ class DatabaseDeleterV2(BaseSchemaManager):
             log_filename: Path to log file.
             enable_validation: Whether to enable pre/post operation validation.
             auto_cleanup: Whether to automatically clean up orphaned data.
+            ducklake_catalog_alias: Alias used in the DuckLake ATTACH statement.
+                Defaults to ``'db'``.
+            ducklake_schema: DuckLake schema name used in compaction calls.
+                Defaults to ``'main'``.
 
         Example:
             >>> conn = DuckLakeConnector('catalog.ducklake', 'data/').connect()
@@ -86,7 +94,11 @@ class DatabaseDeleterV2(BaseSchemaManager):
         # Configuration
         self.enable_validation = enable_validation
         self.auto_cleanup = auto_cleanup
-    
+
+        # Configuration DuckLake pour les appels de compaction
+        self.ducklake_catalog_alias = ducklake_catalog_alias
+        self.ducklake_schema = ducklake_schema
+
     # Méthode de validation de l'opération de suppression avant son exécution
     def validate_operation(self, operation_type: str, **kwargs) -> bool:
         """
@@ -127,28 +139,32 @@ class DatabaseDeleterV2(BaseSchemaManager):
         return True
     
     # Méthode principale de suppression de lignes
-    def delete_rows(self, 
+    def delete_rows(self,
                    filters: Optional[Union[str, List, Dict]] = None,
                    use_transaction: bool = True,
-                   perform_cleanup: Optional[bool] = None) -> int:
+                   perform_cleanup: Optional[bool] = None,
+                   compact_after_update: bool = True) -> int:
         """
         Delete rows from fact table based on filters with atomic operations.
-        
+
         Args:
             filters: Filter conditions (string SQL condition or structured filters)
             use_transaction: Whether to use database transactions
             perform_cleanup: Whether to cleanup orphaned data (None = use auto_cleanup setting)
-            
+            compact_after_update: Whether to run DuckLake compaction (merge small delta
+                files and rewrite delete files) immediately after a successful deletion.
+                Adds write latency but keeps read performance optimal. Defaults to True.
+
         Returns:
             Number of rows deleted, -1 if operation failed
-            
+
         Example:
             >>> # Using string filter
             >>> deleted = deleter.delete_rows("status = 'inactive'")
-            >>> 
+            >>>
             >>> # Using structured filter
             >>> filters = [('status', '=', 'inactive'), ('date', '<', '2023-01-01')]
-            >>> deleted = deleter.delete_rows(filters, use_transaction=True)
+            >>> deleted = deleter.delete_rows(filters, use_transaction=True, compact_after_update=False)
         """
         # Validation préalable
         if not self.validate_operation('delete', filters=filters):
@@ -165,15 +181,16 @@ class DatabaseDeleterV2(BaseSchemaManager):
         # Suppression des lignes
         if use_transaction:
             # De manière transactionnelle
-            return self._delete_rows_transactional(filters, perform_cleanup)
+            return self._delete_rows_transactional(filters, perform_cleanup, compact_after_update)
         else:
             # Directement
-            return self._delete_rows_direct(filters, perform_cleanup)
+            return self._delete_rows_direct(filters, perform_cleanup, compact_after_update)
     
     # Méthode de suppression des lignes de manière transactionnelle
-    def _delete_rows_transactional(self, 
-                                 filters: Optional[Union[str, List, Dict]], 
-                                 perform_cleanup: bool) -> int:
+    def _delete_rows_transactional(self,
+                                 filters: Optional[Union[str, List, Dict]],
+                                 perform_cleanup: bool,
+                                 compact_after_update: bool) -> int:
         """Transactional row deletion with rollback support."""
         
         # Début de la transaction
@@ -249,6 +266,9 @@ class DatabaseDeleterV2(BaseSchemaManager):
             if self.transaction_mgr.commit_transaction(tx_id):
                 # Logging
                 self.logger.info(f"Row deletion completed successfully: {rows_deleted} rows deleted")
+                # Compaction DuckLake optionnelle après commit (réécriture des delete files)
+                if compact_after_update:
+                    self._run_ducklake_compaction()
                 return rows_deleted
             else:
                 # Logging
@@ -263,9 +283,10 @@ class DatabaseDeleterV2(BaseSchemaManager):
             return -1
     
     # Méthode de suppression directe des lignes
-    def _delete_rows_direct(self, 
-                          filters: Optional[Union[str, List, Dict]], 
-                          perform_cleanup: bool) -> int:
+    def _delete_rows_direct(self,
+                          filters: Optional[Union[str, List, Dict]],
+                          perform_cleanup: bool,
+                          compact_after_update: bool) -> int:
         """Direct deletion without transaction management."""
         try:
             # Exécution de la suppression via data manager
@@ -274,9 +295,12 @@ class DatabaseDeleterV2(BaseSchemaManager):
             if rows_deleted > 0 and perform_cleanup:
                 # Nettoyage des données orphelines
                 self._cleanup_orphaned_data_comprehensive()
-            
+
             # Logging
             self.logger.info(f"Row deletion completed (direct mode): {rows_deleted} rows deleted")
+            # Compaction DuckLake optionnelle (réécriture des delete files)
+            if rows_deleted > 0 and compact_after_update:
+                self._run_ducklake_compaction()
             return rows_deleted
             
         except Exception as e:
@@ -284,8 +308,43 @@ class DatabaseDeleterV2(BaseSchemaManager):
             self.logger.error(f"Error during direct deletion: {e}")
             return -1
     
+    # Méthode auxiliaire de compaction DuckLake
+    def _run_ducklake_compaction(self, fact_table: str = 'fact_table') -> None:
+        """Trigger DuckLake compaction on the fact table after a successful deletion.
+
+        Merges small adjacent Parquet delta files and rewrites delete files (tombstones)
+        to maintain optimal read performance. Failures are non-fatal: a warning is
+        logged and execution continues normally.
+
+        Args:
+            fact_table: Name of the fact table to compact. Defaults to ``'fact_table'``.
+
+        Examples:
+            >>> deleter._run_ducklake_compaction()
+            >>> deleter._run_ducklake_compaction('my_fact_table')
+        """
+        # Extraction des alias et du schéma
+        alias = self.ducklake_catalog_alias
+        schema = self.ducklake_schema
+        try:
+            # Fusion des petits fichiers delta adjacents
+            # Note : les table functions DuckLake sont enregistrées dans le catalogue mémoire
+            # (où l'extension est chargée), pas dans le catalogue attaché. L'alias du catalogue
+            # doit être passé en premier argument, et non utilisé comme préfixe.
+            self.conn.execute(
+                f"CALL ducklake_merge_adjacent_files('{alias}', '{fact_table}', schema := '{schema}')"
+            )
+            # Réécriture des fichiers de suppression (delete files) pour optimiser les lectures
+            self.conn.execute(
+                f"CALL ducklake_rewrite_data_files('{alias}', '{fact_table}', schema := '{schema}')"
+            )
+            self.logger.info(f"DuckLake finished for '{fact_table}'")
+        except Exception as e:
+            # Erreur non bloquante : la compaction est une optimisation, pas une étape critique
+            self.logger.warning(f"Ducklake compaction failed : {e}")
+
     # Méthode principale de suppression de colonnes
-    def delete_columns(self, 
+    def delete_columns(self,
                       columns: List[str], 
                       use_transaction: bool = True,
                       validate_dependencies: bool = True) -> Dict[str, bool]:

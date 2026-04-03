@@ -786,17 +786,19 @@ class DatabaseUpdaterV2(BaseSchemaManager):
         schema = self.ducklake_schema
         try:
             # Fusion des petits fichiers delta adjacents
+            # Note : les table functions DuckLake sont enregistrées dans le catalogue mémoire
+            # (où l'extension est chargée), pas dans le catalogue attaché.
             self.conn.execute(
-                f"CALL {alias}.ducklake_merge_adjacent_files('{schema}', '{fact_table}')"
+                f"CALL ducklake_merge_adjacent_files('{alias}', '{fact_table}', schema := '{schema}')"
             )
             # Réécriture des fichiers de suppression (delete files) pour optimiser les lectures
             self.conn.execute(
-                f"CALL {alias}.ducklake_rewrite_data_files('{schema}', '{fact_table}')"
+                f"CALL ducklake_rewrite_data_files('{alias}', '{fact_table}', schema := '{schema}')"
             )
-            self.logger.info(f"Compaction DuckLake terminée pour '{fact_table}'")
+            self.logger.info(f"Compaction DuckLake is finished for '{fact_table}'")
         except Exception as e:
             # Erreur non bloquante : la compaction est une optimisation, pas une étape critique
-            self.logger.warning(f"Compaction DuckLake échouée (non bloquant) : {e}")
+            self.logger.warning(f"Compaction DuckLake failed : {e}")
 
     # Méthodes de rollback
     # Méthode auxiliaire de rollback des changements de métadonnées
