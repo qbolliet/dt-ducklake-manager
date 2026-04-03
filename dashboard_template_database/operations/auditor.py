@@ -175,31 +175,27 @@ class DatabaseAuditor:
         logger: Logger instance for audit tracking
     """
     # Initialisation
-    def __init__(self, 
-                 connection: Optional[duckdb.DuckDBPyConnection] = None, 
-                 path: Optional[os.PathLike]=None,
+    def __init__(self,
+                 connection: Optional[duckdb.DuckDBPyConnection] = None,
                  categorical_threshold: Optional[int] = 50,
                  log_filename: Optional[os.PathLike] = None):
         """
         Initialize the database auditor.
-        
+
         Args:
-            connection: DuckDB connection object
-            categorical_threshold: Threshold for determining categorical variables
-            log_filename: Path to log file
-            
+            connection: DuckDB connection attached to a DuckLake catalog, obtained
+                via ``DuckLakeConnector.connect()``. If None, an in-memory connection
+                is created (for unit tests only).
+            categorical_threshold: Threshold for determining categorical variables.
+            log_filename: Path to log file.
+
         Example:
-            >>> conn = duckdb.connect('database.db')
+            >>> conn = DuckLakeConnector('catalog.ducklake', 'data/').connect()
             >>> auditor = DatabaseAuditor(conn)
             >>> report = auditor.validate_database(ValidationLevel.COMPREHENSIVE)
         """
-        # Initialisation de la connexion
-        if (connection is None) & (path is None) :
-            self.conn = duckdb.connect(':memory:')
-        elif (connection is None) :
-            self.conn = duckdb.connect(path)
-        else :
-            self.conn = connection
+        # Initialisation de la connexion DuckLake.
+        self.conn = connection if connection is not None else duckdb.connect(':memory:')
         
         # Seuil pour déterminer si une variable est catégorielle
         self.categorical_threshold = categorical_threshold
@@ -1024,9 +1020,9 @@ class DatabaseAuditor:
     def _validate_update_preconditions(self, report: ValidationReport, df: pd.DataFrame = None, **kwargs) -> None:
         """Validate update preconditions.
 
-        Valide les préconditions pour une opération de mise à jour en utilisant
-        les clés primaires définies dans les métadonnées au lieu des merge_keys
-        passées en paramètre.
+        Validates the preconditions for an update operation by using
+        the primary keys defined in the metadata instead of the merge_keys
+        passed as parameters.
         """
         # Vérification des conditions d'insertions
         self._validate_insert_preconditions(report, df, **kwargs)

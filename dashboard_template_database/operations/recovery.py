@@ -2,7 +2,6 @@
 # Modules de base
 import os
 import json
-import pickle
 import pandas as pd
 from pathlib import Path
 from typing import Dict, List, Optional, Any, Union, Tuple
@@ -27,8 +26,14 @@ FILE_PATH = Path(os.path.abspath(__file__))
 
 # Classe des types de stratégies de récupération possibles
 class RecoveryStrategy(Enum):
-    """Available recovery strategies for database restoration."""
-    ROLLBACK_TRANSACTION = "rollback_transaction"
+    """Available recovery strategies for database restoration.
+
+    DuckLake conserve un historique complet de snapshots. La stratégie recommandée
+    en cas de corruption est ``USE_SNAPSHOT_HISTORY`` : elle identifie le dernier
+    snapshot sain et fournit les informations nécessaires pour ouvrir une connexion
+    en time-travel via ``DuckLakeConnector(..., snapshot_version=N)``.
+    """
+    USE_SNAPSHOT_HISTORY = "use_snapshot_history"
     RESTORE_BACKUP = "restore_backup"
     REPAIR_SCHEMA = "repair_schema"
     REBUILD_DIMENSIONS = "rebuild_dimensions"
@@ -130,36 +135,41 @@ class DatabaseRecoveryManager:
         auto_backup_on_changes (bool): Whether to create automatic backups
     """
     # Initialisation
-    def __init__(self, 
-                 connection: Optional[duckdb.DuckDBPyConnection] = None, 
-                 path: Optional[os.PathLike]=None,
+    def __init__(self,
+                 connection: Optional[duckdb.DuckDBPyConnection] = None,
                  backup_dir: Optional[os.PathLike] = None,
                  categorical_threshold: Optional[int] = 50,
                  log_filename: Optional[os.PathLike] = None,
                  max_backup_age_days: int = 30,
-                 auto_backup_on_changes: bool = True):
+                 auto_backup_on_changes: bool = True,
+                 catalog_alias: str = 'db',
+                 ducklake_schema: str = 'main'):
         """
         Initialize the database recovery manager.
-        
+
         Args:
-            connection: DuckDB connection object
-            backup_dir: Directory for storing backups (None for default)
-            categorical_threshold: Threshold for determining categorical variables
-            log_filename: Path to log file
-            max_backup_age_days: Maximum age for keeping backups
-            auto_backup_on_changes: Whether to create automatic backups
-            
+            connection: DuckDB connection attached to a DuckLake catalog, obtained
+                via ``DuckLakeConnector.connect()``. If None, an in-memory connection
+                is created (for unit tests only).
+            backup_dir: Directory for storing CSV-based backups (None for default).
+            categorical_threshold: Threshold for determining categorical variables.
+            log_filename: Path to log file.
+            max_backup_age_days: Maximum age for keeping backup files on disk.
+            auto_backup_on_changes: Whether to create automatic backups before
+                destructive operations.
+            catalog_alias: Alias of the attached DuckLake catalog, used to query
+                available snapshots via ``ducklake_snapshots()``. Defaults to ``'db'``.
+            ducklake_schema: DuckLake schema name used for snapshot queries.
+                Defaults to ``'main'``.
+
         Example:
-            >>> conn = duckdb.connect('database.db')
+            >>> conn = DuckLakeConnector('catalog.ducklake', 'data/').connect()
             >>> recovery_mgr = DatabaseRecoveryManager(conn, backup_dir='/path/to/backups')
         """
-        # Initialisation de la connexion
-        if (connection is None) & (path is None) :
-            self.conn = duckdb.connect(':memory:')
-        elif (connection is None) :
-            self.conn = duckdb.connect(path)
-        else :
-            self.conn = connection
+        # Initialisation de la connexion DuckLake.
+        self.conn = connection if connection is not None else duckdb.connect(':memory:')
+        self.catalog_alias = catalog_alias
+        self.ducklake_schema = ducklake_schema
         
         # Configuration des répertoires
         if backup_dir is None:
@@ -398,8 +408,8 @@ class DatabaseRecoveryManager:
                 )
             
             # Exécution de la stratégie de récupération
-            if operation.strategy == RecoveryStrategy.ROLLBACK_TRANSACTION:
-                result = self._recover_rollback_transaction(operation)
+            if operation.strategy == RecoveryStrategy.USE_SNAPSHOT_HISTORY:
+                result = self._recover_use_snapshot_history(operation)
             elif operation.strategy == RecoveryStrategy.RESTORE_BACKUP:
                 result = self._recover_restore_backup(operation)
             elif operation.strategy == RecoveryStrategy.REPAIR_SCHEMA:
@@ -681,43 +691,76 @@ class DatabaseRecoveryManager:
             return False
     
     # Méthodes de récupération spécialisées
-    # Méthode de récupération d'une transaction par rollback
-    def _recover_rollback_transaction(self, operation: RecoveryOperation) -> RecoveryResult:
-        """Recover by rolling back the current database transaction.
+    # Méthode de récupération par historique des snapshots DuckLake
+    def _recover_use_snapshot_history(self, operation: RecoveryOperation) -> RecoveryResult:
+        """Recover by identifying a safe DuckLake snapshot for time-travel restoration.
+
+        DuckLake does not support multi-statement SQL ROLLBACK. Recovery
+        relies on native time travel: open a read-only connection to
+        a previous snapshot using ``DuckLakeConnector(..., snapshot_version=N)``,
+        then reload the data into the current catalog.
+
+        This method queries the available snapshots and returns their list in
+        ``RecoveryResult.operations_performed`` to guide the manual operation.
 
         Args:
-            operation: Recovery operation parameters.
+            operation: Recovery operation. Si ``target_recovery_point`` est renseigné,
+                il doit contenir un numéro de snapshot (``snapshot_id``) sous forme
+                de chaîne.
 
         Returns:
-            RecoveryResult indicating success or failure of rollback.
+            RecoveryResult with available snapshots and time-travel guidance.
         """
         try:
-            # Cette stratégie est généralement gérée par le TransactionManager
-            # Ici on simule un rollback basique
-            
-            operations_performed = ["Transaction rollback attempted"]
-            
-            # Tentative de rollback global
+            operations_performed = []
+
+            # Interrogation de l'historique des snapshots DuckLake
             try:
-                self.conn.execute("ROLLBACK")
-                operations_performed.append("Global rollback executed")
-            except:
-                operations_performed.append("No active transaction to rollback")
-            
+                snapshots_df = self.conn.execute(
+                    f"SELECT * FROM {self.catalog_alias}.ducklake_snapshots"
+                    f"('{self.ducklake_schema}') ORDER BY snapshot_id DESC"
+                ).fetchdf()
+                snapshot_count = len(snapshots_df)
+                operations_performed.append(
+                    f"Snapshots disponibles : {snapshot_count} "
+                    f"(dernier snapshot_id = {snapshots_df['snapshot_id'].iloc[0] if snapshot_count > 0 else 'N/A'})"
+                )
+
+                # Identification du snapshot cible si fourni
+                target_snapshot = operation.target_recovery_point
+                if target_snapshot:
+                    operations_performed.append(f"Snapshot cible demandé : {target_snapshot}")
+                elif snapshot_count > 1:
+                    # Suggérer l'avant-dernier snapshot comme point de restauration sûr
+                    suggested = snapshots_df['snapshot_id'].iloc[1]
+                    operations_performed.append(
+                        f"Snapshot suggéré pour time-travel : {suggested} "
+                        f"(avant-dernier)"
+                    )
+
+            except Exception as e:
+                operations_performed.append(f"Impossible d'interroger les snapshots DuckLake : {e}")
+
+            recommendations = [
+                "To restore the database from a snapshot : "
+                "conn = DuckLakeConnector(catalog_path, data_path, snapshot_version=N).connect()",
+                "Read the tables from this connection and reinsert them into the current catalog.",
+            ]
+
             return RecoveryResult(
                 success=True,
                 strategy_used=operation.strategy,
                 recovery_time=0,
                 operations_performed=operations_performed,
-                recommendations=["Consider using TransactionManager for better rollback control"]
+                recommendations=recommendations,
             )
-            
+
         except Exception as e:
             return RecoveryResult(
                 success=False,
                 strategy_used=operation.strategy,
                 recovery_time=0,
-                error_message=str(e)
+                error_message=str(e),
             )
 
     # Méthode de récupération par restauration de sauvegarde

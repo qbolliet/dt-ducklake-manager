@@ -28,27 +28,28 @@ class DataManager(BaseSchemaManager):
         batch_size (int): Size of batches for processing large datasets
     """
     # Initialisation
-    def __init__(self, 
-                 connection: Optional[duckdb.DuckDBPyConnection] = None, 
-                 path: Optional[os.PathLike]=None,
+    def __init__(self,
+                 connection: Optional[duckdb.DuckDBPyConnection] = None,
                  categorical_threshold: Optional[int] = 50,
                  log_filename: Optional[os.PathLike] = None,
                  batch_size: int = 10000):
         """
         Initialize the data manager.
-        
+
         Args:
-            connection: DuckDB connection object
-            categorical_threshold: Threshold for determining categorical variables
-            log_filename: Path to log file
-            batch_size: Size of batches for processing large datasets
-            
+            connection: DuckDB connection attached to a DuckLake catalog, obtained
+                via ``DuckLakeConnector.connect()``. If None, an in-memory connection
+                is created (for unit tests only).
+            categorical_threshold: Threshold for determining categorical variables.
+            log_filename: Path to log file.
+            batch_size: Size of batches for processing large datasets.
+
         Example:
-            >>> conn = duckdb.connect('database.db')
+            >>> conn = DuckLakeConnector('catalog.ducklake', 'data/').connect()
             >>> data_mgr = DataManager(conn, batch_size=5000)
         """
         # Initialisation du parent
-        super().__init__(connection=connection, path=path, categorical_threshold=categorical_threshold, log_filename=log_filename)
+        super().__init__(connection=connection, categorical_threshold=categorical_threshold, log_filename=log_filename)
         
         # Configuration pour le traitement par lots
         self.batch_size = batch_size

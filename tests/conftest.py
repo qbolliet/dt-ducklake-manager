@@ -13,7 +13,7 @@ import s3fs
 # Module de tests
 import pytest
 # Modules du package
-from dashboard_template_database.builders import DuckdbTablesBuilder
+from dashboard_template_database.builders import DuckLakeTablesBuilder
 
 # Initialisation d'un jeu de données d'exemple
 @pytest.fixture
@@ -179,17 +179,18 @@ def sample_df_with_primary_keys():
         'upper_bound': [5.0, 6.0, 7.0, 5.0],
     })
 
-# Fixture fournissant une connexion DuckDB avec un schéma déjà construit
+# Fixture fournissant une connexion DuckLake (in-memory) avec un schéma déjà construit
 @pytest.fixture
-def built_duckdb_schema(sample_df):
+def built_ducklake_schema(sample_df):
     """Provide an in-memory DuckDB connection with a fully built schema.
 
     The schema is built from sample_df with categorical_threshold=4 and
-    primary_keys=['id'], ready to be used with ParquetExporter or IndexManager.
+    primary_keys=['id'], ready to be used with operation managers.
+    Uses an in-memory connection (no DuckLake catalog file) for test isolation.
     """
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", UserWarning)
-        builder = DuckdbTablesBuilder(
+        builder = DuckLakeTablesBuilder(
             sample_df,
             categorical_threshold=4,
             primary_keys=['id'],

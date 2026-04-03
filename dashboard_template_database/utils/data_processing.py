@@ -114,25 +114,29 @@ def build_database_duplicate_removal_query(columns_to_check: list,
     columns_str = ', '.join(columns_to_check)
     
     if keep == False:
-        # Suppression de tous les doublons
+        # Suppression de TOUTES les occurrences des clés en doublon.
+        # On identifie les groupes ayant plus d'une ligne par leur valeur de colonnes.
         return f"""
-        DELETE FROM {table_name} 
-        WHERE rowid NOT IN (
-            SELECT MIN(rowid) 
-            FROM {table_name} 
+        DELETE FROM {table_name}
+        WHERE ({columns_str}) IN (
+            SELECT {columns_str}
+            FROM {table_name}
             GROUP BY {columns_str}
-            HAVING COUNT(*) = 1
+            HAVING COUNT(*) > 1
         )
         """
     else:
-        # Conservation du premier ou dernier doublon
+        # Conservation du premier ou dernier doublon selon l'ordre de scan DuckLake.
+        # rowid est utilisé comme discriminant au sein d'une seule instruction DML :
+        # il est stable dans ce contexte (file + row-group offset Parquet, cohérent
+        # pour toute la durée du DELETE). Il n'est pas supposé stable entre sessions.
         order_clause = "ASC" if keep == 'first' else "DESC"
         return f"""
-        DELETE FROM {table_name} 
+        DELETE FROM {table_name}
         WHERE rowid NOT IN (
             SELECT rowid FROM (
                 SELECT rowid, ROW_NUMBER() OVER (
-                    PARTITION BY {columns_str} 
+                    PARTITION BY {columns_str}
                     ORDER BY rowid {order_clause}
                 ) as rn
                 FROM {table_name}

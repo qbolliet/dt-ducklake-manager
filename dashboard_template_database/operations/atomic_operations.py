@@ -26,6 +26,7 @@ from ..utils.logger import _init_logger
 FILE_PATH = Path(os.path.abspath(__file__))
 
 
+# Type d'opération
 class AtomicOperationType(Enum):
     """Types d'opérations atomiques disponibles."""
     BATCH_UPDATE = "batch_update"
@@ -36,6 +37,7 @@ class AtomicOperationType(Enum):
     BACKUP_AND_UPDATE = "backup_and_update"
 
 
+# Configuration de l'opération
 @dataclass
 class AtomicOperationConfig:
     """
@@ -61,6 +63,7 @@ class AtomicOperationConfig:
     timeout_seconds: Optional[int] = None
 
 
+# Résultat de l'opération
 @dataclass
 class AtomicOperationResult:
     """
@@ -98,6 +101,7 @@ class AtomicOperationResult:
             self.metrics = {}
 
 
+# Classe d'exécution d'opération atomiques sur la base de données
 class AtomicDatabaseOperations:
     """
     Provides high-level atomic operations for database management.
@@ -116,9 +120,9 @@ class AtomicDatabaseOperations:
         logger: Logger instance
     """
     
-    def __init__(self, 
-                 connection: Optional[duckdb.DuckDBPyConnection] = None, 
-                 path: Optional[os.PathLike]=None,
+    # Initialisation
+    def __init__(self,
+                 connection: Optional[duckdb.DuckDBPyConnection] = None,
                  categorical_threshold: Optional[int] = 50,
                  log_filename: Optional[os.PathLike] = None,
                  backup_dir: Optional[os.PathLike] = None,
@@ -126,59 +130,53 @@ class AtomicDatabaseOperations:
                  default_max_workers: int = 4):
         """
         Initialize the atomic operations manager.
-        
+
         Args:
-            connection: DuckDB connection object
-            categorical_threshold: Threshold for determining categorical variables
-            log_filename: Path to log file
-            backup_dir: Directory for backups
-            default_batch_size: Default batch size for operations
-            default_max_workers: Default number of parallel workers
-            
+            connection: DuckDB connection attached to a DuckLake catalog, obtained
+                via ``DuckLakeConnector.connect()``. If None, an in-memory connection
+                is created (for unit tests only).
+            categorical_threshold: Threshold for determining categorical variables.
+            log_filename: Path to log file.
+            backup_dir: Directory for CSV-based backups.
+            default_batch_size: Default batch size for operations.
+            default_max_workers: Default number of parallel workers.
+
         Example:
-            >>> conn = duckdb.connect('database.db')
+            >>> conn = DuckLakeConnector('catalog.ducklake', 'data/').connect()
             >>> atomic_ops = AtomicDatabaseOperations(conn)
         """
-        # Initilisation de la connexion
-        if (connection is None) & (path is None) :
-            self.conn = duckdb.connect(':memory:')
-        elif (connection is None) :
-            self.conn = duckdb.connect(path)
-        else :
-            self.conn = connection
+        # Initialisation de la connexion DuckLake.
+        self.conn = connection if connection is not None else duckdb.connect(':memory:')
 
         # Initialisation du seuil pour les variables catégorielles
         self.categorical_threshold = categorical_threshold
-        
+
         # Initialisation du logger
         if log_filename is None:
             log_filename = os.path.join(FILE_PATH.parents[2], "logs/atomic_operations.log")
         self.logger = _init_logger(filename=log_filename)
-        
+
         # Initialisation des gestionnaires
         self.transaction_mgr = TransactionManager(
-            connection=connection, 
-            path=path, 
-            categorical_threshold=categorical_threshold, 
+            connection=connection,
+            categorical_threshold=categorical_threshold,
             log_filename=log_filename
         )
-        
+
         self.updater = DatabaseUpdaterV2(
             connection=connection,
-            path=path,
             categorical_threshold=categorical_threshold,
-            log_filename=log_filename, 
-            max_workers=default_max_workers, 
-            batch_size=default_batch_size, 
+            log_filename=log_filename,
+            max_workers=default_max_workers,
+            batch_size=default_batch_size,
             enable_validation=True
         )
-        
+
         self.deleter = DatabaseDeleterV2(
-            connection=connection, 
-            path=path, 
-            categorical_threshold=categorical_threshold, 
-            log_filename=log_filename, 
-            enable_validation=True, 
+            connection=connection,
+            categorical_threshold=categorical_threshold,
+            log_filename=log_filename,
+            enable_validation=True,
             auto_cleanup=True
         )
         

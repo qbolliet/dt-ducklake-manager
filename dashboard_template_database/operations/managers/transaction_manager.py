@@ -73,58 +73,74 @@ class TransactionContext:
     start_time: float = field(default_factory=time.time)
     error_message: Optional[str] = None
     savepoints: Dict[str, int] = field(default_factory=dict)
+    # Identifiant du snapshot DuckLake capturé juste avant le début des opérations.
+    # Permet de guider une restauration par time-travel en cas d'échec non récupérable.
+    pre_transaction_snapshot: Optional[int] = None
 
 # Classe de gestion des transactions
 class TransactionManager(BaseSchemaManager):
     """
-    Manages database transactions with support for atomic operations, rollback,
-    and error recovery. Provides high-level transaction management with automatic
-    cleanup and state validation.
+    Manages application-level operation batches with rollback support for DuckLake.
+
+    DuckLake does not support multi-statement SQL transactions: each DML
+    (INSERT / UPDATE / DELETE) immediately creates an atomic snapshot in the
+    catalog. This driver therefore provides an application layer:
     
+    - Each operation is registered with an optional ``rollback_func``.
+    - In case of failure, operations already executed are rolled back in reverse order
+      via their ``rollback_func``.
+    - The DuckLake snapshot captured at startup (`pre_transaction_snapshot`) is
+      available in the `TransactionContext` to guide a time-travel
+      restoration if the `rollback_func`s themselves fail.
+
+Translated with DeepL.com (free version)
+
     Attributes:
-        auto_commit (bool): Whether to auto-commit single operations
-        transaction_timeout (int): Maximum transaction duration in seconds
+        transaction_timeout (int): Durée maximale d'un batch d'opérations en secondes.
+        ducklake_catalog_alias (str): Alias du catalogue DuckLake (pour la capture du snapshot).
+        ducklake_schema (str): Schéma DuckLake cible (pour la capture du snapshot).
     """
 
     # Initialisation
-    def __init__(self, 
-                 connection: Optional[duckdb.DuckDBPyConnection] = None, 
-                 path: Optional[os.PathLike]=None,
+    def __init__(self,
+                 connection: Optional[duckdb.DuckDBPyConnection] = None,
                  categorical_threshold: Optional[int] = 50,
                  log_filename: Optional[os.PathLike] = None,
-                 auto_commit: bool = True,
-                 transaction_timeout: int = 300):
+                 transaction_timeout: int = 300,
+                 ducklake_catalog_alias: str = 'db',
+                 ducklake_schema: str = 'main'):
         """
         Initialize the transaction manager.
-        
+
         Args:
-            connection: DuckDB connection object
-            categorical_threshold: Threshold for determining categorical variables
-            log_filename: Path to log file
-            auto_commit: Whether to auto-commit single operations
-            transaction_timeout: Maximum transaction duration in seconds
-            
+            connection: DuckDB connection attached to a DuckLake catalog, obtained
+                via ``DuckLakeConnector.connect()``. If None, an in-memory connection
+                is created (for unit tests only).
+            categorical_threshold: Threshold for determining categorical variables.
+            log_filename: Path to log file.
+            transaction_timeout: Maximum batch duration in seconds before automatic
+                rollback is triggered. Defaults to 300.
+            ducklake_catalog_alias: Alias of the DuckLake catalog used to capture
+                the pre-operation snapshot version. Defaults to ``'db'``.
+            ducklake_schema: DuckLake schema name used to capture the snapshot.
+                Defaults to ``'main'``.
+
         Example:
-            >>> conn = duckdb.connect('database.db')
+            >>> conn = DuckLakeConnector('catalog.ducklake', 'data/').connect()
             >>> tx_mgr = TransactionManager(conn, transaction_timeout=600)
         """
         # Initialisation du parent
-        super().__init__(connection=connection, path=path, categorical_threshold=categorical_threshold, log_filename=log_filename)
-        
-        # Configuration des transactions
-        self.auto_commit = auto_commit
+        super().__init__(connection=connection, categorical_threshold=categorical_threshold, log_filename=log_filename)
+
+        # Configuration du gestionnaire de batches
         self.transaction_timeout = transaction_timeout
-        
-        # Gestion des contextes de transaction
+        self.ducklake_catalog_alias = ducklake_catalog_alias
+        self.ducklake_schema = ducklake_schema
+
+        # Gestion des contextes de transaction applicatifs
         self._active_transactions: Dict[str, TransactionContext] = {}
         self._transaction_counter = 0
         self._transaction_lock = threading.RLock()
-        
-        # Configuration de l'auto-commit de DuckDB
-        try:
-            self.conn.execute("SET autocommit = ?", [auto_commit])
-        except Exception as e:
-            self.logger.warning(f"Could not set autocommit mode: {e}")
     
     # Méthode de validation de l'opération
     def validate_operation(self, operation_type: str, **kwargs) -> bool:
@@ -214,30 +230,35 @@ class TransactionManager(BaseSchemaManager):
             # Génération d'un ID unique
             self._transaction_counter += 1
             transaction_id = f"tx_{self._transaction_counter}_{int(time.time())}"
-            
-            # Création du contexte
+
+            # Capture du snapshot DuckLake courant avant toute opération.
+            # Ce numéro de version permet une restauration par time-travel si le
+            # rollback applicatif échoue : DuckLakeConnector(..., snapshot_version=N).
+            pre_snapshot: Optional[int] = None
+            try:
+                result = self.conn.execute(
+                    f"SELECT MAX(snapshot_id) FROM {self.ducklake_catalog_alias}"
+                    f".ducklake_snapshots('{self.ducklake_schema}')"
+                ).fetchone()
+                pre_snapshot = result[0] if result else None
+            except Exception:
+                # Capture du snapshot non bloquante : ignorée si le catalogue
+                # n'est pas accessible (ex. connexion :memory: pour les tests).
+                pass
+
+            # Création du contexte applicatif
             context = TransactionContext(
                 transaction_id=transaction_id,
-                state=TransactionState.PENDING
+                state=TransactionState.RUNNING,
+                pre_transaction_snapshot=pre_snapshot,
             )
-            
+
             self._active_transactions[transaction_id] = context
-            
-            try:
-                # Début de la transaction DuckDB
-                self.conn.execute("BEGIN TRANSACTION")
-                context.state = TransactionState.RUNNING
-                
-                # Logging
-                self.logger.info(f"Started transaction {transaction_id}: {description}")
-                return transaction_id
-                
-            except Exception as e:
-                # Nettoyage en cas d'erreur
-                del self._active_transactions[transaction_id]
-                # Logging
-                self.logger.error(f"Failed to begin transaction: {e}")
-                raise
+
+            # Logging
+            snapshot_info = f" (snapshot avant = {pre_snapshot})" if pre_snapshot is not None else ""
+            self.logger.info(f"Started batch {transaction_id}: {description}{snapshot_info}")
+            return transaction_id
     
     # Méthode d'ajout d'une opération sur la base de données à la transaction
     def add_operation(self, 
@@ -423,9 +444,8 @@ class TransactionManager(BaseSchemaManager):
                         self.rollback_transaction(transaction_id)
                         return False
             
-            # Commit de la transaction DuckDB
-            self.conn.execute("COMMIT")
-            
+            # En DuckLake chaque DML a déjà créé son propre snapshot atomique ;
+            # il n'y a pas de COMMIT global à émettre.
             # Mise à jour du statut
             context.state = TransactionState.COMMITTED
             
@@ -482,13 +502,16 @@ class TransactionManager(BaseSchemaManager):
                         # Logging
                         self.logger.error(f"Failed to rollback operation {operation_index}: {e}")
             
-            # Rollback de la transaction DuckDB
-            try:
-                # Exécution de l'annulation
-                self.conn.execute("ROLLBACK")
-            except Exception as e:
-                # Logging
-                self.logger.warning(f"DuckDB rollback failed: {e}")
+            # DuckLake ne supporte pas de ROLLBACK SQL multi-instructions : chaque
+            # DML crée un snapshot irrévocable. Le rollback applicatif via rollback_func
+            # (ci-dessus) est le seul mécanisme disponible à ce niveau.
+            # En cas d'échec des rollback_func, utiliser le time-travel :
+            #   DuckLakeConnector(..., snapshot_version=context.pre_transaction_snapshot)
+            if context.pre_transaction_snapshot is not None:
+                self.logger.info(
+                    f"Snapshot de référence pour time-travel : "
+                    f"snapshot_version={context.pre_transaction_snapshot}"
+                )
             
             # Mise à jour du statut
             context.state = TransactionState.ROLLED_BACK
@@ -537,25 +560,14 @@ class TransactionManager(BaseSchemaManager):
         
         context = self._active_transactions[transaction_id]
         
-        try:
-            # Création du savepoint DuckDB
-            self.conn.execute(f"SAVEPOINT {savepoint_name}")
-            
-            # Enregistrement du savepoint
-            context.savepoints[savepoint_name] = len(context.executed_operations)
-            
-            # Logging
-            self.logger.info(f"Created savepoint '{savepoint_name}' in transaction {transaction_id}")
-            return True
-            
-        except Exception as e:
-            # Avertissement non-bloquant : les SAVEPOINTs ne sont pas supportés dans toutes les
-            # versions de DuckDB. La transaction globale assure le rollback en cas d'échec.
-            self.logger.warning(
-                f"Savepoints are not supported by this version of DuckDB "
-                f"(savepoint '{savepoint_name}' ignored) : {e}"
-            )
-            return False
+        # Enregistrement applicatif du savepoint : index de la dernière opération exécutée.
+        # DuckLake ne supporte pas les SAVEPOINTs SQL ; le rollback partiel repose
+        # exclusivement sur les rollback_func enregistrées par opération.
+        context.savepoints[savepoint_name] = len(context.executed_operations)
+
+        # Logging
+        self.logger.info(f"Created savepoint '{savepoint_name}' in batch {transaction_id}")
+        return True
     
     # Méthode d'annulation jusqu'à un savepoint
     def rollback_to_savepoint(self, transaction_id: str, savepoint_name: str) -> bool:
@@ -584,11 +596,17 @@ class TransactionManager(BaseSchemaManager):
             return False
         
         try:
-            # Rollback DuckDB au savepoint
-            self.conn.execute(f"ROLLBACK TO SAVEPOINT {savepoint_name}")
-            
-            # Mise à jour du contexte local
+            # Rollback applicatif au savepoint : exécution inverse des rollback_func
+            # pour les opérations postérieures au savepoint.
+            # DuckLake ne supporte pas ROLLBACK TO SAVEPOINT SQL.
             savepoint_operation_index = context.savepoints[savepoint_name]
+            for op_idx in reversed([i for i in context.executed_operations if i >= savepoint_operation_index]):
+                operation = context.operations[op_idx]
+                if operation.rollback_func:
+                    try:
+                        operation.rollback_func(*operation.rollback_args, **operation.rollback_kwargs)
+                    except Exception as e:
+                        self.logger.error(f"Rollback to savepoint: failed for operation {op_idx}: {e}")
             context.executed_operations = [
                 op_idx for op_idx in context.executed_operations 
                 if op_idx < savepoint_operation_index

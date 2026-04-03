@@ -43,7 +43,6 @@ class DatabaseUpdaterV2(BaseSchemaManager):
     # Initialisation
     def __init__(self,
                  connection: Optional[duckdb.DuckDBPyConnection] = None,
-                 path: Optional[os.PathLike] = None,
                  categorical_threshold: Optional[int] = 50,
                  log_filename: Optional[os.PathLike] = None,
                  max_workers: int = 4,
@@ -55,41 +54,45 @@ class DatabaseUpdaterV2(BaseSchemaManager):
         Initialize the refactored database updater.
 
         Args:
-            connection: DuckDB connection object
-            path: Path to the DuckDB database file
-            categorical_threshold: Threshold for determining categorical variables
-            log_filename: Path to log file
-            max_workers: Maximum number of parallel workers
-            batch_size: Size of batches for processing
-            enable_validation: Whether to enable pre/post operation validation
+            connection: DuckDB connection attached to a DuckLake catalog, obtained
+                via ``DuckLakeConnector.connect()``. If None, an in-memory connection
+                is created (for unit tests only).
+            categorical_threshold: Threshold for determining categorical variables.
+            log_filename: Path to log file.
+            max_workers: Maximum number of parallel workers.
+            batch_size: Size of batches for processing.
+            enable_validation: Whether to enable pre/post operation validation.
             ducklake_catalog_alias: Alias used in the DuckLake ATTACH statement.
-                Passed to maintenance calls (``ducklake_merge_adjacent_files`` etc.).
-                Defaults to ``'db'``.
-            ducklake_schema: DuckLake schema name used in maintenance calls.
-                Defaults to ``'main'``.
+                Passed to maintenance and snapshot calls. Defaults to ``'db'``.
+            ducklake_schema: DuckLake schema name used in maintenance and snapshot
+                calls. Defaults to ``'main'``.
 
         Examples:
             >>> conn = DuckLakeConnector('catalog.ducklake', 'data/').connect()
             >>> updater = DatabaseUpdaterV2(conn, max_workers=8, enable_validation=True)
         """
         # Initialisation du parent
-        super().__init__(connection=connection, path=path, categorical_threshold=categorical_threshold, log_filename=log_filename)
+        super().__init__(connection=connection, categorical_threshold=categorical_threshold, log_filename=log_filename)
 
         # Initialisation des gestionnaires spécialisés
         self.dimension_mgr = DimensionManager(
-            connection=connection, path=path, categorical_threshold=categorical_threshold, log_filename=log_filename, max_workers=max_workers
+            connection=connection, categorical_threshold=categorical_threshold, log_filename=log_filename, max_workers=max_workers
         )
 
         self.data_mgr = DataManager(
-            connection=connection, path=path, categorical_threshold=categorical_threshold, log_filename=log_filename, batch_size=batch_size
+            connection=connection, categorical_threshold=categorical_threshold, log_filename=log_filename, batch_size=batch_size
         )
 
         self.transaction_mgr = TransactionManager(
-            connection=connection, path=path, categorical_threshold=categorical_threshold, log_filename=log_filename
+            connection=connection,
+            categorical_threshold=categorical_threshold,
+            log_filename=log_filename,
+            ducklake_catalog_alias=ducklake_catalog_alias,
+            ducklake_schema=ducklake_schema,
         )
 
         self.auditor = DatabaseAuditor(
-            connection=connection, path=path, categorical_threshold=categorical_threshold, log_filename=log_filename
+            connection=connection, categorical_threshold=categorical_threshold, log_filename=log_filename
         ) if enable_validation else None
 
         # Configuration

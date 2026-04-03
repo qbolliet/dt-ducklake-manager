@@ -32,30 +32,28 @@ class BaseSchemaManager(ABC):
     """
     
     # Initialisation
-    def __init__(self, 
-                 connection: Optional[duckdb.DuckDBPyConnection] = None, 
-                 path: Optional[os.PathLike]=None,
+    def __init__(self,
+                 connection: Optional[duckdb.DuckDBPyConnection] = None,
                  categorical_threshold: Optional[int] = 50,
                  log_filename: Optional[os.PathLike] = None):
         """
         Initialize the base schema manager.
-        
+
         Args:
-            connection: DuckDB connection object
-            categorical_threshold: Threshold for determining categorical variables
-            log_filename: Path to log file
-            
+            connection: DuckDB connection attached to a DuckLake catalog, obtained
+                via ``DuckLakeConnector.connect()``. If None, an in-memory DuckDB
+                connection is created (useful for unit tests only).
+            categorical_threshold: Threshold for determining categorical variables.
+            log_filename: Path to log file.
+
         Example:
-            >>> conn = duckdb.connect('database.db')
+            >>> conn = DuckLakeConnector('catalog.ducklake', 'data/').connect()
             >>> manager = ConcreteManager(conn, categorical_threshold=30)
         """
-        # Initialisation de la connexion
-        if (connection is None) & (path is None) :
-            self.conn = duckdb.connect(':memory:')
-        elif (connection is None) :
-            self.conn = duckdb.connect(path)
-        else :
-            self.conn = connection
+        # Initialisation de la connexion DuckLake.
+        # Le fallback :memory: est réservé aux tests unitaires ; en production la
+        # connexion doit toujours être fournie via DuckLakeConnector.connect().
+        self.conn = connection if connection is not None else duckdb.connect(':memory:')
         
         # Seuil pour déterminer si une variable est catégorielle  
         self.categorical_threshold = categorical_threshold

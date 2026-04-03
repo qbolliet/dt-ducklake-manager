@@ -35,7 +35,8 @@ class DuckLakeMaintenance:
         logger (logging.Logger): Logger instance.
 
     Examples:
-        >>> from dashboard_template_database.builders import DuckLakeConnector, DuckLakeMaintenance
+        >>> from dashboard_template_database.builders import DuckLakeConnector
+        >>> from dashboard_template_database.operations import DuckLakeMaintenance
         >>> conn = DuckLakeConnector('catalog.ducklake', 'data/').connect()
         >>> maint = DuckLakeMaintenance(conn)
         >>> maint.full_maintenance('main', 'fact_table')
@@ -227,17 +228,32 @@ class DuckLakeMaintenance:
             f"Beginning the full DuckLake maintenance : schema={schema}, table={table}"
         )
 
+        # Chaque étape est enveloppée dans un try/except pour garantir que
+        # l'échec d'une étape ne bloque pas les étapes suivantes.
+
         # Étape 1 : fusion des petits fichiers Parquet adjacents
-        self.merge_files(schema, table)
+        try:
+            self.merge_files(schema, table)
+        except Exception as e:
+            self.logger.warning(f"full_maintenance — merge_files failed : {e}")
 
         # Étape 2 : réécriture des fichiers contenant des suppressions
-        self.rewrite_data_files(schema, table)
+        try:
+            self.rewrite_data_files(schema, table)
+        except Exception as e:
+            self.logger.warning(f"full_maintenance — rewrite_data_files failed : {e}")
 
         # Étape 3 : expiration des anciens snapshots
-        self.expire_snapshots(schema, older_than_days=older_than_days)
+        try:
+            self.expire_snapshots(schema, older_than_days=older_than_days)
+        except Exception as e:
+            self.logger.warning(f"full_maintenance — expire_snapshots failed : {e}")
 
         # Étape 4 : suppression des fichiers Parquet orphelins
-        self.cleanup_files(schema)
+        try:
+            self.cleanup_files(schema)
+        except Exception as e:
+            self.logger.warning(f"full_maintenance — cleanup_files failed : {e}")
 
         # Logging
         self.logger.info(

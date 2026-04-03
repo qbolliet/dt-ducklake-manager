@@ -16,42 +16,67 @@ from ..utils.data_processing import remove_dataframe_duplicates
 FILE_PATH = Path(os.path.abspath(__file__))
 
 
-# Classe créant les tables correspondant au schéma
-class DuckdbTablesBuilder(SchemaBuilder):
+# Classe créant les tables correspondant au schéma dans un catalogue DuckLake
+class DuckLakeTablesBuilder(SchemaBuilder):
     """
-    A class to build and manage schema tables in DuckDB.
+    Builds and writes the database schema (metadata, dimension, and fact tables)
+    into a DuckLake catalog.
 
-    This class extends `SchemaBuilder` and provides functionality to create 
-    metadata, dimension, and fact tables in DuckDB, while logging all operations.
+    This class extends ``SchemaBuilder`` and creates the three table layers of the
+    dashboard database schema directly in the DuckLake catalog attached to the
+    provided connection:
+
+    - ``metadata`` : column descriptors (type, label, categorical flag, primary key).
+    - ``dim_<col>`` : dimension tables for low-cardinality categorical columns.
+    - ``fact_table`` : the main fact table, optionally Hive-partitioned.
+
+    The connection must be obtained from ``DuckLakeConnector.connect()`` before
+    instantiating this class.
 
     Attributes:
-        conn (duckdb.DuckDBPyConnection): DuckDB connection object.
+        conn (duckdb.DuckDBPyConnection): DuckLake-attached DuckDB connection.
+
+    Examples:
+        >>> conn = DuckLakeConnector('catalog.ducklake', 'data/').connect()
+        >>> builder = DuckLakeTablesBuilder(df, categorical_threshold=10, connection=conn)
+        >>> builder.build_schema()
     """
 
     # Initialisation
-    def __init__(self, df: pd.DataFrame, categorical_threshold: Optional[int] = None, primary_keys: Optional[List[str]] = None, connection: Optional[duckdb.DuckDBPyConnection] = None, path : Optional[os.PathLike]=None, log_filename: Optional[os.PathLike] = os.path.join(FILE_PATH.parents[2], "logs/duckdb_schema_builder.log")):
+    def __init__(self,
+                 df: pd.DataFrame,
+                 categorical_threshold: Optional[int] = None,
+                 primary_keys: Optional[List[str]] = None,
+                 connection: Optional[duckdb.DuckDBPyConnection] = None,
+                 log_filename: Optional[os.PathLike] = os.path.join(
+                     FILE_PATH.parents[2], "logs/ducklake_tables_builder.log"
+                 )):
         """
-        Initialize the DuckdbTablesBuilder class.
+        Initialize the DuckLakeTablesBuilder.
 
         Args:
-            df (pd.DataFrame): The input dataset.
-            categorical_threshold (Optional[int]): Threshold for determining categorical variables.
-            primary_keys (Optional[List[str]]): List of column names to use as primary key. Defaults to None.
-            connection (Optional[duckdb.DuckDBPyConnection]): Existing DuckDB connection. Defaults to None.
-            path (Optional[Union[os.PathLike, None]]): Path to the DuckDB database file. Defaults to None.
-            log_filename (Optional[os.PathLike]): Path to the log file. Defaults to a pre-defined path.
+            df (pd.DataFrame): Input dataset used to infer the schema.
+            categorical_threshold (Optional[int]): Maximum number of distinct values
+                for a column to be treated as categorical. Defaults to None (uses
+                ``SchemaBuilder`` default).
+            primary_keys (Optional[List[str]]): Column names used as logical primary
+                keys (enforced applicatively, not as DDL constraints). Defaults to None.
+            connection (Optional[duckdb.DuckDBPyConnection]): DuckLake-attached DuckDB
+                connection obtained from ``DuckLakeConnector.connect()``. If None, an
+                in-memory DuckDB connection is used (for unit tests only).
+            log_filename (Optional[os.PathLike]): Path to the log file.
 
+        Examples:
+            >>> conn = DuckLakeConnector('catalog.ducklake', 'data/').connect()
+            >>> builder = DuckLakeTablesBuilder(df, connection=conn)
         """
         # Initialisation du schéma
         super().__init__(df=df, categorical_threshold=categorical_threshold, primary_keys=primary_keys, log_filename=log_filename)
-        
-        # Initialisation de la connection
-        if (connection is None) & (path is None) :
-            self.conn = duckdb.connect(':memory:')
-        elif (connection is None) :
-            self.conn = duckdb.connect(path)
-        else :
-            self.conn = connection
+
+        # Initialisation de la connexion DuckLake.
+        # Le fallback :memory: est réservé aux tests unitaires ; en production la
+        # connexion doit toujours être fournie via DuckLakeConnector.connect().
+        self.conn = connection if connection is not None else duckdb.connect(':memory:')
     
     # Méthode de création de la table des méta-données
     def create_duckdb_metadata_table(self, table_name: Optional[str] = 'metadata', column_labels: Optional[Dict[str, str]] = None) -> None:

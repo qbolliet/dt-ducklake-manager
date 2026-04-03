@@ -30,26 +30,27 @@ class DimensionManager(BaseSchemaManager):
     
     # Initialisation
     def __init__(self,
-                 connection: Optional[duckdb.DuckDBPyConnection] = None, 
-                 path: Optional[os.PathLike]=None,
+                 connection: Optional[duckdb.DuckDBPyConnection] = None,
                  categorical_threshold: Optional[int] = 50,
                  log_filename: Optional[os.PathLike] = None,
                  max_workers: int = 4):
         """
         Initialize the dimension manager.
-        
+
         Args:
-            connection: DuckDB connection object
-            categorical_threshold: Threshold for determining categorical variables
-            log_filename: Path to log file
-            max_workers: Maximum number of parallel workers
-            
+            connection: DuckDB connection attached to a DuckLake catalog, obtained
+                via ``DuckLakeConnector.connect()``. If None, an in-memory connection
+                is created (for unit tests only).
+            categorical_threshold: Threshold for determining categorical variables.
+            log_filename: Path to log file.
+            max_workers: Maximum number of parallel workers.
+
         Example:
-            >>> conn = duckdb.connect('database.db')
+            >>> conn = DuckLakeConnector('catalog.ducklake', 'data/').connect()
             >>> dim_mgr = DimensionManager(conn, max_workers=8)
         """
         # Initialisation du parent
-        super().__init__(connection=connection, path=path, categorical_threshold=categorical_threshold, log_filename=log_filename)
+        super().__init__(connection=connection, categorical_threshold=categorical_threshold, log_filename=log_filename)
         
         # Configuration pour le traitement parallèle
         self.max_workers = max_workers

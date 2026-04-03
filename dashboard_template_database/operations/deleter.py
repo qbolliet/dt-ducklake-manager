@@ -41,45 +41,46 @@ class DatabaseDeleterV2(BaseSchemaManager):
         auto_cleanup (bool): Whether to automatically clean up orphaned data
     """
     # Initialisation
-    def __init__(self, 
-                 connection: Optional[duckdb.DuckDBPyConnection] = None, 
-                 path: Optional[os.PathLike]=None,
+    def __init__(self,
+                 connection: Optional[duckdb.DuckDBPyConnection] = None,
                  categorical_threshold: Optional[int] = 50,
                  log_filename: Optional[os.PathLike] = None,
                  enable_validation: bool = True,
                  auto_cleanup: bool = True):
         """
         Initialize the refactored database deleter.
-        
+
         Args:
-            connection: DuckDB connection object
-            categorical_threshold: Threshold for determining categorical variables
-            log_filename: Path to log file
-            enable_validation: Whether to enable pre/post operation validation
-            auto_cleanup: Whether to automatically clean up orphaned data
-            
+            connection: DuckDB connection attached to a DuckLake catalog, obtained
+                via ``DuckLakeConnector.connect()``. If None, an in-memory connection
+                is created (for unit tests only).
+            categorical_threshold: Threshold for determining categorical variables.
+            log_filename: Path to log file.
+            enable_validation: Whether to enable pre/post operation validation.
+            auto_cleanup: Whether to automatically clean up orphaned data.
+
         Example:
-            >>> conn = duckdb.connect('database.db')
+            >>> conn = DuckLakeConnector('catalog.ducklake', 'data/').connect()
             >>> deleter = DatabaseDeleterV2(conn, enable_validation=True, auto_cleanup=True)
         """
         # Initialisation du parent
-        super().__init__(connection=connection, path=path, categorical_threshold=categorical_threshold, log_filename=log_filename)
-        
+        super().__init__(connection=connection, categorical_threshold=categorical_threshold, log_filename=log_filename)
+
         # Initialisation des gestionnaires spécialisés
         self.dimension_mgr = DimensionManager(
-            connection=connection, path=path, categorical_threshold=categorical_threshold, log_filename=log_filename
+            connection=connection, categorical_threshold=categorical_threshold, log_filename=log_filename
         )
-        
+
         self.data_mgr = DataManager(
-            connection=connection, path=path, categorical_threshold=categorical_threshold, log_filename=log_filename
+            connection=connection, categorical_threshold=categorical_threshold, log_filename=log_filename
         )
-        
+
         self.transaction_mgr = TransactionManager(
-            connection=connection, path=path, categorical_threshold=categorical_threshold, log_filename=log_filename
+            connection=connection, categorical_threshold=categorical_threshold, log_filename=log_filename
         )
-        
+
         self.auditor = DatabaseAuditor(
-            connection=connection, path=path, categorical_threshold=categorical_threshold, log_filename=log_filename
+            connection=connection, categorical_threshold=categorical_threshold, log_filename=log_filename
         ) if enable_validation else None
         
         # Configuration

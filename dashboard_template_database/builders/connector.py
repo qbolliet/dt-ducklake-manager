@@ -86,7 +86,10 @@ class DuckLakeConnector:
         # Stockage des paramètres de connexion
         self.catalog_path = str(catalog_path)
         self.data_path = str(data_path)
-        self.read_only = read_only
+        # snapshot_version et snapshot_time impliquent un accès en lecture seule :
+        # DuckLake ouvre automatiquement le catalogue en READ_ONLY dans ce cas.
+        # L'attribut self.read_only reflète cet état effectif pour cohérence.
+        self.read_only = read_only or snapshot_version is not None or snapshot_time is not None
         self.snapshot_version = snapshot_version
         self.snapshot_time = snapshot_time
         self.catalog_alias = catalog_alias
@@ -138,7 +141,7 @@ class DuckLakeConnector:
         conn.execute(attach_sql)
         self.logger.info(
             f"DuckLake catalog attached : '{self.catalog_path}' "
-            f"(alias={self.catalog_alias}, read_only={self.read_only or self.snapshot_version is not None or self.snapshot_time is not None})"
+            f"(alias={self.catalog_alias}, read_only={self.read_only})"
         )
 
         # Activation du schéma cible pour que les requêtes non qualifiées fonctionnent
