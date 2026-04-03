@@ -271,9 +271,19 @@ class DuckLakeTablesBuilder(SchemaBuilder):
                 self.df,
                 keep,
                 self.logger,
-                "DataFrame principal",
+                "Main DataFrame",
                 primary_keys=self.primary_keys if self.primary_keys else None,
             )
+
+        # Vérification des doublons basée sur les clés primaires
+        if len(self.primary_keys) > 0:
+            duplicates = self.df.duplicated(subset=self.primary_keys, keep=False)
+            if duplicates.any():
+                n_duplicates = duplicates.sum()
+                raise ValueError(
+                    f"Found {n_duplicates} duplicated rows based on the primary key columns {self.primary_keys}. "
+                    f"Primary keys must be unique."
+                )
         
         # Création de la table des méta-données
         self.create_duckdb_metadata_table(

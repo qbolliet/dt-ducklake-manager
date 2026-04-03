@@ -78,15 +78,6 @@ class SchemaBuilder:
                     f"The following primary key columns do not exist in the DataFrame: {missing_cols}"
                 )
 
-            # Vérification des doublons basée sur les clés primaires
-            duplicates = df.duplicated(subset=primary_keys, keep=False)
-            if duplicates.any():
-                n_duplicates = duplicates.sum()
-                raise ValueError(
-                    f"Found {n_duplicates} duplicated rows based on the primary key columns {primary_keys}. "
-                    f"Primary keys must be unique."
-                )
-
             self.primary_keys = primary_keys
         else:
             self.primary_keys = []
@@ -98,7 +89,7 @@ class SchemaBuilder:
         if not self.primary_keys:
             warnings.warn(
                 "No primary key specified. The deduplication will apply to "
-                "all columns. Passez primary_keys=['col1', ...] to "
+                "all columns. Pass primary_keys=['col1', ...] to "
                 "avoid this warning.",
                 UserWarning,
                 stacklevel=2,
