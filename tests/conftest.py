@@ -2,10 +2,10 @@
 # Modules de base
 import os
 import warnings
-import numpy as np
-import pandas as pd
+import polars as pl
 import logging
 from io import BytesIO
+from datetime import datetime, timedelta
 # Module de connexion à S3
 import boto3
 import s3fs
@@ -19,11 +19,11 @@ from dashboard_template_database.builders import DuckLakeTablesBuilder
 @pytest.fixture
 def sample_df():
     """Create a sample DataFrame for testing."""
-    return pd.DataFrame({
-        'id': range(1, 6),
+    return pl.DataFrame({
+        'id': list(range(1, 6)),
         'category': ['A', 'B', 'A', 'C', 'B'],
-        'value': np.random.rand(5),
-        'date': pd.date_range('2024-01-01', periods=5),
+        'value': [0.1, 0.2, 0.3, 0.4, 0.5],  # Valeurs fixes pour la reproductibilité
+        'date': pl.date_range(datetime(2024, 1, 1), datetime(2024, 1, 5), '1d', eager=True),
         'status': ['active', 'inactive', 'active', 'active', 'inactive'],
         'high_cardinality': [f'val_{i}' for i in range(100, 105)]
     })
@@ -95,9 +95,12 @@ def setup_test_bucket(s3_client, s3_bucket, sample_df):
 # Fonction auxliaire d'exportation d'un fichier excel
 def _create_excel_file(df):
     """Create an in-memory Excel file from a DataFrame."""
+    # Convertir polars en pandas pour l'export Excel
+    import pandas as pd
+    df_pd = df.to_pandas()
     output = BytesIO()
     with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-        df.to_excel(writer, index=False)
+        df_pd.to_excel(writer, index=False)
     output.seek(0)
     return output.getvalue()
 
@@ -113,27 +116,23 @@ def temp_files(sample_df, tmp_path):
     """Initialization of the files to load and save."""
     # Création de fichiers temporaires de différents formats
     files = {}
-    
+
     # CSV
     csv_path = tmp_path / "test.csv"
-    sample_df.to_csv(csv_path, index=False)
+    sample_df.write_csv(csv_path)
     files['csv'] = csv_path
-    
-    # Excel
+
+    # Excel (convertir en pandas pour l'export)
+    import pandas as pd
     xlsx_path = tmp_path / "test.xlsx"
-    sample_df.to_excel(xlsx_path, index=False, engine='openpyxl')
+    sample_df.to_pandas().to_excel(xlsx_path, index=False, engine='openpyxl')
     files['xlsx'] = xlsx_path
-    
-    # Pickle
-    pkl_path = tmp_path / "test.pkl"
-    sample_df.to_pickle(pkl_path)
-    files['pkl'] = pkl_path
-    
+
     # Parquet
     parquet_path = tmp_path / "test.parquet"
-    sample_df.to_parquet(parquet_path)
+    sample_df.write_parquet(parquet_path)
     files['parquet'] = parquet_path
-    
+
     return files
 
 # Fixture pour DataFrame avec doublons
@@ -144,7 +143,7 @@ def sample_df_with_duplicates():
     Rows 0&3 and rows 1&4 are fully identical (including 'value'), so they are
     detected as duplicates regardless of the column subset used for deduplication.
     """
-    return pd.DataFrame({
+    return pl.DataFrame({
         'id': [1, 2, 3, 1, 2],  # Doublons sur id 1 et 2
         'category': ['A', 'B', 'A', 'A', 'B'],
         'status': ['active', 'inactive', 'active', 'active', 'inactive'],
@@ -155,7 +154,7 @@ def sample_df_with_duplicates():
 @pytest.fixture
 def sample_df_with_value_column():
     """Create a sample DataFrame with a 'value' column for testing."""
-    return pd.DataFrame({
+    return pl.DataFrame({
         'id': [1, 2, 3, 1],  # Doublons sur id 1
         'category': ['A', 'B', 'A', 'A'],
         'status': ['active', 'inactive', 'active', 'active'],
@@ -171,7 +170,7 @@ def sample_df_with_primary_keys():
     which allows testing that deduplication based on primary_keys correctly
     identifies them as duplicates regardless of the 'value' difference.
     """
-    return pd.DataFrame({
+    return pl.DataFrame({
         'id': [1, 2, 3, 1],
         'category': ['A', 'B', 'C', 'A'],
         'value': [10.0, 20.0, 30.0, 99.0],

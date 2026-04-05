@@ -1,7 +1,7 @@
 # Importation des modules
 # Modules de base
 import os
-import pandas as pd
+import narwhals as nw
 from pathlib import Path
 from typing import Dict, Optional, Literal, List
 # Duckdb
@@ -44,7 +44,7 @@ class DuckLakeTablesBuilder(SchemaBuilder):
 
     # Initialisation
     def __init__(self,
-                 df: pd.DataFrame,
+                 df,
                  categorical_threshold: Optional[int] = None,
                  primary_keys: Optional[List[str]] = None,
                  connection: Optional[duckdb.DuckDBPyConnection] = None,
@@ -55,7 +55,7 @@ class DuckLakeTablesBuilder(SchemaBuilder):
         Initialize the DuckLakeTablesBuilder.
 
         Args:
-            df (pd.DataFrame): Input dataset used to infer the schema.
+            df: Input dataset (pandas, polars, or narwhals-compatible) used to infer the schema.
             categorical_threshold (Optional[int]): Maximum number of distinct values
                 for a column to be treated as categorical. Defaults to None (uses
                 ``SchemaBuilder`` default).
@@ -67,7 +67,9 @@ class DuckLakeTablesBuilder(SchemaBuilder):
             log_filename (Optional[os.PathLike]): Path to the log file.
 
         Examples:
+            >>> import polars as pl
             >>> conn = DuckLakeConnector('catalog.ducklake', 'data/').connect()
+            >>> df = pl.DataFrame({'col': [1, 2, 3]})
             >>> builder = DuckLakeTablesBuilder(df, connection=conn)
         """
         # Initialisation du schéma
@@ -91,10 +93,12 @@ class DuckLakeTablesBuilder(SchemaBuilder):
         # Création de la table des méta-données si elle n'existe pas déjà
         if not hasattr(self, 'df_metadata'):
             _ = self.create_metadata_table(column_labels)
-        
+
         # Création de la table avec schéma explicite
         # L'unicité de 'name' est garantie applicativement par DuckdbTablesBuilder.
-        self.conn.register('temp_metadata', self.df_metadata)
+        # Conversion de narwhals vers natif (polars) pour DuckDB
+        df_metadata_native = nw.to_native(self.df_metadata)
+        self.conn.register('temp_metadata', df_metadata_native)
         self.conn.execute(f"""
             CREATE TABLE {table_name} (
                 name VARCHAR,
@@ -105,7 +109,7 @@ class DuckLakeTablesBuilder(SchemaBuilder):
                 is_primary_key BOOLEAN
             )
         """)
-        
+
         # Insertion des données depuis la vue temporaire
         self.conn.execute(f"""
             INSERT INTO {table_name}
@@ -129,14 +133,16 @@ class DuckLakeTablesBuilder(SchemaBuilder):
         # Création du dictionnaire des tables de dimensions si elles n'existent pas déjà
         if not hasattr(self, 'dimension_tables'):
             _ = self.create_dimension_tables(column_labels)
-        
+
         # Création de chaque table de dimension dans DuckDB
         for dim_name, dim_df in self.dimension_tables.items():
             # Initialisation du nom de la table
             table_name = f"{table_prefix}{dim_name}"
+            # Conversion de narwhals vers natif (polars) pour DuckDB
+            dim_df_native = nw.to_native(dim_df)
             # Enregistrement d'une vue temporaire
-            self.conn.register('temp_dim', dim_df)
-            
+            self.conn.register('temp_dim', dim_df_native)
+
             # Création d'une table avec schéma explicite.
             # Pas de contrainte PRIMARY KEY : DuckLake ne supporte pas les contraintes DDL.
             # L'unicité de 'value' est garantie applicativement par DimensionManager.
@@ -146,13 +152,13 @@ class DuckLakeTablesBuilder(SchemaBuilder):
                     label VARCHAR
                 )
             """)
-            
+
             # Insertion des données depuis la vue temporaire
             self.conn.execute(f"""
                 INSERT INTO {table_name}
                 SELECT value, label FROM temp_dim
             """)
-            
+
             # Ajout de la vue correspondante
             self.conn.execute('DROP VIEW temp_dim')
 
@@ -179,8 +185,10 @@ class DuckLakeTablesBuilder(SchemaBuilder):
         if not hasattr(self, 'df_fact'):
             _ = self.create_fact_table(column_labels)
 
+        # Conversion de narwhals vers natif (polars) pour DuckDB
+        df_fact_native = nw.to_native(self.df_fact)
         # Enregistrement de la table comme vue temporaire
-        self.conn.register('temp_fact', self.df_fact)
+        self.conn.register('temp_fact', df_fact_native)
 
         # Inférence du schéma de colonnes depuis la table de métadonnées.
         # Utilisée dans les deux chemins DDL explicites (avec primary_keys ou avec partition_by).
@@ -191,11 +199,15 @@ class DuckLakeTablesBuilder(SchemaBuilder):
 
         if needs_explicit_ddl:
             # Récupération des types SQL pour chaque colonne depuis la table de métadonnées
+            # Conversion de metadata en natif pour accéder aux données
+            metadata_native = nw.to_native(self.df_metadata)
             column_definitions = []
             for col in self.df_fact.columns:
                 # Extraction du type SQL depuis la métadonnée
-                sql_type = self.df_metadata.loc[self.df_metadata['name'] == col, 'sql_type'].iloc[0]
-                column_definitions.append(f"{col} {sql_type}")
+                matching_rows = metadata_native.filter(metadata_native['name'] == col)
+                if len(matching_rows) > 0:
+                    sql_type = matching_rows['sql_type'][0]
+                    column_definitions.append(f"{col} {sql_type}")
 
             # Construction de la clause PARTITION BY si des colonnes de partition sont spécifiées.
             # Pas de clause PRIMARY KEY : DuckLake ne supporte pas les contraintes DDL.
@@ -277,26 +289,28 @@ class DuckLakeTablesBuilder(SchemaBuilder):
 
         # Vérification des doublons basée sur les clés primaires
         if len(self.primary_keys) > 0:
-            duplicates = self.df.duplicated(subset=self.primary_keys, keep=False)
-            if duplicates.any():
-                n_duplicates = duplicates.sum()
+            # Conversion vers natif (polars) pour vérifier les doublons
+            df_native = nw.to_native(self.df)
+            duplicates_mask = df_native.is_duplicated(subset=self.primary_keys)
+            n_duplicates = duplicates_mask.sum()
+            if n_duplicates > 0:
                 raise ValueError(
                     f"Found {n_duplicates} duplicated rows based on the primary key columns {self.primary_keys}. "
                     f"Primary keys must be unique."
                 )
-        
+
         # Création de la table des méta-données
         self.create_duckdb_metadata_table(
-            table_name=metadata_table, 
+            table_name=metadata_table,
             column_labels=column_labels
         )
-        
+
         # Création de la table de dimensions
         self.create_duckdb_dimension_tables(
-            table_prefix=dim_table_prefix, 
+            table_prefix=dim_table_prefix,
             column_labels=column_labels
         )
-        
+
         # Création de la table d'informations avec partitionnement optionnel
         self.create_duckdb_fact_table(
             table_name=fact_table,

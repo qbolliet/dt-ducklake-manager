@@ -1,50 +1,53 @@
 # Importation des modules
 # Modules de base
-import pandas as pd
+import narwhals as nw
 from typing import Any, Tuple, List, Literal, Optional, Union
 # Logging
 import logging
 
-# Fonction associant ls types python à leur équivalent SQL
-def map_python_to_sql_type(dtype: str) -> str:
+# Fonction associant ls types narwhals à leur équivalent SQL
+def map_python_to_sql_type(dtype : nw.dtypes.DType) -> str:
     """
-    Map Python data types to SQL-compatible data types.
-    
+    Map Narwhals data types to SQL-compatible data types.
+
     Args:
-        dtype (str): The Python data type as a string.
-    
+        dtype (nw.DType): The Narwhals data type. 
+
     Returns:
         str: The corresponding SQL data type.
-    
+
     Examples:
-        >>> map_python_to_sql_type('object')
+        >>> import narwhals as nw
+        >>> import polars as pl
+        >>> df = pl.DataFrame({'col': ['a', 'b']})
+        >>> map_python_to_sql_type(df.schema['col'])
         'VARCHAR'
-        >>> map_python_to_sql_type('int64')
-        'INTEGER'
-        >>> map_python_to_sql_type('float64')
-        'DOUBLE'
     """
-    # Dictionnaire des correspondances entre les types Python et SQL
-    type_mapping = {
-        'object': 'VARCHAR',
-        'int64': 'INTEGER', 
-        'float64': 'DOUBLE',
-        'datetime64[ns]': 'TIMESTAMP',
-        'bool': 'BOOLEAN'
-    }
-    return type_mapping.get(dtype, 'VARCHAR')
+    # Correspondances entre les types Narwhals et SQL
+    if isinstance(dtype, nw.String):
+        return 'VARCHAR'
+    elif isinstance(dtype, (nw.Int8, nw.Int16, nw.Int32, nw.Int64)):
+        return 'INTEGER'
+    elif isinstance(dtype, (nw.Float32, nw.Float64)):
+        return 'DOUBLE'
+    elif isinstance(dtype, nw.Datetime):
+        return 'TIMESTAMP'
+    elif isinstance(dtype, nw.Boolean):
+        return 'BOOLEAN'
+    else:
+        return 'VARCHAR'
 
 # Fonction de suppression des duplicats d'un jeu de donnéess
-def remove_dataframe_duplicates(df: pd.DataFrame,
+def remove_dataframe_duplicates(df,
                                keep: Literal[False, 'first', 'last'],
                                logger: Optional[logging.Logger] = None,
                                source: str = "DataFrame",
-                               primary_keys: Optional[List[str]] = None) -> pd.DataFrame:
+                               primary_keys: Optional[List[str]] = None) -> nw.DataFrame :
     """
     Remove duplicates from a DataFrame based on primary keys or all columns.
 
     Args:
-        df (pd.DataFrame): DataFrame to process
+        df: DataFrame to process (pandas, polars, or any narwhals-compatible format)
         keep (Literal[False, 'first', 'last']): Strategy for keeping duplicates
         logger (Optional[logging.Logger]): Logger instance for tracking
         source (str): Data source identifier for logging
@@ -53,21 +56,25 @@ def remove_dataframe_duplicates(df: pd.DataFrame,
             are used to identify duplicates. If None or empty, all columns are used.
 
     Returns:
-        pd.DataFrame: DataFrame without duplicates
+        nw.DataFrame: DataFrame without duplicates
 
     Examples:
-        >>> df = pd.DataFrame({'A': [1, 1, 2], 'B': ['x', 'x', 'y']})
+        >>> import polars as pl
+        >>> df = pl.DataFrame({'A': [1, 1, 2], 'B': ['x', 'x', 'y']})
         >>> result = remove_dataframe_duplicates(df, keep='first')
         >>> len(result)
         2
 
-        >>> df = pd.DataFrame({'id': [1, 1, 2], 'value': [10, 99, 30]})
+        >>> df = pl.DataFrame({'id': [1, 1, 2], 'value': [10, 99, 30]})
         >>> result = remove_dataframe_duplicates(df, keep='first', primary_keys=['id'])
         >>> len(result)
         2
     """
+    # Conversion vers narwhals
+    df_nw = nw.from_native(df, eager_only=True)
+
     # Comptage du nombre d'observations initial
-    initial_count = len(df)
+    initial_count = len(df_nw)
 
     # Sélection des colonnes servant à identifier les doublons :
     # - Si des clés primaires sont fournies, on les utilise exclusivement
@@ -75,10 +82,10 @@ def remove_dataframe_duplicates(df: pd.DataFrame,
     if primary_keys:
         columns_to_check = primary_keys
     else:
-        columns_to_check = list(df.columns)
+        columns_to_check = list(df_nw.columns)
 
     # Suppression des doublons selon la stratégie choisie
-    df_cleaned = df.drop_duplicates(subset=columns_to_check, keep=keep)
+    df_cleaned = df_nw.unique(subset=columns_to_check, keep=keep)
 
     # Comptage des observations supprimées et logging
     removed_count = initial_count - len(df_cleaned)
