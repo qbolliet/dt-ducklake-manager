@@ -1,8 +1,8 @@
 # Importation des modules
 # Modules de base
 import os
-import pandas as pd
-import numpy as np
+import narwhals as nw
+from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple, Any, Union
 # DuckDB
@@ -652,15 +652,13 @@ class DatabaseDeleter(BaseSchemaManager):
             # Chargement des métadonnées actuelles
             metadata = self._load_current_metadata()
 
-            # Filtrage des colonnes non-catégorielles de type object
-            non_categorical = metadata[
-                (metadata['is_categorical'] == False) &
-                (metadata['python_type'] == 'object')
-            ]
+            # Filtrage des colonnes non-catégorielles de type String (narwhals)
+            non_categorical_names = metadata.filter(
+                (nw.col('is_categorical') == False) & (nw.col('python_type') == 'String')
+            )['name'].to_list()
 
             # Parcours des colonnes candidates
-            for _, row in non_categorical.iterrows():
-                col_name = row['name']
+            for col_name in non_categorical_names:
 
                 # Vérification de l'existence de la colonne dans fact_table
                 if not self._column_exists(col_name, 'fact_table'):
@@ -673,10 +671,11 @@ class DatabaseDeleter(BaseSchemaManager):
 
                 # Vérification du seuil catégoriel
                 if unique_count <= self.categorical_threshold:
-                    # Extraction des valeurs distinctes
-                    values = self.conn.execute(
+                    # Extraction des valeurs distinctes sous forme de narwhals Series
+                    values_pl = self.conn.execute(
                         f"SELECT DISTINCT {col_name} FROM fact_table WHERE {col_name} IS NOT NULL"
-                    ).fetchdf()[col_name]
+                    ).pl()
+                    values = nw.from_native(values_pl, eager_only=True)[col_name]
 
                     # Conversion en catégorielle via dimension manager
                     if self.dimension_mgr.convert_to_categorical(col_name, values):
@@ -931,7 +930,7 @@ class DatabaseDeleter(BaseSchemaManager):
         try:
             # Initialisation du rapport
             impact_report = {
-                'timestamp': pd.Timestamp.now(),
+                'timestamp': datetime.now().isoformat(),
                 'rows_affected': 0,
                 'columns_affected': [],
                 'column_dependencies': {},
@@ -1001,9 +1000,9 @@ class DatabaseDeleter(BaseSchemaManager):
             self.logger.error(f"Error analyzing deletion impact: {e}")
             return {
                 'error': str(e),
-                'timestamp': pd.Timestamp.now()
+                'timestamp': datetime.now().isoformat()
             }
-    
+
     # Méthode d'identification du statut de la suppression de la base de données
     def get_deletion_status(self) -> Dict[str, Any]:
         """
@@ -1019,7 +1018,7 @@ class DatabaseDeleter(BaseSchemaManager):
         try:
             # Initialisation du statut
             status = {
-                'timestamp': pd.Timestamp.now(),
+                'timestamp': datetime.now().isoformat(),
                 'health_status': 'unknown',
                 'active_transactions': 0,
                 'validation_enabled': self.enable_validation,
@@ -1046,7 +1045,7 @@ class DatabaseDeleter(BaseSchemaManager):
         except Exception as e:
             # Logging
             self.logger.error(f"Error getting deletion status: {e}")
-            return {'error': str(e), 'timestamp': pd.Timestamp.now()}
+            return {'error': str(e), 'timestamp': datetime.now().isoformat()}
     
     # Méthode de validation de l'état de la base de données
     def validate_database_state(self, validation_level: ValidationLevel = ValidationLevel.STANDARD):

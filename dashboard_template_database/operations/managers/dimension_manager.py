@@ -1,7 +1,7 @@
 # Importation des modules
 # Modules de base
 import os
-import pandas as pd
+import narwhals as nw
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
 import threading
@@ -85,7 +85,7 @@ class DimensionManager(BaseSchemaManager):
             return False
     
     # Méthode de validation de la création de dimensions
-    def _validate_create_dimension(self, column_name: str, values: pd.Series, **kwargs) -> bool:
+    def _validate_create_dimension(self, column_name: str, values: nw.Series, **kwargs) -> bool:
         """Validate dimension creation parameters."""
         # Validation du nom de colonne
         if not column_name or column_name.strip() == "":
@@ -101,7 +101,7 @@ class DimensionManager(BaseSchemaManager):
         return True
     
     # Méthode de validation de la mise à jour de dimensions
-    def _validate_update_dimension(self, column_name: str, values: pd.Series, **kwargs) -> bool:
+    def _validate_update_dimension(self, column_name: str, values: nw.Series, **kwargs) -> bool:
         """Validate dimension update parameters."""
         return self._validate_create_dimension(column_name, values, **kwargs)
     
@@ -115,13 +115,13 @@ class DimensionManager(BaseSchemaManager):
         return True
     
     # Méthode de validation de la conversion d'une dimension
-    def _validate_convert_dimension(self, column_name: str, values: pd.Series, **kwargs) -> bool:
+    def _validate_convert_dimension(self, column_name: str, values: nw.Series, **kwargs) -> bool:
         """Validate dimension conversion parameters."""
         return self._validate_create_dimension(column_name, values, **kwargs)
     
     # Méthodes principales de gestion des dimensions
     # Méthode de création de la table de dimensions
-    def create_dimension_table(self, dimension_name: str, values: pd.Series) -> bool:
+    def create_dimension_table(self, dimension_name: str, values: nw.Series) -> bool:
         """
         Create a new dimension table with unique values.
         
@@ -154,8 +154,8 @@ class DimensionManager(BaseSchemaManager):
                     )
                 """)
 
-                # Préparation des données uniques
-                unique_values = values.dropna().unique()
+                # Préparation des données uniques (narwhals : drop_nulls + unique)
+                unique_values = values.drop_nulls().unique().to_list()
 
                 # Insertion des valeurs avec index automatique.
                 # enumerate() garantit que chaque 'value' est unique → pas de conflit possible.
@@ -175,7 +175,7 @@ class DimensionManager(BaseSchemaManager):
                 return False
     
     # Méthode de mise à jour d'une table de dimension
-    def update_dimension_values(self, dimension_name: str, values: pd.Series) -> int:
+    def update_dimension_values(self, dimension_name: str, values: nw.Series) -> int:
         """
         Update dimension table with new values.
         
@@ -203,17 +203,20 @@ class DimensionManager(BaseSchemaManager):
                 # Création de la table si elle n'existe pas
                 if not self._table_exists(table_name):
                     if self.create_dimension_table(dimension_name, values):
-                        return len(values.dropna().unique())
+                        return values.drop_nulls().n_unique()
                     else:
                         return 0
-                
-                # Récupération des valeurs existantes
-                dim_result = self.conn.execute(f"SELECT value, label FROM {table_name}").fetchdf()
-                existing_labels = set(dim_result['label']) if len(dim_result) > 0 else set()
-                existing_values = set(dim_result['value']) if len(dim_result) > 0 else set()
-                
-                # Identification des nouvelles valeurs
-                unique_labels = set(values.dropna().unique()) if isinstance(values, pd.Series) else set(values)
+
+                # Récupération des valeurs existantes (narwhals via polars)
+                dim_result = nw.from_native(
+                    self.conn.execute(f"SELECT value, label FROM {table_name}").pl(),
+                    eager_only=True
+                )
+                existing_labels = set(dim_result['label'].to_list()) if len(dim_result) > 0 else set()
+                existing_values = set(dim_result['value'].to_list()) if len(dim_result) > 0 else set()
+
+                # Identification des nouvelles valeurs (narwhals Series)
+                unique_labels = set(values.drop_nulls().unique().to_list())
                 new_labels = unique_labels - existing_labels
                 
                 if not new_labels:
@@ -289,7 +292,7 @@ class DimensionManager(BaseSchemaManager):
     
     # Méthodes de conversion entre catégoriel et non-catégoriel
     # Méthode de conversion en variable catégorielle
-    def convert_to_categorical(self, col_name: str, values: pd.Series) -> bool:
+    def convert_to_categorical(self, col_name: str, values: nw.Series) -> bool:
         """
         Convert a non-categorical column to categorical.
         
@@ -381,7 +384,7 @@ class DimensionManager(BaseSchemaManager):
     
     # Méthodes de traitement parallèle
     # Méthode de traitement de la mise à jour des dimensions en parallèle
-    def batch_update_dimensions(self, dimension_data: Dict[str, pd.Series], 
+    def batch_update_dimensions(self, dimension_data: Dict[str, nw.Series],
                               use_parallel: bool = True) -> Dict[str, int]:
         """
         Update multiple dimensions in batch, optionally using parallel processing.
@@ -499,7 +502,7 @@ class DimensionManager(BaseSchemaManager):
         return removed_counts
     
     # Méthode d'extration de la correspondance valeur-label dans la table de dimension
-    def get_dimension_mapping(self, dimension_name: str) -> Optional[pd.DataFrame]:
+    def get_dimension_mapping(self, dimension_name: str) -> Optional[nw.DataFrame]:
         """
         Get the complete mapping for a dimension table.
         
@@ -523,7 +526,10 @@ class DimensionManager(BaseSchemaManager):
                 self.logger.warning(f"Dimension table {table_name} does not exist")
                 return None
             
-            return self.conn.execute(f"SELECT value, label FROM {table_name} ORDER BY value").fetchdf()
+            return nw.from_native(
+                self.conn.execute(f"SELECT value, label FROM {table_name} ORDER BY value").pl(),
+                eager_only=True
+            )
             
         except Exception as e:
             # Logging
@@ -552,16 +558,16 @@ class DimensionManager(BaseSchemaManager):
                 self.logger.error(f"Column {col_name} does not exist in fact table")
                 return False
             
-            # Récupération du mapping de la table de dimension
-            dim_result = self.conn.execute(f"SELECT value, label FROM {table_name}").fetchdf()
-            
-            if len(dim_result) == 0:
+            # Récupération du mapping de la table de dimension (polars natif pour DuckDB)
+            dim_result_pl = self.conn.execute(f"SELECT value, label FROM {table_name}").pl()
+
+            if len(dim_result_pl) == 0:
                 # Logging
                 self.logger.warning(f"Dimension table {table_name} is empty")
                 return True  # Pas d'erreur si la table est vide
-            
+
             # Création d'une vue temporaire pour le mapping
-            self.conn.register('temp_dim_mapping', dim_result)
+            self.conn.register('temp_dim_mapping', dim_result_pl)
             
             if values_to_labels:
                 # Conversion values → labels (pour revenir aux données originales)

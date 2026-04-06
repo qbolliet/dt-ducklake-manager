@@ -1,7 +1,9 @@
 # Importation des modules
 # Modules de base
 import os
-import pandas as pd
+import polars as pl
+import narwhals as nw
+from narwhals.typing import IntoDataFrame
 from pathlib import Path
 from typing import Dict, List, Optional, Literal, Any, Tuple
 # DuckDB
@@ -145,7 +147,7 @@ class DatabaseUpdater(BaseSchemaManager):
     
     # Méthode principale de mise à jour
     def update_database(self,
-                        update_df: pd.DataFrame,
+                        update_df: IntoDataFrame,
                         check_duplicates_db: bool = True,
                         check_duplicates_update: bool = True,
                         keep: Literal[False, 'first', 'last'] = False,
@@ -173,6 +175,9 @@ class DatabaseUpdater(BaseSchemaManager):
             >>> success = updater.update_database(new_data_df)
             >>> success = updater.update_database(new_data_df, compact_after_update=True)
         """
+        # Conversion vers narwhals dès le point d'entrée public
+        update_df = nw.from_native(update_df, eager_only=True)
+
         # Validation préalable
         if not self.validate_operation('update', df=update_df):
             # Logging
@@ -208,7 +213,7 @@ class DatabaseUpdater(BaseSchemaManager):
     
     # Méthode de mise à jour de la base de données de manière transactionnelle
     def _update_database_transactional(self,
-                                      update_df: pd.DataFrame,
+                                      update_df: nw.DataFrame,
                                       check_duplicates_db: bool,
                                       check_duplicates_update: bool,
                                       keep: Literal[False, 'first', 'last'],
@@ -406,7 +411,7 @@ class DatabaseUpdater(BaseSchemaManager):
     
     # Méthode auxiliaire de mise à jour directe de la base de données
     def _update_database_direct(self,
-                                update_df: pd.DataFrame,
+                                update_df: nw.DataFrame,
                                 check_duplicates_db: bool,
                                 check_duplicates_update: bool,
                                 keep: Literal[False, 'first', 'last'],
@@ -476,7 +481,7 @@ class DatabaseUpdater(BaseSchemaManager):
     
     # Méthodes de mise à jour sécurisées
     # Méthode auxiliaire de mise à jour des méta-données
-    def _update_metadata_safe(self, update_df: pd.DataFrame) -> bool:
+    def _update_metadata_safe(self, update_df: nw.DataFrame) -> bool:
         """Safely update metadata table with type conflict resolution.
 
         Args:
@@ -488,22 +493,22 @@ class DatabaseUpdater(BaseSchemaManager):
         try:
             # Chargement des métadonnées actuelles
             current_metadata = self._load_current_metadata()
-            current_columns = set(current_metadata['name'].values) if len(current_metadata) > 0 else set()
+            current_columns = set(current_metadata['name'].to_list()) if len(current_metadata) > 0 else set()
             new_columns = set(update_df.columns)
-            
+
             # Vérification des conflits de types pour les colonnes existantes
             for col in current_columns.intersection(new_columns):
                 self._resolve_type_conflicts(col, update_df, current_metadata)
-            
+
             return True
-            
+
         except Exception as e:
             # Logging
             self.logger.error(f"Error updating metadata: {e}")
             return False
     
     # Méthode auxiliaire de mise à jour des tables de dimension
-    def _update_dimensions_safe(self, update_df: pd.DataFrame) -> bool:
+    def _update_dimensions_safe(self, update_df: nw.DataFrame) -> bool:
         """Safely update dimension tables with categorical threshold checks.
 
         Handles conversion between categorical and non-categorical status
@@ -519,20 +524,19 @@ class DatabaseUpdater(BaseSchemaManager):
             # Chargement des métadonnées
             current_metadata = self._load_current_metadata()
 
-            # Classification des colonnes par statut catégoriel
-            categorical_columns = {}
-            non_categorical_columns = {}
-            
-            # Parcours des colonnes
-            for _, row in current_metadata.iterrows():
-                " Extraction du nom de la colonne"
-                col_name = row['name']
-                if col_name in update_df.columns:
-                    # Vérification du statut catégoriel
-                    if row['is_categorical']:
-                        categorical_columns[col_name] = update_df[col_name]
-                    elif row['python_type'] == 'object':
-                        non_categorical_columns[col_name] = update_df[col_name]
+            # Classification des colonnes par statut catégoriel via filtrage narwhals
+            cat_names = current_metadata.filter(nw.col('is_categorical') == True)['name'].to_list()
+            # Colonnes non-catégorielles de type String (ex-'object' pandas) : candidates à conversion
+            non_cat_string_names = current_metadata.filter(
+                (nw.col('is_categorical') == False) & (nw.col('python_type') == 'String')
+            )['name'].to_list()
+
+            categorical_columns = {
+                col: update_df[col] for col in cat_names if col in update_df.columns
+            }
+            non_categorical_columns = {
+                col: update_df[col] for col in non_cat_string_names if col in update_df.columns
+            }
             
             # Mise à jour des dimensions existantes
             if categorical_columns:
@@ -574,7 +578,7 @@ class DatabaseUpdater(BaseSchemaManager):
             return False
     
     # Méthode auxiliaire de mise à jour directe de la table des faits
-    def _update_fact_table_direct(self, update_df: pd.DataFrame) -> bool:
+    def _update_fact_table_direct(self, update_df: nw.DataFrame) -> bool:
         """Update fact table directly without batch processing.
 
         Uses primary keys from metadata to determine INSERT vs UPSERT strategy:
@@ -632,7 +636,7 @@ class DatabaseUpdater(BaseSchemaManager):
             return False
     
     # Méthode auxiliaire de la mise à jour par batch de la table des faits
-    def _update_fact_table_batch(self, update_df: pd.DataFrame) -> bool:
+    def _update_fact_table_batch(self, update_df: nw.DataFrame) -> bool:
         """Update fact table using batch processing for large datasets.
 
         Uses primary keys from metadata to determine INSERT vs UPSERT strategy:
@@ -691,8 +695,8 @@ class DatabaseUpdater(BaseSchemaManager):
 
     # Méthode auxiliaire de séparation des lignes selon l'existence de leur clé primaire
     def _split_dataframe_by_pk_existence(
-        self, df: pd.DataFrame, primary_keys: List[str]
-    ) -> Tuple[pd.DataFrame, pd.DataFrame]:
+        self, df: nw.DataFrame, primary_keys: List[str]
+    ) -> Tuple[nw.DataFrame, nw.DataFrame]:
         """Split a DataFrame into rows to INSERT and rows to UPDATE based on primary key existence.
 
         For each row in the DataFrame, checks whether its primary key combination already
@@ -715,43 +719,43 @@ class DatabaseUpdater(BaseSchemaManager):
         """
         # DataFrame vide : aucune ligne à traiter
         if len(df) == 0:
-            return df.copy(), df.copy()
+            return df.clone(), df.clone()
 
         try:
             # Vérification de l'existence de la fact_table
             if not self._table_exists('fact_table'):
                 # Aucune fact_table : toutes les lignes sont à insérer
-                return df.copy(), df.iloc[0:0].copy()
+                return df.clone(), df.slice(0, 0)
 
             # Vérification que la fact_table n'est pas vide
             count = self.conn.execute("SELECT COUNT(*) FROM fact_table").fetchone()[0]
             if count == 0:
-                return df.copy(), df.iloc[0:0].copy()
+                return df.clone(), df.slice(0, 0)
 
             # Construction de la condition de jointure corrélée sur les clés primaires composites :
             # chaque colonne du DataFrame (alias upd) est comparée à la fact_table (alias f).
             conditions = " AND ".join([f"f.{key} = upd.{key}" for key in primary_keys])
 
-            # Enregistrement temporaire du DataFrame pour les requêtes SQL
-            self.conn.register('_upd_split', df)
+            # Enregistrement temporaire du DataFrame pour les requêtes SQL (polars natif)
+            self.conn.register('_upd_split', nw.to_native(df))
 
             # Lignes dont les clés primaires existent déjà en base → à mettre à jour
-            rows_to_update = self.conn.execute(f"""
+            rows_to_update = nw.from_native(self.conn.execute(f"""
                 SELECT upd.* FROM _upd_split upd
                 WHERE EXISTS (
                     SELECT 1 FROM fact_table f
                     WHERE {conditions}
                 )
-            """).fetchdf()
+            """).pl(), eager_only=True)
 
             # Lignes dont les clés primaires sont absentes de la base → à insérer
-            rows_to_insert = self.conn.execute(f"""
+            rows_to_insert = nw.from_native(self.conn.execute(f"""
                 SELECT upd.* FROM _upd_split upd
                 WHERE NOT EXISTS (
                     SELECT 1 FROM fact_table f
                     WHERE {conditions}
                 )
-            """).fetchdf()
+            """).pl(), eager_only=True)
 
             # Nettoyage de l'enregistrement temporaire
             self.conn.unregister('_upd_split')
@@ -761,7 +765,7 @@ class DatabaseUpdater(BaseSchemaManager):
         except Exception as e:
             self.logger.error(f"Error splitting DataFrame by primary key existence: {e}")
             # En cas d'erreur, on traite toutes les lignes comme des insertions
-            return df.copy(), df.iloc[0:0].copy()
+            return df.clone(), df.slice(0, 0)
 
     # Méthode auxiliaire de compaction DuckLake
     def _run_ducklake_compaction(self, fact_table: str = 'fact_table') -> None:
@@ -871,7 +875,7 @@ class DatabaseUpdater(BaseSchemaManager):
     
     # Méthodes utilitaires
     # Méthode auxiliaire de préparation du jeu de données pour la table des faits
-    def _prepare_dataframe_for_fact_table(self, df: pd.DataFrame) -> pd.DataFrame:
+    def _prepare_dataframe_for_fact_table(self, df: nw.DataFrame) -> nw.DataFrame:
         """Prepare DataFrame for fact table insertion.
 
         Converts categorical columns to their dimension table values
@@ -884,43 +888,64 @@ class DatabaseUpdater(BaseSchemaManager):
             Prepared DataFrame with categorical columns mapped to dimension values.
         """
         try:
-            # Copie du DataFrame
-            prepared_df = df.copy()
-            
+            # Clonage du DataFrame (narwhals)
+            prepared_df = df.clone()
+
             # Chargement des métadonnées
             current_metadata = self._load_current_metadata()
-            
-            # Conversion des colonnes catégorielles
-            for _, row in current_metadata.iterrows():
-                col_name = row['name']
-                is_categorical = row['is_categorical']
-                
-                if is_categorical and col_name in prepared_df.columns:
-                    # Mise à jour préalable de la dimension
-                    self.dimension_mgr.update_dimension_values(col_name, prepared_df[col_name])
-                    
-                    # Récupération du mapping
-                    mapping_df = self.dimension_mgr.get_dimension_mapping(col_name)
-                    
-                    if mapping_df is not None and len(mapping_df) > 0:
-                        label_to_value = dict(zip(mapping_df['label'], mapping_df['value']))
-                        prepared_df[col_name] = prepared_df[col_name].map(label_to_value)
-                        
-                        # Gestion des valeurs non mappées
-                        unmapped_mask = prepared_df[col_name].isna()
-                        if unmapped_mask.any():
-                            self.logger.warning(f"Found {unmapped_mask.sum()} unmapped values in {col_name}")
-                            prepared_df[col_name] = prepared_df[col_name].fillna(-1)
-            
+
+            # Extraction des colonnes catégorielles via filtrage narwhals
+            cat_names = current_metadata.filter(nw.col('is_categorical') == True)['name'].to_list()
+
+            # Conversion des colonnes catégorielles : label → valeur entière de dimension
+            for col_name in cat_names:
+                if col_name not in prepared_df.columns:
+                    continue
+
+                # Mise à jour préalable de la table de dimension avec les nouvelles valeurs
+                self.dimension_mgr.update_dimension_values(col_name, prepared_df[col_name])
+
+                # Récupération du mapping label → value (nw.DataFrame)
+                mapping_df = self.dimension_mgr.get_dimension_mapping(col_name)
+
+                if mapping_df is not None and len(mapping_df) > 0:
+                    label_to_value = dict(zip(
+                        mapping_df['label'].to_list(),
+                        mapping_df['value'].to_list()
+                    ))
+                    # Sauvegarde de l'ordre des colonnes
+                    original_columns = prepared_df.columns
+                    # Jointure narwhals pour remplacer les labels par leurs IDs
+                    dim_nw = nw.from_dict(
+                        {'_lbl_': list(label_to_value.keys()), '_val_': list(label_to_value.values())},
+                        native_namespace=pl
+                    )
+                    prepared_df = (
+                        prepared_df
+                        .rename({col_name: '_lbl_'})
+                        .join(dim_nw, on='_lbl_', how='left')
+                        .drop('_lbl_')
+                        .rename({'_val_': col_name})
+                        .select(original_columns)
+                    )
+
+                    # Gestion des valeurs non mappées (join left → null si absent)
+                    unmapped_count = prepared_df[col_name].is_null().sum()
+                    if unmapped_count > 0:
+                        self.logger.warning(f"Found {unmapped_count} unmapped values in {col_name}")
+                        prepared_df = prepared_df.with_columns(
+                            nw.col(col_name).fill_null('-1')
+                        )
+
             return prepared_df
-            
+
         except Exception as e:
             # Logging
             self.logger.error(f"Error preparing DataFrame for fact table: {e}")
             return df
     
     # Méthode auxiliaire de suppression des doublons des données de mise à jour
-    def _remove_update_duplicates(self, update_df: pd.DataFrame, keep: Literal[False, 'first', 'last']) -> bool:
+    def _remove_update_duplicates(self, update_df: nw.DataFrame, keep: Literal[False, 'first', 'last']) -> bool:
         """Remove duplicates from update DataFrame.
 
         Args:
@@ -940,7 +965,7 @@ class DatabaseUpdater(BaseSchemaManager):
             return False
     
     # Méthode auxiliaire de nettoyage des données mises à jour
-    def _get_cleaned_update_data(self, update_df: pd.DataFrame, keep: Literal[False, 'first', 'last']) -> pd.DataFrame:
+    def _get_cleaned_update_data(self, update_df: nw.DataFrame, keep: Literal[False, 'first', 'last']) -> nw.DataFrame:
         """Get deduplicated update data.
 
         Args:

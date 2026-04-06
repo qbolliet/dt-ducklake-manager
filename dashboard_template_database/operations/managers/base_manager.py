@@ -1,7 +1,9 @@
 # Importation des modules
 # Modules de base
 import os
-import pandas as pd
+import polars as pl
+import narwhals as nw
+from narwhals.typing import IntoDataFrame
 from pathlib import Path
 from typing import Dict, List, Optional, Any, Union
 from abc import ABC, abstractmethod
@@ -69,26 +71,33 @@ class BaseSchemaManager(ABC):
     
     # Méthodes de gestion du cache des métadonnées
     # Méthode de chargement des méta-données
-    def _load_current_metadata(self) -> pd.DataFrame:
+    def _load_current_metadata(self) -> nw.DataFrame:
         """
         Load current metadata from the database with thread-safe caching.
-        
+
         Returns:
-            DataFrame containing current metadata
+            DataFrame containing current metadata (narwhals)
         """
         with self._cache_lock:
             # Chargement de la table si elle n'est pas en cache
             if self._metadata_cache is None:
                 try:
-                    # Chargement
-                    self._metadata_cache = self.conn.execute("SELECT * FROM metadata").fetchdf()
+                    # Chargement via polars (backend interne) puis encapsulation narwhals
+                    self._metadata_cache = nw.from_native(
+                        self.conn.execute("SELECT * FROM metadata").pl(),
+                        eager_only=True
+                    )
                 except:
-                    # Si la table n'existe pas encore, on l'initialise vide
-                    self._metadata_cache = pd.DataFrame(columns=[
-                        'name', 'label', 'python_type', 'sql_type', 'is_categorical', 'is_primary_key'
-                    ])
-            
-            return self._metadata_cache.copy()
+                    # Si la table n'existe pas encore, initialisation d'un DataFrame vide
+                    self._metadata_cache = nw.from_dict(
+                        {
+                            'name': [], 'label': [], 'python_type': [],
+                            'sql_type': [], 'is_categorical': [], 'is_primary_key': []
+                        },
+                        native_namespace=pl
+                    )
+
+            return self._metadata_cache.clone()
     
     # Méthode d'invalidation des méta-données mises en cache
     def _invalidate_metadata_cache(self) -> None:
@@ -239,23 +248,26 @@ class BaseSchemaManager(ABC):
 
     # Méthodes de gestion des métadonnées
     # Méthode d'ajout d'une colonne aux méta-données
-    def _add_column_to_metadata(self, column: str, df: pd.DataFrame, label: Optional[str] = None) -> None:
+    def _add_column_to_metadata(self, column: str, df: IntoDataFrame, label: Optional[str] = None) -> None:
         """
         Add a new column to metadata table.
-        
+
         Args:
             column: Column name
-            df: DataFrame containing the column
+            df: DataFrame containing the column (any narwhals-compatible backend)
             label: Custom label for the column. If None, defaults to formatted column name.
         """
-        # Identification du type de la colonne
-        dtype = str(df[column].dtype)
-        # Conversion du type en SQL
-        sql_type = map_python_to_sql_type(dtype)
-        # Définition si la variable est catégorielle
+        # Conversion vers narwhals pour un accès uniforme au schéma
+        df_nw = nw.from_native(df, eager_only=True)
+        # Extraction du type narwhals de la colonne
+        dtype_obj = df_nw.schema[column]
+        dtype_str = str(dtype_obj)
+        # Conversion du type narwhals en SQL
+        sql_type = map_python_to_sql_type(dtype_obj)
+        # Définition si la variable est catégorielle (String avec cardinalité ≤ seuil)
         is_categorical = (
-            dtype == 'object' and 
-            df[column].nunique() <= self.categorical_threshold
+            isinstance(dtype_obj, nw.String)
+            and df_nw[column].n_unique() <= (self.categorical_threshold or 0)
         )
         
         # Création de la table metadata si elle n'existe pas.
@@ -287,7 +299,7 @@ class BaseSchemaManager(ABC):
                 INSERT INTO metadata (name, label, python_type, sql_type, is_categorical, is_primary_key)
                 VALUES (?, ?, ?, ?, ?, FALSE)
                 """,
-                [column, label, dtype, sql_type, is_categorical],
+                [column, label, dtype_str, sql_type, is_categorical],
             )
         else:
             # Colonne déjà présente : mise à jour des champs variables
@@ -353,61 +365,62 @@ class BaseSchemaManager(ABC):
             raise
     
     # Méthodes de résolution des conflits de types
-    def _resolve_type_conflicts(self, column: str, df: pd.DataFrame, 
-                               current_metadata: pd.DataFrame) -> None:
+    def _resolve_type_conflicts(self, column: str, df: nw.DataFrame,
+                               current_metadata: nw.DataFrame) -> None:
         """
         Resolve type conflicts using the least restrictive strategy.
-        
+
         Args:
             column: Column name
-            df: DataFrame with new data
-            current_metadata: Current metadata
+            df: DataFrame with new data (narwhals)
+            current_metadata: Current metadata (narwhals)
         """
-        # Identification du type actuel de la colonne dans la base de données
-        current_type = current_metadata[current_metadata['name'] == column]['python_type'].values[0]
-        # Identification du nouveau type
-        new_type = str(df[column].dtype)
+        # Identification du type actuel de la colonne dans les métadonnées
+        matching = current_metadata.filter(nw.col('name') == column)['python_type']
+        if len(matching) == 0:
+            return None
+        current_type = matching[0]
+        # Identification du nouveau type (chaîne narwhals, ex. 'String', 'Int64', 'Float64')
+        new_type = str(df.schema[column])
         # Ne fait rien si inchangé
         if current_type == new_type:
             return None
 
         # Conservation du type existant si toutes les nouvelles valeurs sont nulles :
-        # pandas infère alors 'object' sans information sur le type réel de la colonne,
-        # ce qui écraserait à tort un type numérique connu (ex. float64 → object).
-        if df[column].isna().all():
+        # narwhals infère alors 'Null' sans information sur le type réel de la colonne,
+        # ce qui écraserait à tort un type numérique connu.
+        if df[column].is_null().all():
             return None
-        
-        # Hiérarchie des types (du plus contraignant au moins contraignant)
+
+        # Hiérarchie des types narwhals (du plus contraignant au moins contraignant).
+        # Les types entiers de largeur variable sont tous regroupés au niveau 2.
         type_hierarchy = {
-            'bool': 1,
-            'int64': 2,
-            'float64': 3,
-            'object': 4
+            'Boolean': 1,
+            'Int8': 2, 'Int16': 2, 'Int32': 2, 'Int64': 2,
+            'UInt8': 2, 'UInt16': 2, 'UInt32': 2, 'UInt64': 2,
+            'Float32': 3, 'Float64': 3,
+            'String': 4,
         }
-        
+
         current_level = type_hierarchy.get(current_type, 0)
         new_level = type_hierarchy.get(new_type, 0)
-        
+
         # Sélection du type le moins contraignant
         if new_level > current_level:
+            # Le nouveau type est moins contraignant : mise à jour vers new_type
             resolved_type = new_type
-        else:
-            resolved_type = current_type
-        
-        # Conversion en type SQL
-        sql_type = map_python_to_sql_type(resolved_type)
-        # Mise à jour des métadonnées
-        self.conn.execute("""
-            UPDATE metadata 
-            SET python_type = ?, sql_type = ?
-            WHERE name = ?
-        """, [resolved_type, sql_type, column])
-        
-        # Invalidation du cache
-        self._invalidate_metadata_cache()
-        
-        # Logging
-        self.logger.info(f"Type conflict resolution for {column}: {current_type} -> {resolved_type}")
+            sql_type = map_python_to_sql_type(df.schema[column])
+            # Mise à jour des métadonnées
+            self.conn.execute("""
+                UPDATE metadata
+                SET python_type = ?, sql_type = ?
+                WHERE name = ?
+            """, [resolved_type, sql_type, column])
+            # Invalidation du cache
+            self._invalidate_metadata_cache()
+            # Logging
+            self.logger.info(f"Type conflict resolution for {column}: {current_type} -> {resolved_type}")
+        # Si current_level >= new_level, le type existant est conservé sans modification
     
     # Méthode utilitaire pour les colonnes contenant uniquement des valeurs nulles
     def _get_null_only_columns(self) -> List[str]:
@@ -441,24 +454,25 @@ class BaseSchemaManager(ABC):
         return null_only_columns
     
     # Méthode de vérification du seuil catégoriel
-    def _check_categorical_threshold(self, values: pd.Series, threshold: Optional[int] = None) -> bool:
+    def _check_categorical_threshold(self, values: nw.Series, threshold: Optional[int] = None) -> bool:
         """
         Check if values meet categorical threshold criteria.
-        
+
         Args:
-            values: Series with column values
+            values: Narwhals Series with column values
             threshold: Threshold to use (defaults to instance threshold)
-            
+
         Returns:
             True if values should be categorical
         """
         threshold = threshold or self.categorical_threshold
-        non_null_values = values.dropna()
+        # Suppression des valeurs nulles avant le comptage
+        non_null_values = values.drop_nulls()
         # Une série entièrement nulle ne peut pas être considérée catégorielle :
         # l'absence de modalités observées ne constitue pas une information de cardinalité.
         if len(non_null_values) == 0:
             return False
-        unique_count = len(set(non_null_values.unique()))
+        unique_count = non_null_values.n_unique()
         return unique_count <= threshold
     
     @abstractmethod

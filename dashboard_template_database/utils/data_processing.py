@@ -1,6 +1,7 @@
 # Importation des modules
 # Modules de base
 import narwhals as nw
+from narwhals.typing import IntoDataFrame
 from typing import Any, Tuple, List, Literal, Optional, Union
 # Logging
 import logging
@@ -38,7 +39,7 @@ def map_python_to_sql_type(dtype : nw.dtypes.DType) -> str:
         return 'VARCHAR'
 
 # Fonction de suppression des duplicats d'un jeu de donnéess
-def remove_dataframe_duplicates(df,
+def remove_dataframe_duplicates(df: IntoDataFrame,
                                keep: Literal[False, 'first', 'last'],
                                logger: Optional[logging.Logger] = None,
                                source: str = "DataFrame",

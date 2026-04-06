@@ -1,8 +1,8 @@
 # Importation des modules
 # Modules de base
 import os
-import pandas as pd
-import numpy as np
+import narwhals as nw
+from narwhals.typing import IntoDataFrame
 from pathlib import Path
 from typing import Dict, List, Optional, Union, Any, Tuple
 # DuckDB
@@ -86,7 +86,7 @@ class DataManager(BaseSchemaManager):
             return False
     
     # Méthode de validation des insertions de données
-    def _validate_insert(self, df: pd.DataFrame, **kwargs) -> bool:
+    def _validate_insert(self, df: IntoDataFrame, **kwargs) -> bool:
         """Validate data insertion parameters."""
         # Validation du jeu de données à insérer
         if df is None or len(df) == 0:
@@ -103,7 +103,7 @@ class DataManager(BaseSchemaManager):
         return True
     
     # Méthode de validation de la mise à jour des données
-    def _validate_update(self, df: pd.DataFrame, merge_keys: List[str], **kwargs) -> bool:
+    def _validate_update(self, df: IntoDataFrame, merge_keys: List[str], **kwargs) -> bool:
         """Validate data update parameters."""
         # Validation de l'insertion
 
@@ -125,7 +125,7 @@ class DataManager(BaseSchemaManager):
         return True
     
     # Méthode de validation de la mise à jour et l'insertion de données
-    def _validate_upsert(self, df: pd.DataFrame, merge_keys: List[str], **kwargs) -> bool:
+    def _validate_upsert(self, df: IntoDataFrame, merge_keys: List[str], **kwargs) -> bool:
         """Validate data upsert parameters."""
         return self._validate_update(df, merge_keys, **kwargs)
     
@@ -142,7 +142,7 @@ class DataManager(BaseSchemaManager):
         return True
     
     # Méthode de validation de l'ajout d'une colonne
-    def _validate_add_column(self, column_name: str, df: pd.DataFrame, **kwargs) -> bool:
+    def _validate_add_column(self, column_name: str, df: IntoDataFrame, **kwargs) -> bool:
         """Validate column addition parameters."""
         # Vérification que le nom est valide
         if not column_name or column_name.strip() == "":
@@ -177,7 +177,7 @@ class DataManager(BaseSchemaManager):
     
     # Méthodes principales de gestion des données
     # Méthode de création de la table des faits à partir d'un jeu de données
-    def create_fact_table(self, df: pd.DataFrame) -> bool:
+    def create_fact_table(self, df: IntoDataFrame) -> bool:
         """
         Create the fact table with initial data.
         
@@ -190,24 +190,27 @@ class DataManager(BaseSchemaManager):
         Example:
             >>> success = data_mgr.create_fact_table(initial_df)
         """
-        if not self.validate_operation('insert', df=df):
+        # Conversion vers narwhals pour un traitement uniforme
+        df_nw = nw.from_native(df, eager_only=True)
+
+        if not self.validate_operation('insert', df=df_nw):
             return False
-        
+
         try:
-            # Enregistrement d'une table temporaire
-            self.conn.register('temp_fact_creation', df)
-            
+            # Enregistrement d'une vue temporaire (polars natif pour DuckDB)
+            self.conn.register('temp_fact_creation', nw.to_native(df_nw))
+
             # Création de la table des faits
             self.conn.execute("""
-                CREATE TABLE fact_table AS 
+                CREATE TABLE fact_table AS
                 SELECT * FROM temp_fact_creation
             """)
-            
-            # Suppression de la table temporaire
+
+            # Suppression de la vue temporaire
             self.conn.execute('DROP VIEW temp_fact_creation')
-            
+
             # Logging
-            self.logger.info(f"Created fact table with {len(df)} rows and {len(df.columns)} columns")
+            self.logger.info(f"Created fact table with {len(df_nw)} rows and {len(df_nw.columns)} columns")
             return True
             
         except Exception as e:
@@ -222,7 +225,7 @@ class DataManager(BaseSchemaManager):
             return False
     
     # Méthode d'insertion de données dans la table des faits
-    def insert_data(self, df: pd.DataFrame, use_batch: bool = True) -> int:
+    def insert_data(self, df: IntoDataFrame, use_batch: bool = True) -> int:
         """
         Insert new data into the fact table.
         
@@ -237,22 +240,25 @@ class DataManager(BaseSchemaManager):
             >>> rows_inserted = data_mgr.insert_data(new_data_df)
             >>> print(f"Inserted {rows_inserted} rows")
         """
-        if not self.validate_operation('insert', df=df):
+        # Conversion vers narwhals pour un traitement uniforme
+        df_nw = nw.from_native(df, eager_only=True)
+
+        if not self.validate_operation('insert', df=df_nw):
             return 0
-        
+
         try:
             # Vérification de l'existence de la fact table
             if not self._table_exists('fact_table'):
-                if self.create_fact_table(df):
-                    return len(df)
+                if self.create_fact_table(df_nw):
+                    return len(df_nw)
                 else:
                     return 0
-            
+
             # Processing par lot si nécessaire
-            if use_batch and len(df) > self.batch_size:
-                return self._batch_insert_data(df)
+            if use_batch and len(df_nw) > self.batch_size:
+                return self._batch_insert_data(df_nw)
             else:
-                return self._direct_insert_data(df)
+                return self._direct_insert_data(df_nw)
             
         except Exception as e:
             # Logging
@@ -260,7 +266,7 @@ class DataManager(BaseSchemaManager):
             return 0
     
     # Méthode de mise à jour et d'insertion de données
-    def upsert_data(self, df: pd.DataFrame, merge_keys: Optional[List[str]] = None, use_batch: bool = True) -> Tuple[int, int]:
+    def upsert_data(self, df: IntoDataFrame, merge_keys: Optional[List[str]] = None, use_batch: bool = True) -> Tuple[int, int]:
         """
         Upsert data into the fact table (insert new, update existing).
         
@@ -276,28 +282,31 @@ class DataManager(BaseSchemaManager):
             >>> inserted, updated = data_mgr.upsert_data(df, merge_keys=['id', 'date'])
             >>> print(f"Inserted: {inserted}, Updated: {updated}")
         """
+        # Conversion vers narwhals pour un traitement uniforme
+        df_nw = nw.from_native(df, eager_only=True)
+
         # Détermination des clés d'appariement
         if merge_keys is None:
             existing_columns = self._get_fact_table_columns()
-            merge_keys = list(set(df.columns).intersection(set(existing_columns)))
-        
+            merge_keys = list(set(df_nw.columns).intersection(set(existing_columns)))
+
         # Validation de l'opération
-        if not self.validate_operation('upsert', df=df, merge_keys=merge_keys):
+        if not self.validate_operation('upsert', df=df_nw, merge_keys=merge_keys):
             return 0, 0
-        
+
         try:
             # Vérification de l'existence de la fact table
             if not self._table_exists('fact_table'):
-                if self.create_fact_table(df):
-                    return len(df), 0
+                if self.create_fact_table(df_nw):
+                    return len(df_nw), 0
                 else:
                     return 0, 0
-            
+
             # Processing par lot si nécessaire
-            if use_batch and len(df) > self.batch_size:
-                return self._batch_upsert_data(df, merge_keys)
+            if use_batch and len(df_nw) > self.batch_size:
+                return self._batch_upsert_data(df_nw, merge_keys)
             else:
-                return self._direct_upsert_data(df, merge_keys)
+                return self._direct_upsert_data(df_nw, merge_keys)
             
         except Exception as e:
             self.logger.error(f"Failed to upsert data: {e}")
@@ -356,7 +365,7 @@ class DataManager(BaseSchemaManager):
     
     # Méthodes de gestion des colonnes
     # Méthode d'ajout d'une colonne à la table des faits et à la table des méta-données
-    def add_column(self, column_name: str, df: pd.DataFrame, default_value: Any = None) -> bool:
+    def add_column(self, column_name: str, df: IntoDataFrame, default_value: Any = None) -> bool:
         """
         Add a new column to the fact table.
         
@@ -371,20 +380,22 @@ class DataManager(BaseSchemaManager):
         Example:
             >>> success = data_mgr.add_column('new_field', df_with_new_field)
         """
+        # Conversion vers narwhals pour un traitement uniforme
+        df_nw = nw.from_native(df, eager_only=True)
+
         # Validation de l'opération
-        if not self.validate_operation('add_column', column_name=column_name, df=df):
+        if not self.validate_operation('add_column', column_name=column_name, df=df_nw):
             return False
-        
+
         try:
             # Vérification que la colonne n'existe pas déjà
             if self._column_exists(column_name):
                 # Logging
                 self.logger.warning(f"Column {column_name} already exists")
                 return False
-            
-            # Détermination du type SQL
-            dtype = str(df[column_name].dtype)
-            sql_type = map_python_to_sql_type(dtype)
+
+            # Détermination du type SQL via le schéma narwhals
+            sql_type = map_python_to_sql_type(df_nw.schema[column_name])
             
             # Ajout de la colonne avec valeur par défaut
             if default_value is not None:
@@ -395,7 +406,7 @@ class DataManager(BaseSchemaManager):
                 self.conn.execute(alter_query)
             
             # Ajout aux métadonnées
-            self._add_column_to_metadata(column_name, df)
+            self._add_column_to_metadata(column_name, df_nw)
             
             # Logging
             self.logger.info(f"Added column {column_name} to fact table")
@@ -495,7 +506,7 @@ class DataManager(BaseSchemaManager):
     
     # Méthodes privées pour le traitement par lots
     # Méthode auxiliaire d'insertion par batch
-    def _batch_insert_data(self, df: pd.DataFrame) -> int:
+    def _batch_insert_data(self, df: nw.DataFrame) -> int:
         """Insert data in batches for large datasets."""
         # Initialisation du compteur d'insertions
         total_inserted = 0
@@ -503,21 +514,19 @@ class DataManager(BaseSchemaManager):
         self.logger.info(f"Processing {len(df)} rows in batches of {self.batch_size}")
         # Parcours des batch
         for i in range(0, len(df), self.batch_size):
-            # Détermination du début et de la fin du batch
-            batch_start = i
-            batch_end = min(i + self.batch_size, len(df))
-            # Construction du jeu de données correspondant
-            batch_df = df.iloc[batch_start:batch_end].copy()
-            
+            # Découpe du batch (narwhals : slice(offset, length))
+            batch_df = df.slice(i, self.batch_size)
+            batch_end = i + len(batch_df)
+
             try:
                 # Insertion des données dans la base
                 inserted = self._direct_insert_data(batch_df)
                 # Ajout au total
                 total_inserted += inserted
-                # Vérificaion que le nombre d'observations insérées correspond bien à la longueur du batch
+                # Vérification que le nombre d'observations insérées correspond bien à la longueur du batch
                 if inserted != len(batch_df):
                     # Logging
-                    self.logger.warning(f"Batch {batch_start}-{batch_end}: Expected {len(batch_df)}, inserted {inserted}")
+                    self.logger.warning(f"Batch {i}-{batch_end}: Expected {len(batch_df)}, inserted {inserted}")
                     
             except Exception as e:
                 # Logging
@@ -526,15 +535,15 @@ class DataManager(BaseSchemaManager):
         return total_inserted
     
     # Méthode d'insertion directe des données
-    def _direct_insert_data(self, df: pd.DataFrame) -> int:
+    def _direct_insert_data(self, df: nw.DataFrame) -> int:
         """Insert data directly without batch processing."""
         try:
             # Préparation des colonnes manquantes
             self._ensure_columns_exist(df)
-            
-            # Enregistrement d'une vue temporaire
-            self.conn.register('temp_insert', df)
-            
+
+            # Enregistrement d'une vue temporaire (polars natif pour DuckDB)
+            self.conn.register('temp_insert', nw.to_native(df))
+
             # Insertion des données
             column_list = ', '.join(df.columns)
             insert_query = f"""
@@ -542,12 +551,12 @@ class DataManager(BaseSchemaManager):
                 SELECT {column_list} FROM temp_insert
             """
             self.conn.execute(insert_query)
-            
+
             # Suppression de la vue temporaire
             self.conn.execute('DROP VIEW temp_insert')
-            
+
             return len(df)
-            
+
         except Exception as e:
             # Nettoyage en cas d'erreur
             try:
@@ -557,7 +566,7 @@ class DataManager(BaseSchemaManager):
             raise e
     
     # Méthode de mise à jour et d'insertion des données en batch
-    def _batch_upsert_data(self, df: pd.DataFrame, merge_keys: List[str]) -> Tuple[int, int]:
+    def _batch_upsert_data(self, df: nw.DataFrame, merge_keys: List[str]) -> Tuple[int, int]:
         """Upsert data in batches for large datasets."""
         # Initialisation des totaux
         total_inserted = 0
@@ -566,11 +575,8 @@ class DataManager(BaseSchemaManager):
         self.logger.info(f"Processing {len(df)} rows in batches of {self.batch_size}")
         # Parcours des batchs
         for i in range(0, len(df), self.batch_size):
-            # Détermination du début et de la fin du batch
-            batch_start = i
-            batch_end = min(i + self.batch_size, len(df))
-            # Circonscription du batch
-            batch_df = df.iloc[batch_start:batch_end].copy()
+            # Découpe du batch (narwhals : slice(offset, length))
+            batch_df = df.slice(i, self.batch_size)
             
             try:
                 # Mise à jour du jeu de données
@@ -586,14 +592,14 @@ class DataManager(BaseSchemaManager):
         return total_inserted, total_updated
     
     # Méthode de mise à jour et d'insertion des données directement
-    def _direct_upsert_data(self, df: pd.DataFrame, merge_keys: List[str]) -> Tuple[int, int]:
+    def _direct_upsert_data(self, df: nw.DataFrame, merge_keys: List[str]) -> Tuple[int, int]:
         """Upsert data directly without batch processing."""
         try:
             # Préparation des colonnes manquantes
             self._ensure_columns_exist(df)
-            
-            # Enregistrement d'une vue temporaire
-            self.conn.register('temp_upsert', df)
+
+            # Enregistrement d'une vue temporaire (polars natif pour DuckDB)
+            self.conn.register('temp_upsert', nw.to_native(df))
             
             # Construction des conditions de jointure
             merge_condition = " AND ".join([f"f.{key} = t.{key}" for key in merge_keys])
@@ -659,7 +665,7 @@ class DataManager(BaseSchemaManager):
             raise e
     
     # Méthode auxiliaire de vérification que toutes les colonnes d'un jeu de données existente dans la table des faits
-    def _ensure_columns_exist(self, df: pd.DataFrame) -> None:
+    def _ensure_columns_exist(self, df: nw.DataFrame) -> None:
         """Ensure all DataFrame columns exist in the fact table."""
         # Identification des colonnes manquantes
         existing_columns = set(self._get_fact_table_columns())

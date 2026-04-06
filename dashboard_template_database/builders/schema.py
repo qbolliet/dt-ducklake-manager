@@ -2,8 +2,9 @@
 # Modules de base
 import os
 import warnings
-import narwhals as nw
 import polars as pl
+import narwhals as nw
+from narwhals.typing import IntoDataFrame
 from pathlib import Path
 from typing import Dict, Optional, Tuple, Union, List
 # Module d'initialisation du logger
@@ -31,7 +32,7 @@ class SchemaBuilder:
     """
 
     # Initialisation
-    def __init__(self, df, categorical_threshold: Optional[int] = None, primary_keys: Optional[List[str]] = None, log_filename: Optional[os.PathLike] = None) -> None:
+    def __init__(self, df: IntoDataFrame, categorical_threshold: Optional[int] = None, primary_keys: Optional[List[str]] = None, log_filename: Optional[os.PathLike] = None) -> None:
         """
         Initialize the SchemaBuilder with a DataFrame and optional parameters.
 
@@ -74,7 +75,7 @@ class SchemaBuilder:
         # Validation des clés primaires si spécifiées
         if primary_keys is not None and len(primary_keys) > 0:
             # Vérification de l'existence des colonnes
-            missing_cols = set(primary_keys) - set(df.columns)
+            missing_cols = set(primary_keys) - set(self.df.columns)
             if missing_cols:
                 raise ValueError(
                     f"The following primary key columns do not exist in the DataFrame: {missing_cols}"
@@ -172,10 +173,11 @@ class SchemaBuilder:
             # Ajout au dictionnaire
             list_metadata.append(metadata)
 
-        # Création d'un DataFrame avec polars
-        df_metadata_pl = pl.DataFrame(list_metadata).sort('label')
-        # Conversion vers narwhals
-        self.df_metadata = nw.from_native(df_metadata_pl, eager_only=True)
+        # Transformation de la liste de dicts en dict de listes (format attendu par nw.from_dict)
+        keys = list(list_metadata[0].keys())
+        col_oriented = {k: [d[k] for d in list_metadata] for k in keys}
+        # Création du DataFrame de métadonnées via narwhals (même backend que self.df)
+        self.df_metadata = nw.from_dict(col_oriented, native_namespace=nw.get_native_namespace(self.df)).sort('label')
 
         # Logging
         self.logger.info("Successfully built the meta-data DataFrame")
@@ -211,14 +213,11 @@ class SchemaBuilder:
             unique_vals = self.df[categorical_dimension].unique().sort()
             unique_list = unique_vals.to_list()
 
-            # Création de la table de dimension avec polars
-            dim_df_pl = pl.DataFrame({
-                'value': list(range(len(unique_list))),
-                'label': unique_list
-            }).sort('label')
-
-            # Conversion vers narwhals
-            self.dimension_tables[categorical_dimension] = nw.from_native(dim_df_pl, eager_only=True)
+            # Création de la table de dimension via narwhals (même backend que self.df)
+            self.dimension_tables[categorical_dimension] = nw.from_dict(
+                {'value': list(range(len(unique_list))), 'label': unique_list},
+                native_namespace=nw.get_native_namespace(self.df)
+            ).sort('label')
             # Logging
             self.logger.info(f"Successfully built dimension table for '{categorical_dimension}'")
 
@@ -246,22 +245,21 @@ class SchemaBuilder:
         # Initialisation de la table des informations
         self.df_fact = self.df.clone()
 
-        # Remplacement des labels par leur valeur
+        # Remplacement des labels par leur valeur entière via un join narwhals
         for column in self.dimension_tables.keys() :
-            # Conversion de la table de dimension en polars natif
-            dim_df_pl = nw.to_native(self.dimension_tables[column])
-            fact_df_pl = nw.to_native(self.df_fact)
-
-            # Créer un dictionnaire de mapping label -> value
-            mapping_dict = dict(zip(dim_df_pl['label'].to_list(), dim_df_pl['value'].to_list()))
-
-            # Utiliser replace de polars pour remplacer les labels par les IDs
-            fact_df_pl = fact_df_pl.with_columns(
-                pl.col(column).replace(mapping_dict)
+            dim_df = self.dimension_tables[column]
+            # Sauvegarde de l'ordre des colonnes pour le restaurer après le join
+            original_columns = self.df_fact.columns
+            # Renommage de la table de dimension : 'label' → nom de la colonne, 'value' → colonne temporaire
+            dim_renamed = dim_df.rename({'label': column, 'value': f'__{column}_id'})
+            # Jointure à gauche : chaque modalité est associée à son ID entier
+            self.df_fact = (
+                self.df_fact
+                .join(dim_renamed, on=column, how='left')
+                .drop(column)
+                .rename({f'__{column}_id': column})
+                .select(original_columns)
             )
-
-            # Reconversion vers narwhals
-            self.df_fact = nw.from_native(fact_df_pl, eager_only=True)
             # Logging
             self.logger.info(f"Successfully replace modalities by ids in column '{column}'")
 

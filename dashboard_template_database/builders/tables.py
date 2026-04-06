@@ -2,6 +2,7 @@
 # Modules de base
 import os
 import narwhals as nw
+from narwhals.typing import IntoDataFrame
 from pathlib import Path
 from typing import Dict, Optional, Literal, List
 # Duckdb
@@ -44,7 +45,7 @@ class DuckLakeTablesBuilder(SchemaBuilder):
 
     # Initialisation
     def __init__(self,
-                 df,
+                 df: IntoDataFrame,
                  categorical_threshold: Optional[int] = None,
                  primary_keys: Optional[List[str]] = None,
                  connection: Optional[duckdb.DuckDBPyConnection] = None,
@@ -185,7 +186,7 @@ class DuckLakeTablesBuilder(SchemaBuilder):
         if not hasattr(self, 'df_fact'):
             _ = self.create_fact_table(column_labels)
 
-        # Conversion de narwhals vers natif (polars) pour DuckDB
+        # Conversion de narwhals vers natif pour DuckDB
         df_fact_native = nw.to_native(self.df_fact)
         # Enregistrement de la table comme vue temporaire
         self.conn.register('temp_fact', df_fact_native)
@@ -199,14 +200,13 @@ class DuckLakeTablesBuilder(SchemaBuilder):
 
         if needs_explicit_ddl:
             # Récupération des types SQL pour chaque colonne depuis la table de métadonnées
-            # Conversion de metadata en natif pour accéder aux données
-            metadata_native = nw.to_native(self.df_metadata)
             column_definitions = []
             for col in self.df_fact.columns:
-                # Extraction du type SQL depuis la métadonnée
-                matching_rows = metadata_native.filter(metadata_native['name'] == col)
+                # Filtrage de la ligne de métadonnée correspondant à la colonne
+                matching_rows = self.df_metadata.filter(nw.col("name") == col)
                 if len(matching_rows) > 0:
-                    sql_type = matching_rows['sql_type'][0]
+                    # Extraction du type SQL via accès positionnel à la Series
+                    sql_type = matching_rows.get_column("sql_type")[0]
                     column_definitions.append(f"{col} {sql_type}")
 
             # Construction de la clause PARTITION BY si des colonnes de partition sont spécifiées.
@@ -256,7 +256,7 @@ class DuckLakeTablesBuilder(SchemaBuilder):
         self.logger.info(f"Successfully registered duckdb fact table")
     
     # Méthode de construction du schéma
-    def build_schema(self, metadata_table: Optional[str] = 'metadata', fact_table: Optional[str] = 'fact_table', dim_table_prefix: Optional[str] = 'dim_', column_labels: Optional[Dict[str, str]] = None, check_duplicates: bool = True, keep: Literal[False, 'first', 'last'] = False, partition_by: Optional[List[str]] = None) -> None:
+    def build_schema(self, metadata_table: Optional[str] = 'metadata', fact_table: Optional[str] = 'fact_table', dim_table_prefix: Optional[str] = 'dim_', column_labels: Optional[Dict[str, str]] = None, check_duplicates: bool = True, keep: Literal['any', 'none', 'first', 'last'] = 'none', partition_by: Optional[List[str]] = None) -> None:
         """
         Build the entire schema in DuckDB, including metadata, dimension, and fact tables.
 
@@ -266,7 +266,7 @@ class DuckLakeTablesBuilder(SchemaBuilder):
             dim_table_prefix (Optional[str]): Prefix for dimension tables. Defaults to 'dim_'.
             column_labels (Optional[Dict[str, str]]): Optional mapping of column names to labels.
             check_duplicates (bool): Whether to check and remove duplicates. Defaults to True.
-            keep (Literal[False, 'first', 'last']): Which duplicates to keep. Defaults to False.
+            keep (Literal['any', 'none', 'first', 'last']): Which duplicates to keep. Defaults to 'none'.
             partition_by (Optional[List[str]]): Column names to partition the fact table by.
                 Passed through to ``create_duckdb_fact_table()``. Defaults to None.
 
@@ -289,9 +289,8 @@ class DuckLakeTablesBuilder(SchemaBuilder):
 
         # Vérification des doublons basée sur les clés primaires
         if len(self.primary_keys) > 0:
-            # Conversion vers natif (polars) pour vérifier les doublons
-            df_native = nw.to_native(self.df)
-            duplicates_mask = df_native.is_duplicated(subset=self.primary_keys)
+            # Réduction aux colonnes clés avant détection des doublons
+            duplicates_mask = self.df.select(self.primary_keys).is_duplicated()
             n_duplicates = duplicates_mask.sum()
             if n_duplicates > 0:
                 raise ValueError(
