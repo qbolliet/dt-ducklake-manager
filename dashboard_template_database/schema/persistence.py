@@ -35,9 +35,9 @@ class DuckLakeTablesBuilder:
     instantiating this class.
 
     Attributes:
-        schema_builder (SchemaBuilder): Instance utilisée pour l'inférence du schéma.
+        schema_builder (SchemaBuilder): Instance used for schema inference.
         conn (duckdb.DuckDBPyConnection): DuckLake-attached DuckDB connection.
-        logger (logging.Logger): Logger partagé avec le SchemaBuilder.
+        logger (logging.Logger): Logger shared with the SchemaBuilder.
 
     Examples:
         >>> conn = DuckLakeConnector('catalog.ducklake', 'data/').connect()

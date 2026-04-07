@@ -28,7 +28,7 @@ FILE_PATH = Path(os.path.abspath(__file__))
 
 # Type d'opération
 class AtomicOperationType(Enum):
-    """Types d'opérations atomiques disponibles."""
+    """Available types of atomic database operations."""
     BATCH_UPDATE = "batch_update"
     SCHEMA_MIGRATION = "schema_migration"
     DATA_MIGRATION = "data_migration"

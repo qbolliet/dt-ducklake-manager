@@ -85,20 +85,20 @@ class TransactionManager(BaseSchemaManager):
     DuckLake does not support multi-statement SQL transactions: each DML
     (INSERT / UPDATE / DELETE) immediately creates an atomic snapshot in the
     catalog. This driver therefore provides an application layer:
-    
+
     - Each operation is registered with an optional ``rollback_func``.
     - In case of failure, operations already executed are rolled back in reverse order
       via their ``rollback_func``.
-    - The DuckLake snapshot captured at startup (`pre_transaction_snapshot`) is
-      available in the `TransactionContext` to guide a time-travel
-      restoration if the `rollback_func`s themselves fail.
-
-Translated with DeepL.com (free version)
+    - The DuckLake snapshot captured at startup (``pre_transaction_snapshot``) is
+      available in the ``TransactionContext`` to guide a time-travel restoration
+      if the ``rollback_func``s themselves fail.
 
     Attributes:
-        transaction_timeout (int): Durée maximale d'un batch d'opérations en secondes.
-        ducklake_catalog_alias (str): Alias du catalogue DuckLake (pour la capture du snapshot).
-        ducklake_schema (str): Schéma DuckLake cible (pour la capture du snapshot).
+        transaction_timeout (int): Maximum batch duration in seconds before automatic
+            rollback is triggered.
+        ducklake_catalog_alias (str): Alias of the DuckLake catalog used to capture
+            the pre-operation snapshot version.
+        ducklake_schema (str): DuckLake schema name used to capture the snapshot.
     """
 
     # Initialisation

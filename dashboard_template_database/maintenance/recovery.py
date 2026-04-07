@@ -28,10 +28,10 @@ FILE_PATH = Path(os.path.abspath(__file__))
 class RecoveryStrategy(Enum):
     """Available recovery strategies for database restoration.
 
-    DuckLake conserve un historique complet de snapshots. La stratégie recommandée
-    en cas de corruption est ``USE_SNAPSHOT_HISTORY`` : elle identifie le dernier
-    snapshot sain et fournit les informations nécessaires pour ouvrir une connexion
-    en time-travel via ``DuckLakeConnector(..., snapshot_version=N)``.
+    DuckLake retains a complete snapshot history. The recommended strategy for
+    handling corruption is ``USE_SNAPSHOT_HISTORY``: it identifies the last healthy
+    snapshot and provides the information needed to open a time-travel connection
+    via ``DuckLakeConnector(..., snapshot_version=N)``.
     """
     USE_SNAPSHOT_HISTORY = "use_snapshot_history"
     RESTORE_BACKUP = "restore_backup"
@@ -54,16 +54,16 @@ class BackupType(Enum):
 @dataclass
 class RecoveryPoint:
     """
-    Point de récupération contenant l'état de la base de données.
-    
+    Recovery point containing the state of the database.
+
     Attributes:
-        recovery_id (str): Identifiant unique du point de récupération
-        timestamp (float): Timestamp de création
-        backup_type (BackupType): Type de sauvegarde
-        backup_path (str): Chemin vers les fichiers de sauvegarde
-        metadata (dict): Métadonnées sur l'état de la base
-        validation_report (Optional[ValidationReport]): Rapport de validation au moment de la sauvegarde
-        description (str): Description du point de récupération
+        recovery_id (str): Unique identifier of the recovery point
+        timestamp (float): Creation timestamp
+        backup_type (BackupType): Type of backup
+        backup_path (str): Path to the backup files
+        metadata (dict): Metadata about the database state
+        validation_report (Optional[ValidationReport]): Validation report at the time of backup
+        description (str): Description of the recovery point
     """
     recovery_id: str
     timestamp: float
@@ -78,14 +78,14 @@ class RecoveryPoint:
 @dataclass
 class RecoveryOperation:
     """
-    Opération de récupération à exécuter.
-    
+    Recovery operation to execute.
+
     Attributes:
-        strategy (RecoveryStrategy): Stratégie de récupération
-        target_recovery_point (Optional[str]): ID du point de récupération cible
-        parameters (dict): Paramètres spécifiques à la stratégie
-        auto_validate (bool): Valider automatiquement après récupération
-        description (str): Description de l'opération
+        strategy (RecoveryStrategy): Recovery strategy to use
+        target_recovery_point (Optional[str]): ID of the target recovery point
+        parameters (dict): Strategy-specific parameters
+        auto_validate (bool): Whether to automatically validate after recovery
+        description (str): Description of the operation
     """
     strategy: RecoveryStrategy
     target_recovery_point: Optional[str] = None
@@ -98,16 +98,16 @@ class RecoveryOperation:
 @dataclass
 class RecoveryResult:
     """
-    Résultat d'une opération de récupération.
-    
+    Result of a recovery operation.
+
     Attributes:
-        success (bool): Succès de l'opération
-        strategy_used (RecoveryStrategy): Stratégie utilisée
-        recovery_time (float): Temps de récupération en secondes
-        operations_performed (List[str]): Liste des opérations effectuées
-        validation_report (Optional[ValidationReport]): Rapport de validation post-récupération
-        error_message (Optional[str]): Message d'erreur si applicable
-        recommendations (List[str]): Recommandations pour éviter des problèmes futurs
+        success (bool): Whether the operation succeeded
+        strategy_used (RecoveryStrategy): Strategy that was used
+        recovery_time (float): Recovery duration in seconds
+        operations_performed (List[str]): List of operations performed
+        validation_report (Optional[ValidationReport]): Post-recovery validation report
+        error_message (Optional[str]): Error message if applicable
+        recommendations (List[str]): Recommendations to avoid future issues
     """
     success: bool
     strategy_used: RecoveryStrategy

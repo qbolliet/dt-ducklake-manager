@@ -77,12 +77,12 @@ class S3Saver(_S3Connection):
         Returns:
             object: The established S3 connection.
 
-        Example usage:
-        >>> s3_saver = S3Saver(package='boto3')
-        >>> s3_connection = s3_saver.connect(
-            aws_access_key_id='your_access_key',
-            aws_secret_access_key='your_secret_key'
-        )
+        Examples:
+            >>> s3_saver = S3Saver(s3_package='boto3')
+            >>> s3_saver.connect(
+            ...     aws_access_key_id='your_access_key',
+            ...     aws_secret_access_key='your_secret_key'
+            ... )
         """
         # Etablissement d'une connection
         return self._connect(**kwargs)
@@ -103,13 +103,13 @@ class S3Saver(_S3Connection):
             ValueError: If the file extension is not supported
             TypeError: If the object type doesn't match the requirements
 
-        Example :
-        >>> s3_saver = S3Saver(package='boto3')
-        >>> s3_connection = s3_saver.connect(
-            aws_access_key_id='your_access_key',
-            aws_secret_access_key='your_secret_key'
-        )
-        >>> s3_saver.save(bucket='your_bucket', key='your_file.csv', obj=dataframe)
+        Examples:
+            >>> s3_saver = S3Saver(s3_package='boto3')
+            >>> s3_saver.connect(
+            ...     aws_access_key_id='your_access_key',
+            ...     aws_secret_access_key='your_secret_key'
+            ... )
+            >>> s3_saver.save(bucket='your_bucket', key='your_file.csv', obj=dataframe)
         """
         # Etablissement d'une connexion s'il n'en existe pas une nouvelle
         if not hasattr(self, "s3"):

@@ -69,9 +69,9 @@ class S3Loader(_S3Connection):
         Returns:
             object: The established S3 connection.
 
-        Example :
-        >>> s3_loader = S3Loader(package='boto3')
-        >>> s3_connection = s3_loader.connect(aws_access_key_id='your_access_key', aws_secret_access_key='your_secret_key')
+        Examples:
+            >>> s3_loader = S3Loader(s3_package='boto3')
+            >>> s3_loader.connect(aws_access_key_id='your_access_key', aws_secret_access_key='your_secret_key')
         """
         # Etablissement d'une connection
         return self._connect(**kwargs)
@@ -88,10 +88,10 @@ class S3Loader(_S3Connection):
         Returns:
             object: The loaded data (Pandas DataFrame, JSON object, Pickle object, or GeoDataFrame).
 
-        Example :
-        >>> s3_loader = S3Loader(package='boto3')
-        >>> s3_connection = s3_loader.connect(aws_access_key_id='your_access_key', aws_secret_access_key='your_secret_key')
-        >>> data = s3_loader.load(bucket='your_bucket', key='your_file.csv')
+        Examples:
+            >>> s3_loader = S3Loader(s3_package='boto3')
+            >>> s3_loader.connect(aws_access_key_id='your_access_key', aws_secret_access_key='your_secret_key')
+            >>> data = s3_loader.load(bucket='your_bucket', key='your_file.csv')
         """
         # Etablissement d'une connexion s'il n'en existe pas une nouvelle
         if not hasattr(self, "s3"):

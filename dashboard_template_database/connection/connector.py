@@ -37,11 +37,11 @@ class DuckLakeConnector:
         logger (logging.Logger): Logger instance.
 
     Examples:
-        >>> # Connexion en lecture-écriture
+        >>> # Read-write connection
         >>> conn = DuckLakeConnector('catalog.ducklake', 'data/').connect()
-        >>> # Connexion en lecture seule (API GraphQL, dashboard)
+        >>> # Read-only connection (GraphQL API, dashboard)
         >>> conn = DuckLakeConnector('catalog.ducklake', 'data/', read_only=True).connect()
-        >>> # Time travel vers un snapshot spécifique (audit d'un run ML)
+        >>> # Time-travel to a specific snapshot (ML run audit)
         >>> conn = DuckLakeConnector('catalog.ducklake', 'data/', snapshot_version=3).connect()
     """
 
