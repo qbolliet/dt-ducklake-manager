@@ -97,9 +97,11 @@ class DuckLakeTablesBuilder(SchemaBuilder):
 
         # Création de la table avec schéma explicite
         # L'unicité de 'name' est garantie applicativement par DuckdbTablesBuilder.
-        # Conversion de narwhals vers natif (polars) pour DuckDB
-        df_metadata_native = nw.to_native(self.df_metadata)
-        self.conn.register('temp_metadata', df_metadata_native)
+        # Conversion vers Arrow pour garantir la compatibilité DuckDB quel que soit le backend narwhals.
+        # Note : .select() est nécessaire car narwhals/pandas inclut l'index comme colonne
+        # supplémentaire dans pa.Table.from_pandas() lorsque l'index n'est pas séquentiel
+        # (ex. après un .sort()). On filtre explicitement sur les colonnes nommées du DataFrame.
+        self.conn.register('temp_metadata', self.df_metadata.to_arrow().select(list(self.df_metadata.columns)))
         self.conn.execute(f"""
             CREATE TABLE {table_name} (
                 name VARCHAR,
@@ -139,10 +141,9 @@ class DuckLakeTablesBuilder(SchemaBuilder):
         for dim_name, dim_df in self.dimension_tables.items():
             # Initialisation du nom de la table
             table_name = f"{table_prefix}{dim_name}"
-            # Conversion de narwhals vers natif (polars) pour DuckDB
-            dim_df_native = nw.to_native(dim_df)
-            # Enregistrement d'une vue temporaire
-            self.conn.register('temp_dim', dim_df_native)
+            # Conversion vers Arrow pour garantir la compatibilité DuckDB quel que soit le backend narwhals.
+            # Note : .select() filtre l'index pandas éventuel (cf. create_duckdb_metadata_table).
+            self.conn.register('temp_dim', dim_df.to_arrow().select(list(dim_df.columns)))
 
             # Création d'une table avec schéma explicite.
             # Pas de contrainte PRIMARY KEY : DuckLake ne supporte pas les contraintes DDL.
@@ -186,10 +187,9 @@ class DuckLakeTablesBuilder(SchemaBuilder):
         if not hasattr(self, 'df_fact'):
             _ = self.create_fact_table(column_labels)
 
-        # Conversion de narwhals vers natif pour DuckDB
-        df_fact_native = nw.to_native(self.df_fact)
-        # Enregistrement de la table comme vue temporaire
-        self.conn.register('temp_fact', df_fact_native)
+        # Conversion vers Arrow pour garantir la compatibilité DuckDB quel que soit le backend narwhals.
+        # Note : .select() filtre l'index pandas éventuel (cf. create_duckdb_metadata_table).
+        self.conn.register('temp_fact', self.df_fact.to_arrow().select(list(self.df_fact.columns)))
 
         # Inférence du schéma de colonnes depuis la table de métadonnées.
         # Utilisée dans les deux chemins DDL explicites (avec primary_keys ou avec partition_by).

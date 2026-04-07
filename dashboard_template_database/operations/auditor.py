@@ -2,6 +2,7 @@
 # Modules de base
 import os
 import pandas as pd
+import narwhals as nw
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple, Any, Union
 from dataclasses import dataclass, field
@@ -1017,7 +1018,7 @@ class DatabaseAuditor:
             report.add_issue(issue)
     
     # Méthode de validation des conditions préalables à une mise à jour de la base de données
-    def _validate_update_preconditions(self, report: ValidationReport, df: pd.DataFrame = None, **kwargs) -> None:
+    def _validate_update_preconditions(self, report: ValidationReport, df = None, **kwargs) -> None:
         """Validate update preconditions.
 
         Validates the preconditions for an update operation by using
@@ -1049,11 +1050,8 @@ class DatabaseAuditor:
                 report.add_issue(issue)
                 return
 
-            # Vérification des doublons parmi les valeurs de clés primaires dans le DataFrame
-            if len(primary_keys) == 1:
-                duplicate_count = df[primary_keys[0]].duplicated().sum()
-            else:
-                duplicate_count = df.duplicated(subset=primary_keys).sum()
+            # Vérification des doublons parmi les valeurs de clés primaires dans le DataFrame.
+            duplicate_count = nw.from_native(df, eager_only=True).select(primary_keys).is_duplicated().sum()
 
             if duplicate_count > 0:
                 issue = ValidationIssue(

@@ -1,7 +1,6 @@
 # Importation des modules
 # Modules de base
 import os
-import polars as pl
 import narwhals as nw
 from narwhals.typing import IntoDataFrame
 from pathlib import Path
@@ -552,20 +551,36 @@ class DatabaseUpdater(BaseSchemaManager):
                         self.logger.error(f"Failed to update dimension for {col_name}")
                         return False
             
-            # Vérification des conversions vers catégoriel
-            for col_name, values in non_categorical_columns.items():
-                # Vérification du seuil
-                if self._check_categorical_threshold(values):
-                    # Conversion en catégoriel
-                    if not self.dimension_mgr.convert_to_categorical(col_name, values):
+            # Vérification des conversions vers catégoriel pour les colonnes non-catégorielles
+            # La vérification porte sur l'état GLOBAL de fact_table après l'upsert, et non
+            # sur le seul update_df : un petit update_df pourrait avoir < seuil valeurs uniques
+            # pour une colonne qui en compte > seuil dans la base entière.
+            for col_name in non_categorical_columns.keys():
+                # Récupération des valeurs distinctes dans fact_table (état post-upsert)
+                db_values_series = nw.from_native(
+                    self.conn.execute(
+                        f"SELECT DISTINCT {col_name} FROM fact_table WHERE {col_name} IS NOT NULL"
+                    ).fetchdf()[col_name],
+                    series_only=True,
+                )
+                # Vérification du seuil sur l'ensemble complet des valeurs
+                if self._check_categorical_threshold(db_values_series):
+                    # Conversion en catégoriel (les valeurs DB sont passées pour créer la dim table)
+                    if not self.dimension_mgr.convert_to_categorical(col_name, db_values_series):
                         # Logging
                         self.logger.warning(f"Failed to convert {col_name} to categorical")
-            
-            # Vérification des conversions vers non-catégoriel
-            for col_name, values in categorical_columns.items():
+
+            # Vérification des conversions vers non-catégoriel pour les colonnes catégorielles
+            # La vérification porte sur le nombre d'entrées dans la table de dimension (état
+            # post-batch_update_dimensions), et non sur les seules valeurs de update_df.
+            for col_name in categorical_columns.keys():
+                # Comptage des entrées dans la table de dimension après batch_update_dimensions
+                n_dim_entries = self.conn.execute(
+                    f"SELECT COUNT(*) FROM dim_{col_name}"
+                ).fetchone()[0]
                 # Vérification du seuil
-                if not self._check_categorical_threshold(values):
-                    # Conversion en non-catégroeil
+                if n_dim_entries > self.categorical_threshold:
+                    # Conversion en non-catégoriel
                     if not self.dimension_mgr.convert_to_non_categorical(col_name):
                         # Logging
                         self.logger.warning(f"Failed to convert {col_name} to non-categorical")
@@ -916,9 +931,11 @@ class DatabaseUpdater(BaseSchemaManager):
                     # Sauvegarde de l'ordre des colonnes
                     original_columns = prepared_df.columns
                     # Jointure narwhals pour remplacer les labels par leurs IDs
+                    # Création du DataFrame de mapping avec le même backend que prepared_df
+                    # pour éviter une incompatibilité lors du join narwhals.
                     dim_nw = nw.from_dict(
                         {'_lbl_': list(label_to_value.keys()), '_val_': list(label_to_value.values())},
-                        native_namespace=pl
+                        native_namespace=nw.get_native_namespace(prepared_df)
                     )
                     prepared_df = (
                         prepared_df
