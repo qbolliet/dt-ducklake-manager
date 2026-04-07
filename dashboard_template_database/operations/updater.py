@@ -9,16 +9,16 @@ from typing import Dict, List, Optional, Literal, Any, Tuple
 import duckdb
 
 # Import des gestionnaires
-from .managers.base_manager import BaseSchemaManager
-from .managers.dimension_manager import DimensionManager
-from .managers.data_manager import DataManager
-from .managers.transaction_manager import (
+from .._internal.managers.base import BaseSchemaManager
+from .._internal.managers.dimension import DimensionManager
+from .._internal.managers.data import DataManager
+from .._internal.managers.transaction import (
     TransactionManager, TransactionOperation, TransactionState
 )
-from .auditor import DatabaseAuditor, ValidationLevel, IssueSeverity
+from ..maintenance.auditor import DatabaseAuditor, ValidationLevel, IssueSeverity
 
 # Import des utilitaires
-from ..utils.data_processing import remove_dataframe_duplicates
+from ..utils.sql import remove_dataframe_duplicates
 
 # Emplacement du fichier
 FILE_PATH = Path(os.path.abspath(__file__))

@@ -1,102 +1,10 @@
 # Importation des modules
-# Modules de base
 import narwhals as nw
 from narwhals.typing import IntoDataFrame
 from typing import Any, Tuple, List, Literal, Optional, Union
-# Logging
 import logging
 
-# Fonction associant les types narwhals à leur équivalent SQL
-def map_python_to_sql_type(dtype : nw.dtypes.DType) -> str:
-    """
-    Map Narwhals data types to SQL-compatible data types.
-
-    Args:
-        dtype (nw.DType): The Narwhals data type.
-
-    Returns:
-        str: The corresponding SQL data type.
-
-    Examples:
-        >>> import narwhals as nw
-        >>> import polars as pl
-        >>> df = pl.DataFrame({'col': ['a', 'b']})
-        >>> map_python_to_sql_type(df.schema['col'])
-        'VARCHAR'
-        >>> df = pl.DataFrame({'col': [1, 2]})
-        >>> map_python_to_sql_type(df.schema['col'])
-        'INTEGER'
-        >>> df = pl.DataFrame({'col': [1.0, 2.0]})
-        >>> map_python_to_sql_type(df.schema['col'])
-        'DOUBLE'
-    """
-    # Types textuels
-    # String, Categorical et Enum sont tous stockés sous forme VARCHAR en SQL
-    if isinstance(dtype, (nw.String, nw.Categorical, nw.Enum)):
-        return 'VARCHAR'
-
-    # Entiers signés
-    # Int8 / Int16 / Int32 / Int64 correspondent à INTEGER standard
-    # Int128 est mappé vers HUGEINT, le type entier 128 bits natif de DuckDB
-    elif isinstance(dtype, (nw.Int8, nw.Int16, nw.Int32, nw.Int64)):
-        return 'INTEGER'
-    elif isinstance(dtype, nw.Int128):
-        return 'HUGEINT'
-
-    # Entiers non signés
-    # Chaque largeur de bit possède un type UNSIGNED dédié dans DuckDB
-    elif isinstance(dtype, nw.UInt8):
-        return 'UTINYINT'
-    elif isinstance(dtype, nw.UInt16):
-        return 'USMALLINT'
-    elif isinstance(dtype, nw.UInt32):
-        return 'UINTEGER'
-    elif isinstance(dtype, nw.UInt64):
-        return 'UBIGINT'
-    elif isinstance(dtype, nw.UInt128):
-        return 'UHUGEINT'
-
-    # Types virgule flottante
-    elif isinstance(dtype, (nw.Float32, nw.Float64)):
-        return 'DOUBLE'
-
-    # Type décimal à précision fixe
-    # On retourne DECIMAL sans précision ni échelle car ces paramètres ne sont
-    # pas toujours disponibles au moment de la construction du schéma SQL.
-    elif isinstance(dtype, nw.Decimal):
-        return 'DECIMAL'
-
-    # Types temporels
-    elif isinstance(dtype, nw.Date):
-        return 'DATE'
-    elif isinstance(dtype, nw.Datetime):
-        return 'TIMESTAMP'
-    elif isinstance(dtype, nw.Duration):
-        return 'INTERVAL'
-    elif isinstance(dtype, nw.Time):
-        return 'TIME'
-
-    # Type booléen
-    elif isinstance(dtype, nw.Boolean):
-        return 'BOOLEAN'
-
-    # Type binaire
-    # BLOB est le type DuckDB pour les données binaires brutes
-    elif isinstance(dtype, nw.Binary):
-        return 'BLOB'
-
-    # Types composites (Array, List, Struct)
-    # DuckDB supporte nativement ces types, mais leur définition SQL complète
-    # nécessiterait la connaissance des types imbriqués. On replie vers VARCHAR
-    # pour garantir la compatibilité dans tous les contextes d'usage.
-    elif isinstance(dtype, (nw.Array, nw.List, nw.Struct)):
-        return 'VARCHAR'
-
-    # Cas de repli : Object, Unknown, et tout type non reconnu
-    else:
-        return 'VARCHAR'
-
-# Fonction de suppression des duplicats d'un jeu de donnéess
+# Fonction de suppression des duplicats d'un jeu de données
 def remove_dataframe_duplicates(df: IntoDataFrame,
                                keep: Literal[False, 'first', 'last'],
                                logger: Optional[logging.Logger] = None,
@@ -153,21 +61,21 @@ def remove_dataframe_duplicates(df: IntoDataFrame,
 
     return df_cleaned
 
-# Fonction de construction de la requête de suppression des duplicats
-def build_database_duplicate_removal_query(columns_to_check: list, 
+# Fonction de construction d'une requête SQL de suppression des duplicats en base
+def build_database_duplicate_removal_query(columns_to_check: list,
                                          keep: Literal[False, 'first', 'last'],
                                          table_name: str = 'fact_table') -> str:
     """
     Build SQL query for removing duplicates from a database table.
-    
+
     Args:
         columns_to_check (list): List of column names to check for duplicates
         keep (Literal[False, 'first', 'last']): Strategy for keeping duplicates
         table_name (str): Name of the table to deduplicate
-        
+
     Returns:
         str: SQL DELETE query for removing duplicates
-        
+
     Examples:
         >>> query = build_database_duplicate_removal_query(['col1', 'col2'], 'first')
         >>> 'DELETE FROM fact_table' in query
@@ -175,10 +83,10 @@ def build_database_duplicate_removal_query(columns_to_check: list,
     """
     if not columns_to_check:
         return ""
-    
+
     # Construction de la chaîne des colonnes
     columns_str = ', '.join(columns_to_check)
-    
+
     if keep == False:
         # Suppression de TOUTES les occurrences des clés en doublon.
         # On identifie les groupes ayant plus d'une ligne par leur valeur de colonnes.
@@ -231,11 +139,8 @@ def _build_conjonction_filter(filters: List[Tuple[str, str, Any]]) -> str:
             # Ajout des filtres
             conditions.append(f"{column} {operator.upper()} {value}")
         else:
-            # value = str(value)
             # Ajout des filtres
             conditions.append(f"{column} {operator.upper()} '{value}'")
-        # Ajout des filtres
-        # conditions.append(f"{column} {operator.upper()} {value}")
 
     # Retourne la conjonction des conditions
     return " AND ".join(conditions)
@@ -281,7 +186,7 @@ def _build_sql_filter(
             f"Invalid type for 'filters' : {filters}. Shoud be in [List[Tuple], List[List[Tuple]]]"
         )
 
-# Méthode de construction d'une requête SQL
+# Méthode de construction d'une requête SQL avec clause WHERE
 def _build_where_clause(
     filters: Optional[
         Union[List[Tuple[str, str, Any]], List[List[Tuple[str, str, Any]]], str, None]

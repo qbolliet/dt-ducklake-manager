@@ -10,7 +10,7 @@ from typing import Dict, Optional, Tuple, Union, List
 # Module d'initialisation du logger
 from ..utils.logger import _init_logger
 # Utilitaires de traitement des données
-from ..utils.data_processing import map_python_to_sql_type
+from ..utils.types import map_python_to_sql_type
 
 # Emplacement du fichier
 FILE_PATH = Path(os.path.abspath(__file__))

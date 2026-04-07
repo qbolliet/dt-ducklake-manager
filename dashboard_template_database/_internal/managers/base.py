@@ -13,7 +13,7 @@ import duckdb
 
 # Import des utilitaires
 from ...utils.logger import _init_logger
-from ...utils.data_processing import map_python_to_sql_type
+from ...utils.types import map_python_to_sql_type
 
 # Emplacement du fichier
 FILE_PATH = Path(os.path.abspath(__file__))

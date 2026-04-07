@@ -35,8 +35,8 @@ class DuckLakeMaintenance:
         logger (logging.Logger): Logger instance.
 
     Examples:
-        >>> from dashboard_template_database.builders import DuckLakeConnector
-        >>> from dashboard_template_database.operations import DuckLakeMaintenance
+        >>> from dashboard_template_database.connection import DuckLakeConnector
+        >>> from dashboard_template_database.maintenance import DuckLakeMaintenance
         >>> conn = DuckLakeConnector('catalog.ducklake', 'data/').connect()
         >>> maint = DuckLakeMaintenance(conn)
         >>> maint.full_maintenance('main', 'fact_table')

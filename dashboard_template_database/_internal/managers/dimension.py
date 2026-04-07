@@ -10,7 +10,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import duckdb
 
 # Import du gestionnaire de base
-from .base_manager import BaseSchemaManager
+from .base import BaseSchemaManager
 
 # Emplacement du fichier
 FILE_PATH = Path(os.path.abspath(__file__))

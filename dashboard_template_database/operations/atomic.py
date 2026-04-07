@@ -11,13 +11,13 @@ import time
 import duckdb
 
 # Import des gestionnaires
-from .managers.transaction_manager import (
+from .._internal.managers.transaction import (
     TransactionManager, TransactionOperation, TransactionState
 )
 from .updater import DatabaseUpdater
 from .deleter import DatabaseDeleter
-from .recovery import DatabaseRecoveryManager, RecoveryOperation, RecoveryStrategy
-from .auditor import DatabaseAuditor, ValidationLevel
+from ..maintenance.recovery import DatabaseRecoveryManager, RecoveryOperation, RecoveryStrategy
+from ..maintenance.auditor import DatabaseAuditor, ValidationLevel
 
 # Import des utilitaires
 from ..utils.logger import _init_logger

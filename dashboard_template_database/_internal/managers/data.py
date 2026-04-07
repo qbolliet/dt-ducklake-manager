@@ -9,9 +9,10 @@ from typing import Dict, List, Optional, Union, Any, Tuple
 import duckdb
 
 # Import du gestionnaire de base
-from .base_manager import BaseSchemaManager
+from .base import BaseSchemaManager
 # Import des utilitaires
-from ...utils.data_processing import map_python_to_sql_type, _build_where_clause
+from ...utils.types import map_python_to_sql_type
+from ...utils.sql import _build_where_clause
 
 # Emplacement du fichier
 FILE_PATH = Path(os.path.abspath(__file__))
