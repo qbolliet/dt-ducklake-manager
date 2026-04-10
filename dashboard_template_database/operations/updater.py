@@ -13,13 +13,12 @@ from .._internal.managers.base import BaseSchemaManager
 from .._internal.managers.dimension import DimensionManager
 from .._internal.managers.data import DataManager
 from .._internal.managers.transaction import (
-    TransactionManager, TransactionOperation, TransactionState
+    TransactionManager, TransactionOperation
 )
 from ..maintenance.auditor import DatabaseAuditor, ValidationLevel, IssueSeverity
 
 # Import des utilitaires
-from ..utils.sql import remove_dataframe_duplicates
-
+from ..utils.sql import remove_dataframe_duplicates, build_database_duplicate_removal_query
 # Emplacement du fichier
 FILE_PATH = Path(os.path.abspath(__file__))
 
@@ -1004,9 +1003,7 @@ class DatabaseUpdater(BaseSchemaManager):
         Returns:
             True if deduplication succeeded, False on error.
         """
-        try:
-            from ..utils.data_processing import build_database_duplicate_removal_query
-            
+        try:            
             # Récupération du nombre initial de lignes
             initial_count = self.conn.execute("SELECT COUNT(*) FROM fact_table").fetchone()[0]
             

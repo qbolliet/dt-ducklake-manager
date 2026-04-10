@@ -159,8 +159,8 @@ class DuckLakeMaintenance:
         try:
             # Exécution de la requête
             self.conn.execute(
-                f"CALL {self.catalog_alias}.ducklake_expire_snapshots("
-                f"'{schema}', TIMESTAMP '{cutoff_str}')"
+                f"CALL ducklake_expire_snapshots('{self.catalog_alias}', "
+                f"older_than := TIMESTAMPTZ '{cutoff_str}')"
             )
             # Logging
             self.logger.info(
@@ -188,7 +188,7 @@ class DuckLakeMaintenance:
         try:
             # Exécution de la suppression des fichiers orphelins
             self.conn.execute(
-                f"CALL {self.catalog_alias}.ducklake_cleanup_old_files('{schema}')"
+                f"CALL ducklake_cleanup_old_files('{self.catalog_alias}')"
             )
             # Logging
             self.logger.info(f"the cleaning of the orphaned files is finished : {schema}")

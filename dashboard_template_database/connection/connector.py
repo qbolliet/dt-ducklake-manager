@@ -71,9 +71,15 @@ class DuckLakeConnector:
                 dashboard/API layers that must not write. Defaults to False.
             snapshot_version (Optional[int]): Open a historical snapshot by
                 version number. Implies ``READ_ONLY``. Defaults to None.
+                **Important**: DuckLake locks the catalog file at the process level,
+                so a snapshot connection cannot coexist with another connection to
+                the same catalog. When an active connection already exists, use
+                :meth:`at_clause` instead to build an ``AT (VERSION => n)`` clause.
             snapshot_time (Optional[str]): Open a historical snapshot by
                 timestamp (ISO-8601 string, e.g. ``'2025-01-01 00:00:00'``).
                 Implies ``READ_ONLY``. Defaults to None.
+                Same restriction as ``snapshot_version`` above; prefer
+                :meth:`at_clause` when a connection is already open.
             catalog_alias (str): Alias for the attached DuckLake catalog in SQL
                 (e.g. ``USE {alias}.{schema}``). Defaults to ``'db'``.
             schema (str): DuckLake schema to activate. Defaults to ``'main'``.
@@ -149,6 +155,49 @@ class DuckLakeConnector:
         self.logger.info(f"Activated scheme : {self.catalog_alias}.{self.schema}")
 
         return conn
+
+    # ---------------------------------------------------------------------------
+    # Méthodes de voyage dans le temps (time-travel) sur une connexion existante
+    # ---------------------------------------------------------------------------
+
+    # Génération d'une clause SQL AT pour requête time-travel sur connexion existante
+    def at_clause(self) -> str:
+        """
+        Return the ``AT (...)`` SQL clause for time-travel queries on an existing connection.
+
+        DuckLake prevents the same catalog file from being attached more than once
+        per process (even under different aliases), so ``snapshot_version`` /
+        ``snapshot_time`` cannot be used by opening a second connection.  Instead,
+        append the returned clause to the ``FROM`` part of any query:
+
+            ``SELECT * FROM table_name {connector.at_clause()}``
+
+        Returns ``""`` when neither ``snapshot_version`` nor ``snapshot_time`` was
+        supplied, so the method is safe to call unconditionally.
+
+        Returns:
+            str: SQL ``AT (VERSION => n)`` or ``AT (TIMESTAMP => 'ts')`` clause,
+                or an empty string for the current snapshot.
+
+        Raises:
+            ValueError: If both ``snapshot_version`` and ``snapshot_time`` are set.
+
+        Examples:
+            >>> c = DuckLakeConnector('cat.ducklake', 'data/', snapshot_version=3)
+            >>> c.at_clause()
+            'AT (VERSION => 3)'
+            >>> c2 = DuckLakeConnector('cat.ducklake', 'data/', snapshot_time='2025-01-01')
+            >>> c2.at_clause()
+            "AT (TIMESTAMP => '2025-01-01')"
+            >>> DuckLakeConnector('cat.ducklake', 'data/').at_clause()
+            ''
+        """
+        # Génération de la clause AT selon les paramètres de time-travel configurés
+        if self.snapshot_version is not None:
+            return f"AT (VERSION => {self.snapshot_version})"
+        if self.snapshot_time is not None:
+            return f"AT (TIMESTAMP => '{self.snapshot_time}')"
+        return ""
 
     # Attachement d'un catalogue DuckLake à une connexion DuckDB existante
     def attach(self, conn: duckdb.DuckDBPyConnection) -> duckdb.DuckDBPyConnection:
