@@ -1,18 +1,17 @@
 # Importation des modules
 # Modules de base
 import os
-import tempfile
-from unittest.mock import patch, MagicMock
 # Module de tests
 import pytest
 # DuckDB
 import duckdb
 # Modules à tester
-from dashboard_template_database.builders import DuckLakeConnector, DuckLakeMaintenance
+from dashboard_template_database.connection import DuckLakeConnector
+from dashboard_template_database.maintenance import DuckLakeMaintenance
 
 
 # ---------------------------------------------------------------------------
-# Helpers
+# Fonctions auxiliaires
 # ---------------------------------------------------------------------------
 
 def _ducklake_available() -> bool:
@@ -35,14 +34,19 @@ pytestmark = pytest.mark.skipif(
 
 
 # ---------------------------------------------------------------------------
-# Fixture commune
+# Fixtures communes
 # ---------------------------------------------------------------------------
 
+# Initialisation d'un catalogue DuckLake temporaire avec une table de test
 @pytest.fixture
 def ducklake_conn(tmp_path):
-    """
-    Crée un catalogue DuckLake temporaire avec une table test et retourne
-    (connexion, nom_table).
+    """Create a temporary DuckLake catalog with a test table.
+
+    Args:
+        tmp_path: pytest temporary directory.
+
+    Yields:
+        tuple: (connection, table_name).
     """
     catalog = str(tmp_path / 'test.ducklake')
     data_dir = str(tmp_path / 'data')
@@ -56,11 +60,47 @@ def ducklake_conn(tmp_path):
     conn.close()
 
 
+# Initialisation d'une instance DuckLakeMaintenance prête à l'emploi
 @pytest.fixture
 def maint(ducklake_conn):
-    """Retourne une instance DuckLakeMaintenance prête à l'emploi."""
+    """Return a DuckLakeMaintenance instance ready for use.
+
+    Args:
+        ducklake_conn: Fixture providing (connection, table_name).
+
+    Returns:
+        DuckLakeMaintenance: initialized with the test connection.
+    """
     conn, _ = ducklake_conn
     return DuckLakeMaintenance(conn)
+
+
+# ---------------------------------------------------------------------------
+# Tests du constructeur
+# ---------------------------------------------------------------------------
+
+# Test de l'initialisation avec l'alias par défaut
+def test_init_default_alias(ducklake_conn):
+    """Test that the default catalog_alias is 'db'.
+
+    Args:
+        ducklake_conn: Fixture providing (connection, table_name).
+    """
+    conn, _ = ducklake_conn
+    maint = DuckLakeMaintenance(conn)
+    assert maint.catalog_alias == 'db'
+
+
+# Test de l'initialisation avec un alias personnalisé
+def test_init_custom_catalog_alias(ducklake_conn):
+    """Test that DuckLakeMaintenance stores a custom catalog alias.
+
+    Args:
+        ducklake_conn: Fixture providing (connection, table_name).
+    """
+    conn, _ = ducklake_conn
+    maint = DuckLakeMaintenance(conn, catalog_alias='my_lake')
+    assert maint.catalog_alias == 'my_lake'
 
 
 # ---------------------------------------------------------------------------
@@ -69,7 +109,12 @@ def maint(ducklake_conn):
 
 # Test que merge_files s'exécute sans erreur
 def test_merge_files_executes_without_error(maint, ducklake_conn):
-    """Test that merge_files completes without raising an exception."""
+    """Test that merge_files completes without raising an exception.
+
+    Args:
+        maint: DuckLakeMaintenance fixture.
+        ducklake_conn: Fixture providing (connection, table_name).
+    """
     _, table = ducklake_conn
     # Aucune exception ne doit être levée
     maint.merge_files('main', table)
@@ -77,26 +122,43 @@ def test_merge_files_executes_without_error(maint, ducklake_conn):
 
 # Test que rewrite_data_files s'exécute sans erreur
 def test_rewrite_data_files_executes_without_error(maint, ducklake_conn):
-    """Test that rewrite_data_files completes without raising an exception."""
+    """Test that rewrite_data_files completes without raising an exception.
+
+    Args:
+        maint: DuckLakeMaintenance fixture.
+        ducklake_conn: Fixture providing (connection, table_name).
+    """
     _, table = ducklake_conn
     maint.rewrite_data_files('main', table)
 
 
 # Test que expire_snapshots s'exécute sans erreur avec la valeur par défaut
 def test_expire_snapshots_default_days(maint):
-    """Test that expire_snapshots with default older_than_days=30 does not raise."""
+    """Test that expire_snapshots with default older_than_days=30 does not raise.
+
+    Args:
+        maint: DuckLakeMaintenance fixture.
+    """
     maint.expire_snapshots('main')
 
 
 # Test que expire_snapshots accepte une valeur personnalisée de older_than_days
 def test_expire_snapshots_custom_days(maint):
-    """Test that expire_snapshots accepts a custom older_than_days value."""
+    """Test that expire_snapshots accepts a custom older_than_days value.
+
+    Args:
+        maint: DuckLakeMaintenance fixture.
+    """
     maint.expire_snapshots('main', older_than_days=7)
 
 
 # Test que cleanup_files s'exécute sans erreur
 def test_cleanup_files_executes_without_error(maint):
-    """Test that cleanup_files completes without raising an exception."""
+    """Test that cleanup_files completes without raising an exception.
+
+    Args:
+        maint: DuckLakeMaintenance fixture.
+    """
     maint.cleanup_files('main')
 
 
@@ -106,7 +168,12 @@ def test_cleanup_files_executes_without_error(maint):
 
 # Test que full_maintenance exécute toutes les étapes sans erreur
 def test_full_maintenance_runs_all_steps(maint, ducklake_conn):
-    """Test that full_maintenance calls all four maintenance procedures."""
+    """Test that full_maintenance calls all four maintenance procedures.
+
+    Args:
+        maint: DuckLakeMaintenance fixture.
+        ducklake_conn: Fixture providing (connection, table_name).
+    """
     _, table = ducklake_conn
     # Aucune exception ne doit être levée et toutes les étapes doivent s'exécuter
     maint.full_maintenance('main', table)
@@ -114,7 +181,12 @@ def test_full_maintenance_runs_all_steps(maint, ducklake_conn):
 
 # Test que full_maintenance continue après un échec partiel
 def test_full_maintenance_continues_on_step_failure(maint, ducklake_conn):
-    """Test that full_maintenance logs a warning and continues if one step fails."""
+    """Test that full_maintenance logs a warning and continues if one step fails.
+
+    Args:
+        maint: DuckLakeMaintenance fixture.
+        ducklake_conn: Fixture providing (connection, table_name).
+    """
     _, table = ducklake_conn
 
     # Compteur d'appels pour vérifier que les étapes suivantes ont bien été exécutées
@@ -150,28 +222,8 @@ def test_full_maintenance_continues_on_step_failure(maint, ducklake_conn):
     # full_maintenance ne doit pas lever d'exception malgré l'échec de merge_files
     maint.full_maintenance('main', table)
 
-    # Vérification que les étapes suivantes ont bien été exécutées malgré l'échec
+    # Vérification que toutes les étapes ont bien été appelées malgré l'échec
     assert 'merge_files' in call_log
     assert 'rewrite_data_files' in call_log
     assert 'expire_snapshots' in call_log
     assert 'cleanup_files' in call_log
-
-
-# ---------------------------------------------------------------------------
-# Tests du constructeur
-# ---------------------------------------------------------------------------
-
-# Test de l'initialisation avec un alias personnalisé
-def test_init_custom_catalog_alias(ducklake_conn):
-    """Test that DuckLakeMaintenance stores a custom catalog alias."""
-    conn, _ = ducklake_conn
-    maint = DuckLakeMaintenance(conn, catalog_alias='my_lake')
-    assert maint.catalog_alias == 'my_lake'
-
-
-# Test de l'initialisation par défaut
-def test_init_default_alias(ducklake_conn):
-    """Test that the default catalog_alias is 'db'."""
-    conn, _ = ducklake_conn
-    maint = DuckLakeMaintenance(conn)
-    assert maint.catalog_alias == 'db'

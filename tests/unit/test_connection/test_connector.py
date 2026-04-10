@@ -7,11 +7,11 @@ import pytest
 # DuckDB
 import duckdb
 # Module à tester
-from dashboard_template_database.builders import DuckLakeConnector
+from dashboard_template_database.connection import DuckLakeConnector
 
 
 # ---------------------------------------------------------------------------
-# Helpers
+# Fonctions auxiliaires
 # ---------------------------------------------------------------------------
 
 def _ducklake_available() -> bool:
@@ -37,9 +37,17 @@ pytestmark = pytest.mark.skipif(
 # Fixture commune
 # ---------------------------------------------------------------------------
 
+# Initialisation des chemins de catalogue et de données temporaires
 @pytest.fixture
 def ducklake_paths(tmp_path):
-    """Crée un répertoire temporaire et retourne (catalog_path, data_path)."""
+    """Create a temporary DuckLake catalog and data directory.
+
+    Args:
+        tmp_path: pytest temporary directory.
+
+    Returns:
+        tuple: (catalog_path, data_path) as strings.
+    """
     catalog = str(tmp_path / 'test.ducklake')
     data_dir = str(tmp_path / 'data')
     os.makedirs(data_dir)
@@ -50,9 +58,13 @@ def ducklake_paths(tmp_path):
 # Tests de connect()
 # ---------------------------------------------------------------------------
 
-# Test que connect() retourne bien une connexion DuckDB
+# Test que connect() retourne une connexion DuckDB valide
 def test_connect_returns_duckdb_connection(ducklake_paths):
-    """Test that connect() returns a valid DuckDBPyConnection."""
+    """Test that connect() returns a valid DuckDBPyConnection.
+
+    Args:
+        ducklake_paths: Fixture providing (catalog_path, data_path).
+    """
     catalog, data_dir = ducklake_paths
     connector = DuckLakeConnector(catalog, data_dir)
     conn = connector.connect()
@@ -62,7 +74,11 @@ def test_connect_returns_duckdb_connection(ducklake_paths):
 
 # Test que la connexion en lecture seule bloque les écritures
 def test_connect_read_only_blocks_write(ducklake_paths):
-    """Test that a read-only connection raises an error on write operations."""
+    """Test that a read-only connection raises an error on write operations.
+
+    Args:
+        ducklake_paths: Fixture providing (catalog_path, data_path).
+    """
     catalog, data_dir = ducklake_paths
 
     # Création initiale du catalogue avec une connexion lecture-écriture
@@ -77,9 +93,13 @@ def test_connect_read_only_blocks_write(ducklake_paths):
     ro_conn.close()
 
 
-# Test que connect() active bien le bon schéma via USE
+# Test que connect() active bien le schéma configuré via USE
 def test_connect_activates_correct_schema(ducklake_paths):
-    """Test that the USE statement activates the configured schema."""
+    """Test that the USE statement activates the configured schema.
+
+    Args:
+        ducklake_paths: Fixture providing (catalog_path, data_path).
+    """
     catalog, data_dir = ducklake_paths
     connector = DuckLakeConnector(catalog, data_dir, schema='main')
     conn = connector.connect()
@@ -90,9 +110,13 @@ def test_connect_activates_correct_schema(ducklake_paths):
     conn.close()
 
 
-# Test que snapshot_version implique READ_ONLY
+# Test que snapshot_version implique une connexion en lecture seule
 def test_connect_snapshot_version_is_read_only(ducklake_paths):
-    """Test that SNAPSHOT_VERSION implies READ_ONLY and blocks writes."""
+    """Test that SNAPSHOT_VERSION implies READ_ONLY and blocks writes.
+
+    Args:
+        ducklake_paths: Fixture providing (catalog_path, data_path).
+    """
     catalog, data_dir = ducklake_paths
 
     # Création d'un snapshot initial
@@ -107,15 +131,19 @@ def test_connect_snapshot_version_is_read_only(ducklake_paths):
     snap_conn.close()
 
 
-# Test que catalog_alias personnalisé est bien utilisé
+# Test que l'alias de catalogue personnalisé est bien utilisé
 def test_connect_custom_catalog_alias(ducklake_paths):
-    """Test that a custom catalog_alias is used in the ATTACH statement."""
+    """Test that a custom catalog_alias is used in the ATTACH statement.
+
+    Args:
+        ducklake_paths: Fixture providing (catalog_path, data_path).
+    """
     catalog, data_dir = ducklake_paths
     connector = DuckLakeConnector(catalog, data_dir, catalog_alias='my_lake')
     conn = connector.connect()
-    # Vérification que l'alias est accessible
+    # Vérification que l'alias est accessible (DuckDB expose catalog_name dans information_schema)
     result = conn.execute(
-        "SELECT database_name FROM information_schema.schemata WHERE database_name = 'my_lake'"
+        "SELECT catalog_name FROM information_schema.schemata WHERE catalog_name = 'my_lake'"
     ).fetchall()
     assert len(result) > 0
     conn.close()
@@ -125,9 +153,13 @@ def test_connect_custom_catalog_alias(ducklake_paths):
 # Tests de attach()
 # ---------------------------------------------------------------------------
 
-# Test que attach() fonctionne sur une connexion existante
+# Test que attach() fonctionne sur une connexion DuckDB existante
 def test_attach_on_existing_connection(ducklake_paths):
-    """Test that attach() works on an already-open DuckDB connection."""
+    """Test that attach() works on an already-open DuckDB connection.
+
+    Args:
+        ducklake_paths: Fixture providing (catalog_path, data_path).
+    """
     catalog, data_dir = ducklake_paths
     connector = DuckLakeConnector(catalog, data_dir)
 
@@ -135,7 +167,7 @@ def test_attach_on_existing_connection(ducklake_paths):
     existing_conn = duckdb.connect(':memory:')
     existing_conn.execute("INSTALL ducklake; LOAD ducklake;")
 
-    # attach() ne doit pas lever d'exception et doit activer le schéma
+    # attach() ne doit pas lever d'exception et doit retourner la même connexion
     returned_conn = connector.attach(existing_conn)
     assert returned_conn is existing_conn
 
@@ -152,7 +184,11 @@ def test_attach_on_existing_connection(ducklake_paths):
 
 # Test de la construction de la clause ATTACH sans options spéciales
 def test_build_attach_sql_default(ducklake_paths):
-    """Test that default ATTACH SQL contains DATA_PATH but no READ_ONLY."""
+    """Test that default ATTACH SQL contains DATA_PATH but no READ_ONLY.
+
+    Args:
+        ducklake_paths: Fixture providing (catalog_path, data_path).
+    """
     catalog, data_dir = ducklake_paths
     connector = DuckLakeConnector(catalog, data_dir)
     sql = connector._build_attach_sql()
@@ -163,7 +199,11 @@ def test_build_attach_sql_default(ducklake_paths):
 
 # Test de la construction de la clause ATTACH avec READ_ONLY
 def test_build_attach_sql_read_only(ducklake_paths):
-    """Test that read_only=True adds READ_ONLY to the ATTACH SQL."""
+    """Test that read_only=True adds READ_ONLY to the ATTACH SQL.
+
+    Args:
+        ducklake_paths: Fixture providing (catalog_path, data_path).
+    """
     catalog, data_dir = ducklake_paths
     connector = DuckLakeConnector(catalog, data_dir, read_only=True)
     sql = connector._build_attach_sql()
@@ -172,7 +212,11 @@ def test_build_attach_sql_read_only(ducklake_paths):
 
 # Test de la construction de la clause ATTACH avec SNAPSHOT_VERSION
 def test_build_attach_sql_snapshot_version(ducklake_paths):
-    """Test that snapshot_version adds SNAPSHOT_VERSION to the ATTACH SQL."""
+    """Test that snapshot_version adds SNAPSHOT_VERSION to the ATTACH SQL.
+
+    Args:
+        ducklake_paths: Fixture providing (catalog_path, data_path).
+    """
     catalog, data_dir = ducklake_paths
     connector = DuckLakeConnector(catalog, data_dir, snapshot_version=3)
     sql = connector._build_attach_sql()
@@ -183,7 +227,11 @@ def test_build_attach_sql_snapshot_version(ducklake_paths):
 
 # Test de la construction de la clause ATTACH avec SNAPSHOT_TIME
 def test_build_attach_sql_snapshot_time(ducklake_paths):
-    """Test that snapshot_time adds SNAPSHOT_TIME to the ATTACH SQL."""
+    """Test that snapshot_time adds SNAPSHOT_TIME to the ATTACH SQL.
+
+    Args:
+        ducklake_paths: Fixture providing (catalog_path, data_path).
+    """
     catalog, data_dir = ducklake_paths
     connector = DuckLakeConnector(catalog, data_dir, snapshot_time='2025-01-01 00:00:00')
     sql = connector._build_attach_sql()

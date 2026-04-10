@@ -13,7 +13,7 @@ import s3fs
 # Module de tests
 import pytest
 # Modules du package
-from dashboard_template_database.builders import DuckLakeTablesBuilder
+from dashboard_template_database.schema import DuckLakeTablesBuilder
 
 # Initialisation d'un jeu de données d'exemple
 @pytest.fixture
