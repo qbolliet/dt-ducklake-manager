@@ -1,8 +1,9 @@
 # Importation des modules
 # Modules de base
 import os
-import pandas as pd
+import polars as pl
 import narwhals as nw
+from narwhals.typing import IntoDataFrame
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple, Any, Union
 from dataclasses import dataclass, field
@@ -980,7 +981,7 @@ class DatabaseAuditor:
     
     # Méthodes de validation des préconditions d'opération
     # Méthode de validation des conditions préalables à une opération d'insertion
-    def _validate_insert_preconditions(self, report: ValidationReport, df: pd.DataFrame = None, **kwargs) -> None:
+    def _validate_insert_preconditions(self, report: ValidationReport, df: Optional[IntoDataFrame] = None, **kwargs) -> None:
         """Validate insert preconditions."""
         # Vérifiation que le jeu de données est spécifié
         if df is None:
@@ -1129,12 +1130,12 @@ class DatabaseAuditor:
             return []
     
     # Méthode auxiliaire d'extraction des métadonnées
-    def _get_metadata(self) -> pd.DataFrame:
+    def _get_metadata(self) -> pl.DataFrame:
         """Get metadata table content."""
         try:
-            return self.conn.execute("SELECT * FROM metadata").fetchdf()
+            return pl.from_arrow(self.conn.execute("SELECT * FROM metadata").fetch_arrow_table())
         except:
-            return pd.DataFrame()
+            return pl.DataFrame()
     
     # Méthode auxiliaire d'obtention de la liste des indices disponibles dans la base de données
     def _get_existing_indexes(self) -> List[Dict[str, str]]:

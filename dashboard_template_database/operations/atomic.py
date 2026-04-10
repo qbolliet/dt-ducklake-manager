@@ -1,7 +1,8 @@
 # Importation des modules
 # Modules de base
 import os
-import pandas as pd
+from datetime import datetime
+from narwhals.typing import IntoDataFrame
 from pathlib import Path
 from typing import Dict, List, Optional, Any, Union, Callable, Tuple
 from dataclasses import dataclass
@@ -194,7 +195,7 @@ class AtomicDatabaseOperations:
     
     # Opérations atomiques principales
     def execute_batch_update(self, 
-                           update_data: pd.DataFrame,
+                           update_data: IntoDataFrame,
                            config: Optional[AtomicOperationConfig] = None) -> AtomicOperationResult:
         """
         Execute a batch update operation atomically.
@@ -674,7 +675,7 @@ class AtomicDatabaseOperations:
             )
     
     def execute_backup_and_update(self,
-                                update_data: pd.DataFrame,
+                                update_data: IntoDataFrame,
                                 backup_description: str = "",
                                 config: Optional[AtomicOperationConfig] = None) -> AtomicOperationResult:
         """
@@ -804,7 +805,7 @@ class AtomicDatabaseOperations:
         """
         try:
             status = {
-                'timestamp': pd.Timestamp.now(),
+                'timestamp': datetime.now(),
                 'active_transactions': len(self.transaction_mgr.list_active_transactions()),
                 'recovery_points_available': len(self.recovery_mgr.list_recovery_points()),
                 'database_health': self.auditor.get_quick_health_check(),
@@ -823,7 +824,7 @@ class AtomicDatabaseOperations:
         except Exception as e:
             self.logger.error(f"Error getting operation status: {e}")
             return {
-                'timestamp': pd.Timestamp.now(),
+                'timestamp': datetime.now(),
                 'error': str(e),
                 'components_ready': False
             }
@@ -868,7 +869,7 @@ class AtomicDatabaseOperations:
                 overall_status = 'component_issues'
             
             return {
-                'timestamp': pd.Timestamp.now(),
+                'timestamp': datetime.now(),
                 'overall_status': overall_status,
                 'validation_report': {
                     'total_issues': len(validation_report.issues),
@@ -883,7 +884,7 @@ class AtomicDatabaseOperations:
         except Exception as e:
             self.logger.error(f"Error validating system integrity: {e}")
             return {
-                'timestamp': pd.Timestamp.now(),
+                'timestamp': datetime.now(),
                 'overall_status': 'error',
                 'error': str(e)
             }

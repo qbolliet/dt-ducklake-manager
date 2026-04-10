@@ -2,7 +2,7 @@
 # Modules de base
 import os
 import json
-import pandas as pd
+import polars as pl
 from pathlib import Path
 from typing import Dict, List, Optional, Any, Union, Tuple
 from dataclasses import dataclass, field
@@ -1494,7 +1494,7 @@ class DatabaseRecoveryManager:
             # Restauration de chaque table depuis CSV
             for csv_file in backup_path.glob('*.csv'):
                 table_name = csv_file.stem
-                df = pd.read_csv(csv_file)
+                df = pl.read_csv(csv_file)
                 self.conn.register('temp_restore', df)
                 self.conn.execute(f"CREATE TABLE {table_name} AS SELECT * FROM temp_restore")
                 self.conn.execute("DROP VIEW temp_restore")
@@ -1553,7 +1553,7 @@ class DatabaseRecoveryManager:
             if not metadata_path.exists():
                 return False
 
-            df = pd.read_csv(metadata_path)
+            df = pl.read_csv(metadata_path)
             self.conn.execute("DELETE FROM metadata")
             self.conn.register('temp_meta', df)
             self.conn.execute("INSERT INTO metadata SELECT * FROM temp_meta")
