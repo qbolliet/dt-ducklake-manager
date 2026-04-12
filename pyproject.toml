@@ -37,6 +37,10 @@ markers = [
     "slow: tests that take a long time to run",
 ]
 
+[tool.uv.scripts]
+test = "pytest"
+test-integration = "pytest -m integration"
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
