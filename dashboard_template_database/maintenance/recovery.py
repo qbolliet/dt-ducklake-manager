@@ -8,7 +8,6 @@ from typing import Dict, List, Optional, Any, Union, Tuple
 from dataclasses import dataclass, field
 from enum import Enum
 import time
-import tempfile
 import shutil
 # DuckDB
 import duckdb
@@ -29,12 +28,17 @@ class RecoveryStrategy(Enum):
     """Available recovery strategies for database restoration.
 
     DuckLake retains a complete snapshot history. The recommended strategy for
-    handling corruption is ``USE_SNAPSHOT_HISTORY``: it identifies the last healthy
-    snapshot and provides the information needed to open a time-travel connection
-    via ``DuckLakeConnector(..., snapshot_version=N)``.
+    handling data corruption is ``USE_SNAPSHOT_HISTORY``: it lists all available
+    snapshots with their timestamps and returns step-by-step instructions to
+    reopen a time-travel connection via
+    ``DuckLakeConnector(..., snapshot_version=N)`` and reload the data.
+
+    For structural or consistency issues that do not require rolling back data,
+    the in-place repair strategies (``REPAIR_SCHEMA``, ``REBUILD_DIMENSIONS``,
+    ``CLEAN_ORPHANED_DATA``, ``VALIDATE_AND_FIX``) operate directly on the live
+    catalog without touching the snapshot history.
     """
     USE_SNAPSHOT_HISTORY = "use_snapshot_history"
-    RESTORE_BACKUP = "restore_backup"
     REPAIR_SCHEMA = "repair_schema"
     REBUILD_DIMENSIONS = "rebuild_dimensions"
     CLEAN_ORPHANED_DATA = "clean_orphaned_data"
@@ -42,12 +46,17 @@ class RecoveryStrategy(Enum):
 
 
 # Classe des types de sauvegarde possibles
+# Seule la sauvegarde des métadonnées est conservée : DuckLake gère nativement
+# l'historique complet des données via ses snapshots, rendant les sauvegardes CSV
+# redondantes pour les tables de faits et de dimensions.
 class BackupType(Enum):
-    """Available backup types for recovery points."""
-    FULL_BACKUP = "full_backup"
-    SCHEMA_BACKUP = "schema_backup"
+    """Available backup types for recovery points.
+
+    Only ``METADATA_BACKUP`` is retained. Full-data backups are superseded by
+    DuckLake's native snapshot history, which provides immutable time-travel
+    access to every previous state of the catalog.
+    """
     METADATA_BACKUP = "metadata_backup"
-    INCREMENTAL_BACKUP = "incremental_backup"
 
 
 # Classe de point de récupération de la base de données
@@ -151,12 +160,14 @@ class DatabaseRecoveryManager:
             connection: DuckDB connection attached to a DuckLake catalog, obtained
                 via ``DuckLakeConnector.connect()``. If None, an in-memory connection
                 is created (for unit tests only).
-            backup_dir: Directory for storing CSV-based backups (None for default).
+            backup_dir: Directory for storing metadata backups (JSON + CSV export of
+                the metadata table). Full-data backups are not needed here because
+                DuckLake natively persists the complete snapshot history.
             categorical_threshold: Threshold for determining categorical variables.
             log_filename: Path to log file.
-            max_backup_age_days: Maximum age for keeping backup files on disk.
-            auto_backup_on_changes: Whether to create automatic backups before
-                destructive operations.
+            max_backup_age_days: Maximum age for keeping metadata backup files on disk.
+            auto_backup_on_changes: Whether to create an automatic metadata backup
+                before destructive in-place operations (e.g. REPAIR_SCHEMA).
             catalog_alias: Alias of the attached DuckLake catalog, used to query
                 available snapshots via ``ducklake_snapshots()``. Defaults to ``'db'``.
             ducklake_schema: DuckLake schema name used for snapshot queries.
@@ -197,25 +208,29 @@ class DatabaseRecoveryManager:
     
     # Méthodes de gestion des points de récupération
     # Méthode de création d'un point de récupération
-    def create_recovery_point(self, 
-                            backup_type: BackupType = BackupType.FULL_BACKUP,
-                            description: str = "",
-                            force_validation: bool = True) -> Optional[str]:
+    def create_recovery_point(self,
+                              backup_type: BackupType = BackupType.METADATA_BACKUP,
+                              description: str = "",
+                              force_validation: bool = True) -> Optional[str]:
         """
-        Create a recovery point with backup and validation.
-        
+        Create a metadata recovery point with optional pre-validation.
+
+        Only ``BackupType.METADATA_BACKUP`` is supported : it exports the
+        ``metadata`` table to CSV and writes a system health snapshot to JSON.
+        For full data recovery, rely on DuckLake's native snapshot history via
+        ``USE_SNAPSHOT_HISTORY``.
+
         Args:
-            backup_type: Type of backup to create
-            description: Description of the recovery point
-            force_validation: Whether to force database validation
-            
+            backup_type: Must be ``BackupType.METADATA_BACKUP`` (only supported type).
+            description: Human-readable description of the recovery point.
+            force_validation: Whether to run a standard validation before backup.
+
         Returns:
-            Recovery point ID if successful, None otherwise
-            
+            Recovery point ID if successful, None otherwise.
+
         Example:
             >>> recovery_id = recovery_mgr.create_recovery_point(
-            ...     BackupType.FULL_BACKUP, 
-            ...     "Before major schema changes"
+            ...     description="Before schema repair"
             ... )
         """
         try:
@@ -223,33 +238,25 @@ class DatabaseRecoveryManager:
             recovery_id = f"recovery_{int(time.time())}_{len(self._recovery_points)}"
             # Génération d'un timestamp
             timestamp = time.time()
-            
+
             # Validation préalable si demandée
             validation_report = None
             if force_validation:
                 validation_report = self.auditor.validate_database(ValidationLevel.STANDARD)
-                
+
                 # Vérification des issues critiques
                 if validation_report.get_critical_issues_count() > 0:
-                    self.logger.warning(f"Creating recovery point with {validation_report.get_critical_issues_count()} critical issues")
-            
+                    self.logger.warning(
+                        f"Creating recovery point with "
+                        f"{validation_report.get_critical_issues_count()} critical issues"
+                    )
+
             # Création du répertoire de sauvegarde
             backup_path = self.backup_dir / recovery_id
             backup_path.mkdir(exist_ok=True)
-            
-            # Exécution de la sauvegarde selon le type
-            if backup_type == BackupType.FULL_BACKUP:
-                success = self._create_full_backup(backup_path)
-            elif backup_type == BackupType.SCHEMA_BACKUP:
-                success = self._create_schema_backup(backup_path)
-            elif backup_type == BackupType.METADATA_BACKUP:
-                success = self._create_metadata_backup(backup_path)
-            elif backup_type == BackupType.INCREMENTAL_BACKUP:
-                success = self._create_incremental_backup(backup_path)
-            else:
-                # Logging
-                self.logger.error(f"Unknown backup type: {backup_type}")
-                return None
+
+            # Seule la sauvegarde des métadonnées est supportée
+            success = self._create_metadata_backup(backup_path)
             
             if not success:
                 # Nettoyage en cas d'échec
@@ -399,19 +406,18 @@ class DatabaseRecoveryManager:
                     error_message="Recovery operation validation failed"
                 )
             
-            # Création d'un point de récupération automatique avant l'opération
+            # Sauvegarde automatique des métadonnées avant les opérations in-place destructrices.
+            # Les opérations sur les données sont couvertes par l'historique DuckLake.
             pre_recovery_point = None
-            if operation.strategy in [RecoveryStrategy.RESTORE_BACKUP, RecoveryStrategy.REPAIR_SCHEMA]:
+            if operation.strategy == RecoveryStrategy.REPAIR_SCHEMA:
                 pre_recovery_point = self.create_recovery_point(
-                    BackupType.FULL_BACKUP,
+                    BackupType.METADATA_BACKUP,
                     f"Auto-backup before {operation.strategy.value}"
                 )
-            
+
             # Exécution de la stratégie de récupération
             if operation.strategy == RecoveryStrategy.USE_SNAPSHOT_HISTORY:
                 result = self._recover_use_snapshot_history(operation)
-            elif operation.strategy == RecoveryStrategy.RESTORE_BACKUP:
-                result = self._recover_restore_backup(operation)
             elif operation.strategy == RecoveryStrategy.REPAIR_SCHEMA:
                 result = self._recover_repair_schema(operation)
             elif operation.strategy == RecoveryStrategy.REBUILD_DIMENSIONS:
@@ -549,84 +555,6 @@ class DatabaseRecoveryManager:
             )
     
     # Méthodes de sauvegarde privées
-    # Méthode de création d'une sauvegarde
-    def _create_full_backup(self, backup_path: Path) -> bool:
-        """Create a complete backup of all database tables.
-
-        Args:
-            backup_path: Directory path where backup files will be stored.
-
-        Returns:
-            True if backup completed successfully, False on error.
-        """
-        try:
-            # Sauvegarde de toutes les tables
-            tables = self._get_all_tables()
-            # Parcours des tables
-            for table_name in tables:
-                try:
-                    # Export de la table vers CSV
-                    table_file = backup_path / f"{table_name}.csv"
-                    export_query = f"COPY {table_name} TO '{table_file}' (FORMAT CSV, HEADER)"
-                    self.conn.execute(export_query)
-                    
-                    # Sauvegarde de la structure de la table
-                    structure_file = backup_path / f"{table_name}_structure.json"
-                    structure = self.conn.execute(f"DESCRIBE {table_name}").fetchall()
-                    
-                    with open(structure_file, 'w') as f:
-                        json.dump({
-                            'table_name': table_name,
-                            'columns': structure
-                        }, f, indent=2)
-                        
-                except Exception as e:
-                    # Logging
-                    self.logger.error(f"Error backing up table {table_name}: {e}")
-                    return False
-            
-            return True
-            
-        except Exception as e:
-            # Logging
-            self.logger.error(f"Error creating full backup: {e}")
-            return False
-    
-    # Méthode de création d'une sauvegarde du schéma
-    def _create_schema_backup(self, backup_path: Path) -> bool:
-        """Create a schema-only backup (table structures).
-
-        Args:
-            backup_path: Directory path where schema backup will be stored.
-
-        Returns:
-            True if backup completed successfully, False on error.
-        """
-        try:
-            schema_info = {
-                'tables': {},
-                'timestamp': time.time()
-            }
-            
-            # Sauvegarde des structures de tables
-            tables = self._get_all_tables()
-            " Parcours des tables"
-            for table_name in tables:
-                structure = self.conn.execute(f"DESCRIBE {table_name}").fetchall()
-                schema_info['tables'][table_name] = structure
-            
-            # Sauvegarde dans un fichier JSON
-            schema_file = backup_path / "schema_backup.json"
-            with open(schema_file, 'w') as f:
-                json.dump(schema_info, f, indent=2, default=str)
-            
-            return True
-            
-        except Exception as e:
-            # Logging
-            self.logger.error(f"Error creating schema backup: {e}")
-            return False
-    
     # Méthode de sauvegarde des méta-données
     def _create_metadata_backup(self, backup_path: Path) -> bool:
         """Create a metadata-only backup (metadata table and system info).
@@ -662,49 +590,34 @@ class DatabaseRecoveryManager:
             self.logger.error(f"Error creating metadata backup: {e}")
             return False
     
-    # Méthode de création d'une sauvegarde incrémentale
-    def _create_incremental_backup(self, backup_path: Path) -> bool:
-        """Create an incremental backup (currently delegates to metadata backup).
-
-        Args:
-            backup_path: Directory path where backup will be stored.
-
-        Returns:
-            True if backup completed successfully, False on error.
-        """
-        try:
-            # Pour simplifier, on fait une sauvegarde des métadonnées
-            # Une vraie implémentation nécessiterait un tracking des changements
-            return self._create_metadata_backup(backup_path)
-            
-        except Exception as e:
-            # Logging
-            self.logger.error(f"Error creating incremental backup: {e}")
-            return False
-    
     # Méthodes de récupération spécialisées
     # Méthode de récupération par historique des snapshots DuckLake
     def _recover_use_snapshot_history(self, operation: RecoveryOperation) -> RecoveryResult:
-        """Recover by identifying a safe DuckLake snapshot for time-travel restoration.
+        """Guide time-travel restoration using DuckLake's native snapshot history.
 
-        DuckLake does not support multi-statement SQL ROLLBACK. Recovery
-        relies on native time travel: open a read-only connection to
-        a previous snapshot using ``DuckLakeConnector(..., snapshot_version=N)``,
-        then reload the data into the current catalog.
+        DuckLake does not support multi-statement SQL ROLLBACK. Recovery relies on
+        native time travel: open a read-only connection pinned to a previous snapshot
+        via ``DuckLakeConnector(..., snapshot_version=N)``, read the tables from that
+        connection, and reinsert the data into the current catalog.
 
-        This method queries the available snapshots and returns their list in
-        ``RecoveryResult.operations_performed`` to guide the manual operation.
+        This method:
+        1. Lists all available snapshots with their IDs and timestamps.
+        2. Validates the requested target snapshot when ``target_recovery_point``
+           is provided (expected to be a snapshot_id as a string).
+        3. Suggests the second-to-last snapshot as a safe restore point when no
+           target is specified.
+        4. Returns step-by-step restoration instructions in ``recommendations``.
 
         Args:
-            operation: Recovery operation. Si ``target_recovery_point`` est renseigné,
-                il doit contenir un numéro de snapshot (``snapshot_id``) sous forme
-                de chaîne.
+            operation: Recovery operation. ``target_recovery_point`` may contain a
+                snapshot_id (as a string) to pinpoint the desired restore point.
 
         Returns:
-            RecoveryResult with available snapshots and time-travel guidance.
+            RecoveryResult with the snapshot inventory in ``operations_performed``
+            and a step-by-step restoration guide in ``recommendations``.
         """
         try:
-            operations_performed = []
+            operations_performed: List[str] = []
 
             # Interrogation de l'historique des snapshots DuckLake
             try:
@@ -712,31 +625,87 @@ class DatabaseRecoveryManager:
                     f"SELECT * FROM {self.catalog_alias}.ducklake_snapshots"
                     f"('{self.ducklake_schema}') ORDER BY snapshot_id DESC"
                 ).pl()
-                snapshot_count = len(snapshots_df)
-                operations_performed.append(
-                    f"Available snapshots : {snapshot_count} "
-                    f"(last snapshot_id = {snapshots_df['snapshot_id'][0] if snapshot_count > 0 else 'N/A'})"
+            except Exception as e:
+                return RecoveryResult(
+                    success=False,
+                    strategy_used=operation.strategy,
+                    recovery_time=0,
+                    error_message=f"Impossible d'interroger les snapshots DuckLake : {e}",
                 )
 
-                # Identification du snapshot cible si fourni
-                target_snapshot = operation.target_recovery_point
-                if target_snapshot:
-                    operations_performed.append(f"Snapshot cible demandé : {target_snapshot}")
-                elif snapshot_count > 1:
-                    # Suggérer l'avant-dernier snapshot comme point de restauration sûr
-                    suggested = snapshots_df['snapshot_id'].iloc[1]
+            snapshot_count = len(snapshots_df)
+            operations_performed.append(
+                f"{snapshot_count} snapshot(s) disponible(s) dans le catalogue "
+                f"'{self.catalog_alias}.{self.ducklake_schema}'"
+            )
+
+            # Présentation structurée de chaque snapshot avec horodatage lisible
+            for row in snapshots_df.iter_rows(named=True):
+                snap_id = row.get('snapshot_id', 'N/A')
+                # Récupération de l'horodatage selon le nom de colonne retourné par DuckLake
+                snap_time = row.get('snapshot_time', row.get('timestamp', None))
+                if snap_time is not None and hasattr(snap_time, 'strftime'):
+                    snap_time_str = snap_time.strftime('%Y-%m-%d %H:%M:%S')
+                else:
+                    snap_time_str = str(snap_time) if snap_time is not None else 'N/A'
+                operations_performed.append(f"  snapshot_id={snap_id}  |  {snap_time_str}")
+
+            # Détermination du snapshot cible : validé si fourni, suggéré sinon
+            target_snapshot = operation.target_recovery_point
+            suggested_id: str = '<snapshot_id>'
+
+            if target_snapshot:
+                # Vérification que le snapshot demandé figure bien dans l'historique
+                snapshot_ids = (
+                    [str(v) for v in snapshots_df['snapshot_id'].to_list()]
+                    if snapshot_count > 0 else []
+                )
+                if target_snapshot in snapshot_ids:
                     operations_performed.append(
-                        f"Suggested snapshot for time-travel : {suggested} "
-                        f"(second to last)"
+                        f"Snapshot cible validé : {target_snapshot}"
                     )
+                    suggested_id = target_snapshot
+                else:
+                    operations_performed.append(
+                        f"ATTENTION : snapshot {target_snapshot} introuvable dans l'historique — "
+                        f"vérifier la valeur de snapshot_id"
+                    )
+            elif snapshot_count > 1:
+                # Avant-dernier snapshot : état stable avant la dernière écriture
+                suggested_id = str(snapshots_df['snapshot_id'][1])
+                operations_performed.append(
+                    f"Snapshot suggéré (avant-dernier, état stable) : {suggested_id}"
+                )
+            elif snapshot_count == 1:
+                suggested_id = str(snapshots_df['snapshot_id'][0])
+                operations_performed.append(
+                    "Un seul snapshot disponible — restauration vers l'état initial uniquement"
+                )
 
-            except Exception as e:
-                operations_performed.append(f"Impossible d'interroger les snapshots DuckLake : {e}")
-
+            # Instructions de restauration étape par étape (format prêt à copier-coller)
             recommendations = [
-                "To restore the database from a snapshot : "
-                "conn = DuckLakeConnector(catalog_path, data_path, snapshot_version=N).connect()",
-                "Read the tables from this connection and reinsert them into the current catalog.",
+                "─── Procédure de restauration par time-travel DuckLake ───",
+                "",
+                "Étape 1 — Ouvrir une connexion en lecture seule sur le snapshot cible :",
+                f"  conn_old = DuckLakeConnector(catalog_path, data_path, snapshot_version={suggested_id}).connect()",
+                "",
+                "Étape 2 — Lire les tables depuis cette connexion :",
+                "  fact_df = conn_old.execute('SELECT * FROM fact_table').pl()",
+                "  meta_df = conn_old.execute('SELECT * FROM metadata').pl()",
+                "  # Répéter pour chaque table de dimension :",
+                "  #   dim_df = conn_old.execute('SELECT * FROM dim_<col>').pl()",
+                "",
+                "Étape 3 — Vider les tables du catalogue courant et réinsérer les données :",
+                "  conn.execute('DELETE FROM fact_table')",
+                "  conn.register('_restore_fact', fact_df)",
+                "  conn.execute('INSERT INTO fact_table SELECT * FROM _restore_fact')",
+                "  conn.execute('DROP VIEW _restore_fact')",
+                "  # Répéter pour metadata et chaque table de dimension",
+                "",
+                "Étape 4 — Valider l'intégrité après restauration :",
+                "  auditor = DatabaseAuditor(conn)",
+                "  report  = auditor.validate_database(ValidationLevel.COMPREHENSIVE)",
+                "  print(report)",
             ]
 
             return RecoveryResult(
@@ -755,91 +724,33 @@ class DatabaseRecoveryManager:
                 error_message=str(e),
             )
 
-    # Méthode de récupération par restauration de sauvegarde
-    def _recover_restore_backup(self, operation: RecoveryOperation) -> RecoveryResult:
-        """Recover by restoring from a backup recovery point.
+    # Méthode publique de consultation de l'historique des snapshots DuckLake
+    def list_ducklake_snapshots(self) -> Optional[pl.DataFrame]:
+        """Return the full DuckLake snapshot history as a Polars DataFrame.
 
-        Args:
-            operation: Recovery operation with target_recovery_point specified.
+        Convenience wrapper around the ``ducklake_snapshots()`` table function.
+        Useful for inspecting the snapshot inventory directly before choosing a
+        ``snapshot_version`` for time-travel restoration.
 
         Returns:
-            RecoveryResult indicating success or failure of restoration.
+            Polars DataFrame with one row per snapshot (columns depend on the
+            DuckLake version), sorted by ``snapshot_id`` descending.
+            Returns None if the catalog cannot be queried.
+
+        Example:
+            >>> snapshots = recovery_mgr.list_ducklake_snapshots()
+            >>> if snapshots is not None:
+            ...     print(snapshots)
         """
         try:
-            # Vérification que la cible de la restoration est spécifié
-            if not operation.target_recovery_point:
-                return RecoveryResult(
-                    success=False,
-                    strategy_used=operation.strategy,
-                    recovery_time=0,
-                    error_message="No target recovery point specified"
-                )
-            # Vérification que le point de sauvegarde existe
-            if operation.target_recovery_point not in self._recovery_points:
-                return RecoveryResult(
-                    success=False,
-                    strategy_used=operation.strategy,
-                    recovery_time=0,
-                    error_message=f"Recovery point {operation.target_recovery_point} not found"
-                )
-            
-            # Extraction du point de sauvegarde
-            recovery_point = self._recovery_points[operation.target_recovery_point]
-            # Construction du chemin
-            backup_path = Path(recovery_point.backup_path)
-            
-            # Vérification que le chemin existe
-            if not backup_path.exists():
-                return RecoveryResult(
-                    success=False,
-                    strategy_used=operation.strategy,
-                    recovery_time=0,
-                    error_message=f"Backup path {backup_path} does not exist"
-                )
-            
-            operations_performed = []
-            
-            # Restauration selon le type de sauvegarde
-            if recovery_point.backup_type == BackupType.FULL_BACKUP:
-                success = self._restore_full_backup(backup_path, operations_performed)
-            elif recovery_point.backup_type == BackupType.SCHEMA_BACKUP:
-                success = self._restore_schema_backup(backup_path, operations_performed)
-            elif recovery_point.backup_type == BackupType.METADATA_BACKUP:
-                success = self._restore_metadata_backup(backup_path, operations_performed)
-            else:
-                return RecoveryResult(
-                    success=False,
-                    strategy_used=operation.strategy,
-                    recovery_time=0,
-                    error_message=f"Unsupported backup type: {recovery_point.backup_type}"
-                )
-            
-            # Affichage d'un message différent suivant la réussite de l'opération
-            if success:
-                return RecoveryResult(
-                    success=True,
-                    strategy_used=operation.strategy,
-                    recovery_time=0,
-                    operations_performed=operations_performed,
-                    recommendations=["Verify data integrity after restore operation"]
-                )
-            else:
-                return RecoveryResult(
-                    success=False,
-                    strategy_used=operation.strategy,
-                    recovery_time=0,
-                    operations_performed=operations_performed,
-                    error_message="Backup restoration failed"
-                )
-            
+            return self.conn.execute(
+                f"SELECT * FROM {self.catalog_alias}.ducklake_snapshots"
+                f"('{self.ducklake_schema}') ORDER BY snapshot_id DESC"
+            ).pl()
         except Exception as e:
-            return RecoveryResult(
-                success=False,
-                strategy_used=operation.strategy,
-                recovery_time=0,
-                error_message=str(e)
-            )
-    
+            self.logger.error(f"Impossible de lister les snapshots DuckLake : {e}")
+            return None
+
     # Méthode de récupération par réparation du schéma
     def _recover_repair_schema(self, operation: RecoveryOperation) -> RecoveryResult:
         """Recover by repairing database schema issues.
@@ -1207,11 +1118,8 @@ class DatabaseRecoveryManager:
             True if operation is valid and can proceed, False otherwise.
         """
         try:
-            # Vérification des opérations destructrices
-            destructive_strategies = [
-                RecoveryStrategy.RESTORE_BACKUP,
-                RecoveryStrategy.REPAIR_SCHEMA
-            ]
+            # Vérification des opérations destructrices (modifications in-place du catalogue)
+            destructive_strategies = [RecoveryStrategy.REPAIR_SCHEMA]
             # Vérification de la confirmation d'une opération destructive de données
             if operation.strategy in destructive_strategies and not confirm_destructive:
                 # Logging
@@ -1272,12 +1180,10 @@ class DatabaseRecoveryManager:
             critical_count = validation_report.get_critical_issues_count()
 
             # Stratégie basée sur le problème dominant avec seuils de gravité
-            # Si trop de problèmes critiques → restauration backup si disponible
-            if critical_count >= 5 and allow_destructive:
-                recent_backups = [p for p in self._recovery_points.values()
-                                if time.time() - p.timestamp < 3600]  # Moins d'1 heure
-                if recent_backups:
-                    return RecoveryStrategy.RESTORE_BACKUP
+            # Si trop de problèmes critiques → time-travel via l'historique DuckLake
+            # (préférable à une restauration CSV qui ne couvre pas les données de faits)
+            if critical_count >= 5:
+                return RecoveryStrategy.USE_SNAPSHOT_HISTORY
 
             # Mapping type de problème → stratégie avec prise en compte du score
             strategy_mapping = {
@@ -1460,104 +1366,6 @@ class DatabaseRecoveryManager:
             # Logging
             self.logger.error(f"Error cleaning up old recovery points: {e}")
     
-    # Méthodes de restauration de sauvegarde
-    def _restore_full_backup(self, backup_path: Path, operations_performed: List[str]) -> bool:
-        """
-        Restore complete database from backup.
-
-        Args:
-            backup_path: Path to backup directory
-            operations_performed: List to append operation descriptions
-
-        Returns:
-            True if restoration was successful
-        """
-        try:
-            # Chargement des métadonnées du backup
-            with open(backup_path / 'system_info.json', 'r') as f:
-                import json
-                backup_info = json.load(f)
-
-            # Suppression de toutes les tables existantes
-            tables = self.conn.execute("SHOW TABLES").fetchall()
-            for table in tables:
-                self.conn.execute(f"DROP TABLE IF EXISTS {table[0]}")
-
-            # Restauration de chaque table depuis CSV
-            for csv_file in backup_path.glob('*.csv'):
-                table_name = csv_file.stem
-                df = pl.read_csv(csv_file)
-                self.conn.register('temp_restore', df)
-                self.conn.execute(f"CREATE TABLE {table_name} AS SELECT * FROM temp_restore")
-                self.conn.execute("DROP VIEW temp_restore")
-                operations_performed.append(f"Restored table {table_name} ({len(df)} rows)")
-
-            return True
-
-        except Exception as e:
-            self.logger.error(f"Full backup restoration failed: {e}")
-            return False
-
-    def _restore_schema_backup(self, backup_path: Path, operations_performed: List[str]) -> bool:
-        """
-        Restore only schema structure (preserves existing data where possible).
-
-        Args:
-            backup_path: Path to backup directory
-            operations_performed: List to append operation descriptions
-
-        Returns:
-            True if restoration was successful
-        """
-        try:
-            import json
-
-            with open(backup_path / 'schema_backup.json', 'r') as f:
-                schema_info = json.load(f)
-
-            for table_name, table_schema in schema_info.get('tables', {}).items():
-                if not self._table_exists(table_name):
-                    # Recréation de la table avec la structure du backup
-                    columns = ", ".join([f"{col['name']} {col['type']}" for col in table_schema.get('columns', [])])
-                    if columns:
-                        self.conn.execute(f"CREATE TABLE {table_name} ({columns})")
-                        operations_performed.append(f"Recreated table {table_name}")
-
-            return True
-
-        except Exception as e:
-            self.logger.error(f"Schema restoration failed: {e}")
-            return False
-
-    def _restore_metadata_backup(self, backup_path: Path, operations_performed: List[str]) -> bool:
-        """
-        Restore metadata table from backup.
-
-        Args:
-            backup_path: Path to backup directory
-            operations_performed: List to append operation descriptions
-
-        Returns:
-            True if restoration was successful
-        """
-        try:
-            metadata_path = backup_path / 'metadata.csv'
-            if not metadata_path.exists():
-                return False
-
-            df = pl.read_csv(metadata_path)
-            self.conn.execute("DELETE FROM metadata")
-            self.conn.register('temp_meta', df)
-            self.conn.execute("INSERT INTO metadata SELECT * FROM temp_meta")
-            self.conn.execute("DROP VIEW temp_meta")
-            operations_performed.append(f"Restored metadata ({len(df)} entries)")
-
-            return True
-
-        except Exception as e:
-            self.logger.error(f"Metadata restoration failed: {e}")
-            return False
-
     def _cleanup_orphaned_references_for_issue(self, issue: ValidationIssue) -> bool:
         """
         Clean orphaned references for a specific issue.
