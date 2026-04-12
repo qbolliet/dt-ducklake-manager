@@ -3,7 +3,7 @@
 import logging
 import os
 # Module à tester
-from dashboard_template_database.utils.logger import _init_logger
+from dt_ducklake_manager.utils.logger import _init_logger
 
 # Test de la création automatique du dossier de logs
 def test_init_logger_creates_directory():

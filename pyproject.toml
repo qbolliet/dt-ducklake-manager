@@ -1,5 +1,5 @@
 [project]
-name = "dashboard-template-database"
+name = "dt-ducklake-manager"
 version = "0.1.0"
 description = "DuckDB Database for dashboard template"
 authors = [{ name = "Quentin Bolliet", email = "bolliet.quentin@gmail.com" }]

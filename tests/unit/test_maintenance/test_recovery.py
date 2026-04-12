@@ -4,12 +4,12 @@ import os
 # Module de tests
 import pytest
 # Modules du package à tester
-from dashboard_template_database.maintenance import (
+from dt_ducklake_manager.maintenance import (
     DatabaseRecoveryManager,
     RecoveryStrategy,
     RecoveryOperation,
 )
-from dashboard_template_database.maintenance.recovery import BackupType, RecoveryPoint, RecoveryResult
+from dt_ducklake_manager.maintenance.recovery import BackupType, RecoveryPoint, RecoveryResult
 
 
 # ===========================================================================
@@ -62,7 +62,7 @@ def test_recovery_result_initialization():
     """Test that RecoveryResult is correctly initialized.
 
     Examples:
-        >>> from dashboard_template_database.maintenance.recovery import RecoveryResult
+        >>> from dt_ducklake_manager.maintenance.recovery import RecoveryResult
         >>> result = RecoveryResult(success=True, strategy_used=RecoveryStrategy.VALIDATE_AND_FIX)
         >>> result.success
         True

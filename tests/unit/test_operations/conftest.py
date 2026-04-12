@@ -5,7 +5,7 @@ from datetime import datetime
 # Module de tests
 import pytest
 # Modules du package à tester
-from dashboard_template_database.operations import DatabaseUpdater, DatabaseDeleter
+from dt_ducklake_manager.operations import DatabaseUpdater, DatabaseDeleter
 
 
 # ---------------------------------------------------------------------------

@@ -1,1 +1,1 @@
-::: dashboard_template_database.storage.local.saver.save_local
+::: dt_ducklake_manager.storage.local.saver.save_local

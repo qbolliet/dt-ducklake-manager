@@ -5,7 +5,7 @@ import narwhals as nw
 # Module de tests
 import pytest
 # Modules du package à tester
-from dashboard_template_database.schema import SchemaBuilder
+from dt_ducklake_manager.schema import SchemaBuilder
 
 
 # ---------------------------------------------------------------------------

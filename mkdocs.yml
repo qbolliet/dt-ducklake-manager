@@ -1,6 +1,6 @@
 site_name: Dashboard Template Database
-site_url: https://qbolliet.github.io/dashboard-template-database/
-repo_url: https://github.com/qbolliet/dashboard-template-database
+site_url: https://qbolliet.github.io/dt-ducklake-manager/
+repo_url: https://github.com/qbolliet/dt-ducklake-manager
 site_dir: site
 docs_dir: docs
 theme:

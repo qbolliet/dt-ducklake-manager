@@ -1,1 +1,1 @@
-::: dashboard_template_database.storage.s3._connection._S3Connection
+::: dt_ducklake_manager.storage.s3._connection._S3Connection

@@ -7,7 +7,7 @@ from datetime import datetime
 # Module de tests
 import pytest
 # Modules du package
-from dashboard_template_database.schema import DuckLakeTablesBuilder
+from dt_ducklake_manager.schema import DuckLakeTablesBuilder
 
 # Initialisation d'un jeu de données d'exemple
 @pytest.fixture

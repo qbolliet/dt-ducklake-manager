@@ -6,8 +6,8 @@ import pytest
 # DuckDB
 import duckdb
 # Modules à tester
-from dashboard_template_database.connection import DuckLakeConnector
-from dashboard_template_database.maintenance import DuckLakeMaintenance
+from dt_ducklake_manager.connection import DuckLakeConnector
+from dt_ducklake_manager.maintenance import DuckLakeMaintenance
 
 
 # ---------------------------------------------------------------------------

@@ -1,1 +1,1 @@
-::: dashboard_template_database.storage.local.loader.load_local
+::: dt_ducklake_manager.storage.local.loader.load_local

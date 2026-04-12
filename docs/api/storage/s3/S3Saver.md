@@ -1,1 +1,1 @@
-::: dashboard_template_database.storage.s3.saver.S3Saver
+::: dt_ducklake_manager.storage.s3.saver.S3Saver

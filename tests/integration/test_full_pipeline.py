@@ -6,9 +6,9 @@ from datetime import datetime
 # Module de tests
 import pytest
 # Modules du package à tester
-from dashboard_template_database.schema import DuckLakeTablesBuilder
-from dashboard_template_database.operations import DatabaseUpdater, DatabaseDeleter
-from dashboard_template_database.maintenance import DatabaseAuditor, ValidationLevel
+from dt_ducklake_manager.schema import DuckLakeTablesBuilder
+from dt_ducklake_manager.operations import DatabaseUpdater, DatabaseDeleter
+from dt_ducklake_manager.maintenance import DatabaseAuditor, ValidationLevel
 
 
 # ===========================================================================
@@ -166,7 +166,7 @@ def test_build_then_audit(built_ducklake_schema):
     report = auditor.validate_database(ValidationLevel.STANDARD)
 
     # Vérification que le rapport est bien retourné
-    from dashboard_template_database.maintenance import ValidationReport
+    from dt_ducklake_manager.maintenance import ValidationReport
     assert isinstance(report, ValidationReport)
 
     # Une base fraîche et correctement construite ne doit pas avoir de problèmes critiques

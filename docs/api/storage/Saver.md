@@ -1,1 +1,1 @@
-::: dashboard_template_database.storage.saver.Saver
+::: dt_ducklake_manager.storage.saver.Saver

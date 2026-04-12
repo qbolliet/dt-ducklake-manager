@@ -6,7 +6,7 @@ import polars as pl
 # Module de tests
 import pytest
 # Modules du package à tester
-from dashboard_template_database.utils.sql import (
+from dt_ducklake_manager.utils.sql import (
     remove_dataframe_duplicates,
     build_database_duplicate_removal_query,
     _build_sql_filter,

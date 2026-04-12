@@ -1,1 +1,1 @@
-::: dashboard_template_database.builders.tables.DuckdbTablesBuilder
+::: dt_ducklake_manager.builders.tables.DuckdbTablesBuilder

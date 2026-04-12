@@ -2,7 +2,7 @@
 # Module de tests
 import pytest
 # Modules du package à tester
-from dashboard_template_database._internal.managers.transaction import (
+from dt_ducklake_manager._internal.managers.transaction import (
     TransactionManager,
     TransactionState,
     TransactionOperation,

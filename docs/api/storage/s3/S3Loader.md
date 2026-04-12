@@ -1,1 +1,1 @@
-::: dashboard_template_database.storage.s3.loader.S3Loader
+::: dt_ducklake_manager.storage.s3.loader.S3Loader

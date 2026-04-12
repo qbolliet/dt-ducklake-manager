@@ -21,7 +21,7 @@ This package is built to create :
 ### Package and dependencies
 
 ```bash
-git clone https://github.com/qbolliet/dashboard-template-database.git
+git clone https://github.com/qbolliet/dt-ducklake-manager.git
 poetry install
 ```
 
@@ -53,9 +53,9 @@ Here's an example of how to use the functions in the package:
 
 ```python
 import pandas as pd
-from dashboard_template_database.builders.schema import SchemaBuilder
-from dashboard_template_database.builders.tables import DuckdbTablesBuilder
-from dashboard_template_database.loaders.local.loader import Loader
+from dt_ducklake_manager.builders.schema import SchemaBuilder
+from dt_ducklake_manager.builders.tables import DuckdbTablesBuilder
+from dt_ducklake_manager.loaders.local.loader import Loader
 
 # Load a sample DataFrame
 loader = Loader()

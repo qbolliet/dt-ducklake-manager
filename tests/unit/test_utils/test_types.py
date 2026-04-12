@@ -5,7 +5,7 @@ import polars as pl
 # Module de tests
 import pytest
 # Module du package à tester
-from dashboard_template_database.utils.types import map_python_to_sql_type
+from dt_ducklake_manager.utils.types import map_python_to_sql_type
 
 
 # ---------------------------------------------------------------------------

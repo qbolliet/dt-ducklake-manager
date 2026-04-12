@@ -1,7 +1,7 @@
 # Database schema builder for dashboard template
 
 This directory contains utilities to build a specific generic database scheme from a table.
-> Full documentation is available [here](https://qbolliet.github.io/dashboard-template-database/)
+> Full documentation is available [here](https://qbolliet.github.io/dt-ducklake-manager/)
 
 ## Objectives
 
@@ -25,7 +25,7 @@ The repository is organized as follow :
 ### Package and dependencies
 
 ```bash
-git clone https://github.com/qbolliet/dashboard-template-database.git
+git clone https://github.com/qbolliet/dt-ducklake-manager.git
 poetry install
 ```
 
@@ -57,9 +57,9 @@ Here's an example of how to use the functions in the package:
 
 ```python
 import pandas as pd
-from dashboard_template_database.builders.schema import SchemaBuilder
-from dashboard_template_database.builders.tables import DuckdbTablesBuilder
-from dashboard_template_database.loaders.local.loader import Loader
+from dt_ducklake_manager.builders.schema import SchemaBuilder
+from dt_ducklake_manager.builders.tables import DuckdbTablesBuilder
+from dt_ducklake_manager.loaders.local.loader import Loader
 
 # Load a sample DataFrame
 loader = Loader()

@@ -5,7 +5,7 @@ import polars as pl
 # Module de tests
 import pytest
 # Utilisation de DimensionManager (sous-classe concrète) pour instancier BaseSchemaManager
-from dashboard_template_database._internal.managers.dimension import DimensionManager
+from dt_ducklake_manager._internal.managers.dimension import DimensionManager
 
 
 # ---------------------------------------------------------------------------

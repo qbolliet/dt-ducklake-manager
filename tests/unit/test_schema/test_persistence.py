@@ -8,7 +8,7 @@ import duckdb
 # Module de tests
 import pytest
 # Module à tester
-from dashboard_template_database.schema import DuckLakeTablesBuilder
+from dt_ducklake_manager.schema import DuckLakeTablesBuilder
 
 
 # ---------------------------------------------------------------------------

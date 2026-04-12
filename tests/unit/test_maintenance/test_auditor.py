@@ -4,13 +4,13 @@ import time
 # Module de tests
 import pytest
 # Modules du package à tester
-from dashboard_template_database.maintenance import (
+from dt_ducklake_manager.maintenance import (
     DatabaseAuditor,
     ValidationLevel,
     ValidationReport,
     ValidationIssue,
 )
-from dashboard_template_database.maintenance.auditor import IssueType, IssueSeverity
+from dt_ducklake_manager.maintenance.auditor import IssueType, IssueSeverity
 
 
 # ===========================================================================

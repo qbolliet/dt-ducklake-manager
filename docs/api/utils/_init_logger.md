@@ -1,1 +1,1 @@
-::: dashboard_template_database.utils.logger._init_logger
+::: dt_ducklake_manager.utils.logger._init_logger

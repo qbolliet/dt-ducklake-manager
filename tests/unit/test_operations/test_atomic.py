@@ -2,12 +2,12 @@
 # Module de tests
 import pytest
 # Modules du package à tester
-from dashboard_template_database.operations import (
+from dt_ducklake_manager.operations import (
     AtomicDatabaseOperations,
     AtomicOperationConfig,
     AtomicOperationResult,
 )
-from dashboard_template_database.operations.atomic import AtomicOperationType
+from dt_ducklake_manager.operations.atomic import AtomicOperationType
 
 
 # ===========================================================================

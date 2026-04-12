@@ -1,1 +1,1 @@
-::: dashboard_template_database.builders.schema.SchemaBuilder
+::: dt_ducklake_manager.builders.schema.SchemaBuilder

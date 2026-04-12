@@ -2,7 +2,7 @@
 # Module de tests
 import pytest
 # Modules du package à tester
-from dashboard_template_database.operations import DatabaseDeleter
+from dt_ducklake_manager.operations import DatabaseDeleter
 
 
 # ---------------------------------------------------------------------------

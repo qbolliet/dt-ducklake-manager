@@ -1,1 +1,1 @@
-::: dashboard_template_database.storage.loader.Loader
+::: dt_ducklake_manager.storage.loader.Loader
