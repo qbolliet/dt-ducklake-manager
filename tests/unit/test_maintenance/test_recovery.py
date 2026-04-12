@@ -38,7 +38,7 @@ def test_recovery_operation_custom_parameters():
 
     Examples:
         >>> op = RecoveryOperation(
-        ...     strategy=RecoveryStrategy.RESTORE_BACKUP,
+        ...     strategy=RecoveryStrategy.USE_SNAPSHOT_HISTORY,
         ...     target_recovery_point='rp_001',
         ...     auto_validate=False,
         ... )
@@ -46,7 +46,7 @@ def test_recovery_operation_custom_parameters():
         'rp_001'
     """
     op = RecoveryOperation(
-        strategy=RecoveryStrategy.RESTORE_BACKUP,
+        strategy=RecoveryStrategy.USE_SNAPSHOT_HISTORY,
         target_recovery_point='rp_001',
         parameters={'snapshot_version': 5},
         auto_validate=False,
@@ -175,18 +175,18 @@ def test_delete_recovery_point(recovery_manager):
 
 # Test de la création d'un point de récupération de type SCHEMA_BACKUP
 def test_create_schema_backup(recovery_manager):
-    """Test that a SCHEMA_BACKUP recovery point can be created.
+    """Test that a METADATA_BACKUP recovery point can be created and listed by type.
 
     Args:
         recovery_manager: DatabaseRecoveryManager fixture.
     """
     recovery_id = recovery_manager.create_recovery_point(
-        backup_type=BackupType.SCHEMA_BACKUP,
+        backup_type=BackupType.METADATA_BACKUP,
         description='Schema backup test',
     )
     assert recovery_id is not None
 
     # Vérification du type de backup
-    points = recovery_manager.list_recovery_points(backup_type=BackupType.SCHEMA_BACKUP)
+    points = recovery_manager.list_recovery_points(backup_type=BackupType.METADATA_BACKUP)
     assert len(points) >= 1
-    assert points[0].backup_type == BackupType.SCHEMA_BACKUP
+    assert points[0].backup_type == BackupType.METADATA_BACKUP

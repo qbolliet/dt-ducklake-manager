@@ -229,15 +229,15 @@ def test_build_duplicate_query_keep_last():
 
 
 # Test de la construction de la requête SQL avec keep=False
-def test_build_duplicate_query_keep_false():
-    """Test that keep=False produces a query using HAVING COUNT(*) > 1.
+def test_build_duplicate_query_keep_none():
+    """Test that keep='none' produces a query using HAVING COUNT(*) > 1.
 
     Examples:
-        >>> query = build_database_duplicate_removal_query(['id'], False)
+        >>> query = build_database_duplicate_removal_query(['id'], 'none')
         >>> 'HAVING COUNT(*) > 1' in query
         True
     """
-    query = build_database_duplicate_removal_query(['id'], False)
+    query = build_database_duplicate_removal_query(['id'], 'none')
     assert 'HAVING COUNT(*) > 1' in query
     assert 'DELETE FROM fact_table' in query
 
