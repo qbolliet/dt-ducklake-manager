@@ -154,6 +154,31 @@ def test_validation_report_finalize(empty_report):
     assert len(empty_report.recommendations) > 0
 
 
+# Test que finalize génère la bonne recommandation de performance pour Ducklake (pas d'index)
+def test_validation_report_finalize_generates_ducklake_performance_recommendation(empty_report):
+    """Test that finalize generates a Ducklake-specific performance recommendation.
+
+    The recommendation must not reference 'indexes' and must instead reference
+    Ducklake maintenance or partition configuration.
+
+    Args:
+        empty_report: Empty ValidationReport fixture.
+    """
+    empty_report.add_issue(ValidationIssue(IssueType.PERFORMANCE_ISSUE, IssueSeverity.LOW, 'fact_table'))
+    empty_report.finalize()
+
+    # Vérification qu'une recommandation de performance a été générée
+    assert len(empty_report.recommendations) > 0
+    perf_recommendation = next(
+        (r for r in empty_report.recommendations
+         if 'performance' in r.lower() or 'ducklake' in r.lower() or 'partition' in r.lower()),
+        None
+    )
+    assert perf_recommendation is not None
+    # Vérification que la recommandation ne mentionne plus les index DuckDB
+    assert 'index' not in perf_recommendation.lower()
+
+
 # Test que finalize génère des recommandations pour les issues d'intégrité de schéma
 def test_validation_report_finalize_generates_schema_recommendation(empty_report):
     """Test that finalize generates a recommendation when schema issues are present.
@@ -232,7 +257,11 @@ def test_validate_database_standard_level(built_ducklake_schema):
 
 # Test de validate_database au niveau COMPREHENSIVE
 def test_validate_database_comprehensive_level(built_ducklake_schema):
-    """Test that validate_database with COMPREHENSIVE level returns a ValidationReport.
+    """Test that validate_database with COMPREHENSIVE level returns a valid report.
+
+    On a healthy in-memory schema there should be no critical issues.
+    The new Ducklake-specific checks (partition and maintenance) must not raise
+    unhandled exceptions on an in-memory connection.
 
     Args:
         built_ducklake_schema: Fixture providing a DuckDB connection with a built schema.
@@ -240,8 +269,11 @@ def test_validate_database_comprehensive_level(built_ducklake_schema):
     auditor = DatabaseAuditor(connection=built_ducklake_schema)
     report = auditor.validate_database(ValidationLevel.COMPREHENSIVE)
 
+    # Vérification du type de retour et du niveau de validation
     assert isinstance(report, ValidationReport)
     assert report.validation_level == ValidationLevel.COMPREHENSIVE
+    # Vérification qu'aucun problème critique n'est remonté sur un schéma sain
+    assert report.get_critical_issues_count() == 0
 
 
 # Test de get_quick_health_check
@@ -291,3 +323,74 @@ def test_validate_operation_preconditions_delete(built_ducklake_schema):
     report = auditor.validate_operation_preconditions('delete', filters=[('id', '=', 1)])
 
     assert isinstance(report, ValidationReport)
+
+
+# ===========================================================================
+# Tests des nouvelles vérifications Ducklake
+# ===========================================================================
+
+# Test de _validate_partition_configuration sur connexion in-memory
+def test_validate_partition_configuration_reports_missing_partition(built_ducklake_schema):
+    """Test that _validate_partition_configuration reports a LOW PERFORMANCE_ISSUE
+    when no partition key is configured (case for all in-memory connections).
+
+    Args:
+        built_ducklake_schema: Fixture providing a DuckDB connection with a built schema.
+    """
+    auditor = DatabaseAuditor(connection=built_ducklake_schema)
+    report = ValidationReport(validation_level=ValidationLevel.COMPREHENSIVE)
+
+    # Appel direct de la méthode pour isoler son comportement
+    auditor._validate_partition_configuration(report)
+
+    # Vérification qu'un problème de performance est bien signalé
+    perf_issues = report.get_issues_by_type(IssueType.PERFORMANCE_ISSUE)
+    assert len(perf_issues) >= 1
+    # Vérification de la sévérité LOW
+    assert all(issue.severity == IssueSeverity.LOW for issue in perf_issues)
+    # Vérification que le problème concerne la table des faits
+    assert any(issue.table_name == 'fact_table' for issue in perf_issues)
+
+
+# Test de _validate_ducklake_maintenance silencieux sur connexion in-memory
+def test_validate_ducklake_maintenance_silent_on_in_memory(built_ducklake_schema):
+    """Test that _validate_ducklake_maintenance adds no issues on in-memory connections.
+
+    Ducklake catalog functions (ducklake_snapshots, ducklake_data_files) are not
+    available on in-memory DuckDB connections. The method must fail silently and
+    not add any issues or raise exceptions.
+
+    Args:
+        built_ducklake_schema: Fixture providing a DuckDB connection with a built schema.
+    """
+    auditor = DatabaseAuditor(connection=built_ducklake_schema)
+    report = ValidationReport(validation_level=ValidationLevel.COMPREHENSIVE)
+
+    # Appel direct — ne doit pas lever d'exception
+    auditor._validate_ducklake_maintenance(report)
+
+    # Vérification qu'aucun problème n'est ajouté sur une connexion in-memory
+    assert len(report.issues) == 0
+
+
+# Test de la correction du filtre python_type dans _validate_categorical_thresholds
+def test_validate_categorical_thresholds_detects_string_columns_with_low_cardinality(built_ducklake_schema):
+    """Test that _validate_categorical_thresholds correctly identifies non-categorical
+    String columns using the Narwhals type name 'String' (not pandas 'object').
+
+    With categorical_threshold=10, 'high_cardinality' (5 unique values, not marked
+    categorical) should be flagged as a potential categorical column.
+
+    Args:
+        built_ducklake_schema: Fixture providing a DuckDB connection with a built schema.
+    """
+    # Utilisation d'un seuil supérieur aux 5 valeurs uniques de high_cardinality pour déclencher la détection
+    auditor = DatabaseAuditor(connection=built_ducklake_schema, categorical_threshold=10)
+    report = ValidationReport(validation_level=ValidationLevel.COMPREHENSIVE)
+
+    auditor._validate_categorical_thresholds(report)
+
+    # Vérification que la colonne 'high_cardinality' est détectée comme potentiellement catégorielle
+    perf_issues = report.get_issues_by_type(IssueType.PERFORMANCE_ISSUE)
+    column_names = [issue.column_name for issue in perf_issues]
+    assert 'high_cardinality' in column_names

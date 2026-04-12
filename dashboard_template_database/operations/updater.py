@@ -739,19 +739,19 @@ class DatabaseUpdater(BaseSchemaManager):
             # Vérification de l'existence de la fact_table
             if not self._table_exists('fact_table'):
                 # Aucune fact_table : toutes les lignes sont à insérer
-                return df.clone(), df.slice(0, 0)
+                return df.clone(), df.head(0)
 
             # Vérification que la fact_table n'est pas vide
             count = self.conn.execute("SELECT COUNT(*) FROM fact_table").fetchone()[0]
             if count == 0:
-                return df.clone(), df.slice(0, 0)
+                return df.clone(), df.head(0)
 
             # Construction de la condition de jointure corrélée sur les clés primaires composites :
             # chaque colonne du DataFrame (alias upd) est comparée à la fact_table (alias f).
             conditions = " AND ".join([f"f.{key} = upd.{key}" for key in primary_keys])
 
-            # Enregistrement temporaire du DataFrame pour les requêtes SQL (polars natif)
-            self.conn.register('_upd_split', nw.to_native(df))
+            # Enregistrement dans DuckDB
+            self.conn.register('_upd_split', df.to_arrow().select(df.columns))
 
             # Lignes dont les clés primaires existent déjà en base → à mettre à jour
             rows_to_update = nw.from_native(self.conn.execute(f"""
@@ -779,7 +779,7 @@ class DatabaseUpdater(BaseSchemaManager):
         except Exception as e:
             self.logger.error(f"Error splitting DataFrame by primary key existence: {e}")
             # En cas d'erreur, on traite toutes les lignes comme des insertions
-            return df.clone(), df.slice(0, 0)
+            return df.clone(), df.head(0)
 
     # Méthode auxiliaire de compaction DuckLake
     def _run_ducklake_compaction(self, fact_table: str = 'fact_table') -> None:

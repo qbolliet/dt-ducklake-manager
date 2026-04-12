@@ -160,7 +160,7 @@ class ValidationReport:
         # Identification des problèmes de performance
         performance_issues = self.get_issues_by_type(IssueType.PERFORMANCE_ISSUE)
         if performance_issues:
-            self.recommendations.append("Optimize indexes and table structure to improve performance")
+            self.recommendations.append("Run Ducklake maintenance (compaction, snapshot expiration) and review partition configuration to improve performance")
 
 
 # Classe d'audit de la base de données
@@ -251,12 +251,14 @@ class DatabaseAuditor:
             if validation_level == ValidationLevel.COMPREHENSIVE:
                 # Validation des seuils de variables catégorielles
                 self._validate_categorical_thresholds(report)
-                # Validation de l'efficacité de l'index
-                self._validate_index_efficiency(report)
+                # Vérification de la configuration de partitionnement Ducklake
+                self._validate_partition_configuration(report)
                 # Validation de la qualité des données
                 self._validate_data_quality(report)
                 # Validation de la violation des contraintes
                 self._validate_constraint_violations(report)
+                # Vérification de l'état de maintenance Ducklake (snapshots, fichiers)
+                self._validate_ducklake_maintenance(report)
             
             # Finalisation du rapport
             report.finalize()
@@ -693,18 +695,18 @@ class DatabaseAuditor:
             metadata_df = self._get_metadata()
             
             # Vérification des colonnes marquées comme catégorielles
-            categorical_columns = metadata_df[metadata_df['is_categorical'] == True]['name'].tolist()
-            
+            categorical_columns = metadata_df.filter(pl.col('is_categorical'))['name'].to_list()
+
             # Parcours des colonnes
             for col_name in categorical_columns:
                 if not self._column_exists_in_fact_table(col_name):
-                    continue # Colonne manquante dans fact_table (déjà signalé dans A AJOUTER)
-                
+                    continue # Colonne manquante dans fact_table (déjà signalé dans _validate_fact_dimension_consistency)
+
                 # Comptage des valeurs uniques
                 unique_count_query = f"SELECT COUNT(DISTINCT {col_name}) FROM fact_table WHERE {col_name} IS NOT NULL"
                 result = self.conn.execute(unique_count_query).fetchone()
                 unique_count = result[0] if result else 0
-                
+
                 # Si le nombre de modalités est supérieur au seuil, renvoie un problème
                 if unique_count > self.categorical_threshold:
                     issue = ValidationIssue(
@@ -717,12 +719,12 @@ class DatabaseAuditor:
                         additional_info={'unique_count': unique_count, 'threshold': self.categorical_threshold}
                     )
                     report.add_issue(issue)
-            
-            # Vérification des colonnes non-catégorielles qui pourraient l'être
-            non_categorical_columns = metadata_df[
-                (metadata_df['is_categorical'] == False) & 
-                (metadata_df['python_type'] == 'object')
-            ]['name'].tolist()
+
+            # Vérification des colonnes non-catégorielles de type String qui pourraient être catégorielles
+            non_categorical_columns = metadata_df.filter(
+                (~pl.col('is_categorical')) &
+                (pl.col('python_type') == 'String')
+            )['name'].to_list()
             
             # Parcours des colonnes
             for col_name in non_categorical_columns:
@@ -804,63 +806,143 @@ class DatabaseAuditor:
             )
             report.add_issue(issue)
     
-    # Méthode de validation de l'efficacité des index
-    def _validate_index_efficiency(self, report: ValidationReport) -> None:
-        """Validate index effectiveness."""
+    # Méthode de validation de la configuration de partitionnement de la table des faits
+    def _validate_partition_configuration(self, report: ValidationReport) -> None:
+        """Validate that fact_table has a Ducklake partition configuration.
+
+        In Ducklake, Hive-style partitioning is the primary query optimisation
+        mechanism (replaces DuckDB ART indexes). The absence of a partition key
+        on fact_table is reported as a LOW-severity PERFORMANCE_ISSUE so that
+        the operator knows to add ``PARTITION BY`` when recreating the table.
+
+        Args:
+            report: The ValidationReport to which issues are appended.
+
+        Example:
+            >>> auditor._validate_partition_configuration(report)
+            >>> perf_issues = report.get_issues_by_type(IssueType.PERFORMANCE_ISSUE)
+        """
         try:
-            # Récupération des index existants
-            indexes = self._get_existing_indexes()
-            
-            # Ajout d'un message au rapport si aucun index n'est attaché à la base de données
-            if len(indexes) == 0:
+            # Vérification de l'existence de la table des faits avant tout contrôle
+            if not self._table_exists('fact_table'):
+                return
+
+            # Tentative de récupération de la clé de partition via duckdb_tables()
+            partition_key: Optional[str] = None
+            try:
+                result = self.conn.execute(
+                    "SELECT partition_key FROM duckdb_tables() WHERE table_name = 'fact_table'"
+                ).fetchone()
+                if result is not None:
+                    partition_key = result[0]
+            except Exception:
+                # Indisponibilité de duckdb_tables() sur cette connexion — utilisation du fallback
+                partition_key = None
+
+            # Tentative de détection via SHOW CREATE TABLE en cas d'échec de la méthode principale
+            if not partition_key:
+                try:
+                    ddl_result = self.conn.execute("SHOW CREATE TABLE fact_table").fetchone()
+                    ddl_text: str = ddl_result[0] if ddl_result else ""
+                    if "PARTITION BY" in ddl_text.upper():
+                        return  # Partitionnement détecté dans le DDL — pas de problème à signaler
+                except Exception:
+                    pass
+
+            # Signalement de l'absence de partitionnement comme problème de performance mineur
+            if not partition_key:
                 issue = ValidationIssue(
                     issue_type=IssueType.PERFORMANCE_ISSUE,
                     severity=IssueSeverity.LOW,
                     table_name='fact_table',
-                    description="No indexes found on fact_table",
-                    suggested_fix="Consider adding indexes on frequently queried columns"
+                    description=(
+                        "No Ducklake partition key configured on fact_table. "
+                        "Hive-style partitioning is the primary optimisation mechanism in Ducklake."
+                    ),
+                    suggested_fix=(
+                        "Recreate fact_table with PARTITION BY on the most frequently filtered column "
+                        "(e.g. a date or category column) to improve query performance."
+                    )
                 )
                 report.add_issue(issue)
-                return
-            
-            # Vérification des index sur des colonnes inexistantes
-            fact_columns = set(self._get_fact_table_columns())
-            
-            # Parcours des index
-            for index_info in indexes:
-                # Nom de l'index
-                index_name = index_info.get('index_name', '')
-                # Expressions
-                expressions = index_info.get('expressions', '')
-                
-                # Analyse simplifiée pour détecter les colonnes référencées
-                referenced_columns = []
-                for col in fact_columns:
-                    if col in expressions or f"fact_table.{col}" in expressions:
-                        referenced_columns.append(col)
-                
-                # Si aucune colonne valide n'est trouvée mais que l'index référence fact_table
-                if not referenced_columns and "fact_table" in expressions:
-                    issue = ValidationIssue(
-                        issue_type=IssueType.ORPHANED_REFERENCE,
-                        severity=IssueSeverity.LOW,
-                        table_name='fact_table',
-                        description=f"Potentially orphaned index '{index_name}'",
-                        suggested_fix=f"Review and possibly drop index '{index_name}'",
-                        additional_info={'index_expression': expressions}
-                    )
-                    report.add_issue(issue)
-            
+
         except Exception as e:
-            # Création d'un problème dans le rapport associé à l'erreur
+            # Création d'un problème dans le rapport associé à l'erreur de vérification
             issue = ValidationIssue(
                 issue_type=IssueType.PERFORMANCE_ISSUE,
                 severity=IssueSeverity.LOW,
                 table_name='fact_table',
-                description=f"Error validating index efficiency: {str(e)}",
-                suggested_fix="Check index configuration and structure"
+                description=f"Error validating partition configuration: {str(e)}",
+                suggested_fix="Check fact_table definition and DuckDB version compatibility"
             )
             report.add_issue(issue)
+
+    # Méthode de vérification de l'état de maintenance du catalogue Ducklake
+    def _validate_ducklake_maintenance(self, report: ValidationReport) -> None:
+        """Validate that Ducklake maintenance tasks are not overdue.
+
+        Checks snapshot accumulation and data file fragmentation via Ducklake
+        catalog functions. These queries are silently skipped on in-memory or
+        non-Ducklake connections where catalog functions are unavailable.
+
+        Args:
+            report: The ValidationReport to which issues are appended.
+
+        Example:
+            >>> auditor._validate_ducklake_maintenance(report)
+            >>> perf_issues = report.get_issues_by_type(IssueType.PERFORMANCE_ISSUE)
+        """
+        # Seuils déclenchant une recommandation de maintenance
+        SNAPSHOT_THRESHOLD: int = 100
+        DATA_FILES_THRESHOLD: int = 500
+
+        # Vérification du nombre de snapshots accumulés dans le catalogue Ducklake
+        try:
+            result = self.conn.execute("SELECT COUNT(*) FROM ducklake_snapshots()").fetchone()
+            snapshot_count: int = result[0] if result else 0
+            if snapshot_count > SNAPSHOT_THRESHOLD:
+                issue = ValidationIssue(
+                    issue_type=IssueType.PERFORMANCE_ISSUE,
+                    severity=IssueSeverity.LOW,
+                    table_name='fact_table',
+                    description=(
+                        f"Ducklake snapshot history is large ({snapshot_count} snapshots). "
+                        f"Threshold: {SNAPSHOT_THRESHOLD}."
+                    ),
+                    suggested_fix=(
+                        "Run ducklake_expire_snapshots() to purge old snapshots "
+                        "and then ducklake_cleanup_old_files() to reclaim storage."
+                    ),
+                    additional_info={'snapshot_count': snapshot_count, 'threshold': SNAPSHOT_THRESHOLD}
+                )
+                report.add_issue(issue)
+        except Exception:
+            # Indisponibilité de ducklake_snapshots() sur connexion in-memory ou non-Ducklake — ignoré silencieusement
+            pass
+
+        # Vérification de la fragmentation des fichiers de données Ducklake
+        try:
+            result = self.conn.execute("SELECT COUNT(*) FROM ducklake_data_files()").fetchone()
+            data_file_count: int = result[0] if result else 0
+            if data_file_count > DATA_FILES_THRESHOLD:
+                issue = ValidationIssue(
+                    issue_type=IssueType.PERFORMANCE_ISSUE,
+                    severity=IssueSeverity.LOW,
+                    table_name='fact_table',
+                    description=(
+                        f"Ducklake data file count is high ({data_file_count} files). "
+                        f"Excessive small files degrade scan performance. Threshold: {DATA_FILES_THRESHOLD}."
+                    ),
+                    suggested_fix=(
+                        "Run ducklake_merge_adjacent_files() or ducklake_rewrite_data_files() "
+                        "to compact fragmented Parquet files."
+                    ),
+                    additional_info={'data_file_count': data_file_count, 'threshold': DATA_FILES_THRESHOLD}
+                )
+                report.add_issue(issue)
+        except Exception:
+            # Indisponibilité de ducklake_data_files() sur connexion in-memory ou non-Ducklake — ignoré silencieusement
+            pass
     
     # Méthode de validation de la qualité des données
     def _validate_data_quality(self, report: ValidationReport) -> None:
@@ -961,7 +1043,7 @@ class DatabaseAuditor:
                         severity=IssueSeverity.HIGH,
                         table_name=dim_table,
                         column_name='value',
-                        description=f"Primary key constraint violation: {duplicate_count} duplicate values in {dim_table}.value",
+                        description=f"Applicative uniqueness violation: {duplicate_count} duplicate values found in {dim_table}.value (no DDL constraint enforced in Ducklake)",
                         suggested_fix=f"Remove duplicate values from {dim_table}",
                         affected_rows=duplicate_count,
                         additional_info={'duplicate_values': [row[0] for row in duplicates_result[:5]]}  # Première 5 valeurs
@@ -1136,15 +1218,6 @@ class DatabaseAuditor:
             return pl.from_arrow(self.conn.execute("SELECT * FROM metadata").fetch_arrow_table())
         except:
             return pl.DataFrame()
-    
-    # Méthode auxiliaire d'obtention de la liste des indices disponibles dans la base de données
-    def _get_existing_indexes(self) -> List[Dict[str, str]]:
-        """Get the list of existing indexes."""
-        try:
-            result = self.conn.execute("SELECT index_name, expressions FROM duckdb_indexes()").fetchall()
-            return [{'index_name': row[0], 'expressions': row[1]} for row in result]
-        except:
-            return []
     
     # méthode auxiliaire de vérification de l'existence d'une table
     def _table_exists(self, table_name: str) -> bool:
