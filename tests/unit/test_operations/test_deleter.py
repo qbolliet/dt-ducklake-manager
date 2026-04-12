@@ -6,29 +6,6 @@ from dashboard_template_database.operations import DatabaseDeleter
 
 
 # ---------------------------------------------------------------------------
-# Fixtures locales
-# ---------------------------------------------------------------------------
-
-# Initialisation d'un DatabaseDeleter pour les tests
-@pytest.fixture
-def deleter(built_ducklake_schema):
-    """Create a DatabaseDeleter instance for testing.
-
-    Args:
-        built_ducklake_schema: Fixture providing a DuckDB connection with a built schema.
-
-    Returns:
-        DatabaseDeleter: initialized with the test connection.
-    """
-    return DatabaseDeleter(
-        connection=built_ducklake_schema,
-        categorical_threshold=4,
-        enable_validation=True,
-        auto_cleanup=True,
-    )
-
-
-# ---------------------------------------------------------------------------
 # Tests de l'initialisation
 # ---------------------------------------------------------------------------
 
@@ -177,3 +154,53 @@ def test_delete_columns_single_column(deleter, built_ducklake_schema):
         row[0] for row in built_ducklake_schema.execute("DESCRIBE fact_table").fetchall()
     ]
     assert 'value' not in columns_after
+
+
+# ---------------------------------------------------------------------------
+# Tests de changement de statut catégoriel lors d'une suppression
+# ---------------------------------------------------------------------------
+
+# Test de conversion non-catégorielle → catégorielle après suppression de lignes
+def test_delete_rows_non_categorical_becomes_categorical(deleter, built_ducklake_schema):
+    """Test that a non-categorical column becomes categorical when its unique value count
+    drops to or below the threshold after rows are deleted.
+
+    The sample schema is built with categorical_threshold=4. The column 'high_cardinality'
+    initially holds 5 unique values (val_100..val_104) and is NOT categorical. The row
+    with id=5 carries the only occurrence of 'val_104'. Deleting that row leaves exactly
+    4 distinct values (val_100..val_103) which equals the threshold, triggering conversion
+    to categorical and creation of dim_high_cardinality.
+
+    Args:
+        deleter: DatabaseDeleter fixture with auto_cleanup=True.
+        built_ducklake_schema: DuckDB connection with the built schema.
+    """
+    # Vérification initiale : high_cardinality n'est pas catégorielle (5 valeurs > seuil=4)
+    is_cat_before = built_ducklake_schema.execute(
+        "SELECT is_categorical FROM metadata WHERE name = 'high_cardinality'"
+    ).fetchone()[0]
+    assert is_cat_before is False
+
+    # Vérification initiale : la table de dimension dim_high_cardinality n'existe pas encore
+    tables_before = [row[0] for row in built_ducklake_schema.execute("SHOW TABLES").fetchall()]
+    assert 'dim_high_cardinality' not in tables_before
+
+    # Suppression de la ligne id=5 (seul porteur de 'val_104') :
+    # après suppression, high_cardinality n'aura plus que 4 valeurs uniques (val_100..val_103)
+    # ce qui est ≤ seuil=4 → conversion en variable catégorielle déclenchée par le nettoyage
+    # automatique (_detect_new_categorical_after_deletion via _cleanup_orphaned_data_comprehensive).
+    deleted_count = deleter.delete_rows(
+        filters=[('id', '=', 5)],
+        use_transaction=False,
+    )
+    assert deleted_count == 1
+
+    # Vérification : high_cardinality est désormais catégorielle dans les métadonnées
+    is_cat_after = built_ducklake_schema.execute(
+        "SELECT is_categorical FROM metadata WHERE name = 'high_cardinality'"
+    ).fetchone()[0]
+    assert is_cat_after is True
+
+    # Vérification : la table de dimension dim_high_cardinality a bien été créée
+    tables_after = [row[0] for row in built_ducklake_schema.execute("SHOW TABLES").fetchall()]
+    assert 'dim_high_cardinality' in tables_after
