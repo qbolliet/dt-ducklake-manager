@@ -148,7 +148,7 @@ class DatabaseUpdater(BaseSchemaManager):
                         update_df: IntoDataFrame,
                         check_duplicates_db: bool = True,
                         check_duplicates_update: bool = True,
-                        keep: Literal[False, 'first', 'last'] = False,
+                        keep: Literal['any', 'none', 'first', 'last'] = 'none',
                         use_batch_processing: bool = True,
                         use_transaction: bool = True,
                         compact_after_update: bool = True) -> bool:
@@ -214,7 +214,7 @@ class DatabaseUpdater(BaseSchemaManager):
                                       update_df: nw.DataFrame,
                                       check_duplicates_db: bool,
                                       check_duplicates_update: bool,
-                                      keep: Literal[False, 'first', 'last'],
+                                      keep: Literal['any', 'none', 'first', 'last'],
                                       use_batch_processing: bool,
                                       compact_after_update: bool) -> bool:
         """Perform transactional database update with validation and rollback.
@@ -412,7 +412,7 @@ class DatabaseUpdater(BaseSchemaManager):
                                 update_df: nw.DataFrame,
                                 check_duplicates_db: bool,
                                 check_duplicates_update: bool,
-                                keep: Literal[False, 'first', 'last'],
+                                keep: Literal['any', 'none', 'first', 'last'],
                                 use_batch_processing: bool,
                                 compact_after_update: bool) -> bool:
         """Perform direct database update without transaction wrapping.
@@ -559,7 +559,7 @@ class DatabaseUpdater(BaseSchemaManager):
                 db_values_series = nw.from_native(
                     self.conn.execute(
                         f"SELECT DISTINCT {col_name} FROM fact_table WHERE {col_name} IS NOT NULL"
-                    ).fetchdf()[col_name],
+                    ).pl()[col_name],
                     series_only=True,
                 )
                 # Vérification du seuil sur l'ensemble complet des valeurs

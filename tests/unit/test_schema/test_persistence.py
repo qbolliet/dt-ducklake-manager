@@ -87,7 +87,7 @@ def test_create_duckdb_metadata_table(ducklake_builder):
     ducklake_builder.create_duckdb_metadata_table(table_name='test_metadata')
 
     # Vérification que la table existe et a la structure attendue
-    result = ducklake_builder.conn.execute("SELECT * FROM test_metadata").fetchdf()
+    result = ducklake_builder.conn.execute("SELECT * FROM test_metadata").pl()
     assert 'name' in result.columns
     assert 'label' in result.columns
     assert 'python_type' in result.columns
@@ -117,7 +117,7 @@ def test_create_duckdb_dimension_tables(ducklake_builder):
 
     # Vérification de la structure des tables de dimension
     for table in ['category', 'status']:
-        result = ducklake_builder.conn.execute(f"SELECT * FROM test_dim_{table}").fetchdf()
+        result = ducklake_builder.conn.execute(f"SELECT * FROM test_dim_{table}").pl()
         assert 'value' in result.columns
         assert 'label' in result.columns
 
@@ -141,16 +141,16 @@ def test_create_duckdb_fact_table(ducklake_builder, sample_df):
     ducklake_builder.create_duckdb_fact_table(table_name='test_fact')
 
     # Vérification que la table des faits existe et a les bonnes dimensions
-    result = ducklake_builder.conn.execute("SELECT * FROM test_fact").fetchdf()
+    result = ducklake_builder.conn.execute("SELECT * FROM test_fact").pl()
     assert result.shape[0] == len(sample_df)
     assert 'category' in result.columns
     assert 'status' in result.columns
 
     # Vérification que les valeurs de la fact table sont des indices entiers de la dim table
-    dim_category = ducklake_builder.conn.execute("SELECT * FROM dim_category").fetchdf()
-    dim_status = ducklake_builder.conn.execute("SELECT * FROM dim_status").fetchdf()
-    assert set(result['category'].unique()) <= set(dim_category['value'].astype(int))
-    assert set(result['status'].unique()) <= set(dim_status['value'].astype(int))
+    dim_category = ducklake_builder.conn.execute("SELECT * FROM dim_category").pl()
+    dim_status = ducklake_builder.conn.execute("SELECT * FROM dim_status").pl()
+    assert set(result['category'].to_list()) <= set(dim_category['value'].cast(pl.Int64).to_list())
+    assert set(result['status'].to_list()) <= set(dim_status['value'].cast(pl.Int64).to_list())
 
 
 # ---------------------------------------------------------------------------

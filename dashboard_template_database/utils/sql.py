@@ -6,7 +6,7 @@ import logging
 
 # Fonction de suppression des duplicats d'un jeu de données
 def remove_dataframe_duplicates(df: IntoDataFrame,
-                               keep: Literal[False, 'first', 'last'],
+                               keep: Literal['any', 'none', 'first', 'last'],
                                logger: Optional[logging.Logger] = None,
                                source: str = "DataFrame",
                                primary_keys: Optional[List[str]] = None) -> nw.DataFrame :
@@ -15,7 +15,7 @@ def remove_dataframe_duplicates(df: IntoDataFrame,
 
     Args:
         df: DataFrame to process (pandas, polars, or any narwhals-compatible format)
-        keep (Literal[False, 'first', 'last']): Strategy for keeping duplicates
+        keep (Literal['any', 'none', 'first', 'last']): Strategy for keeping duplicates
         logger (Optional[logging.Logger]): Logger instance for tracking
         source (str): Data source identifier for logging
         primary_keys (Optional[List[str]]): List of column names to use as the
@@ -63,14 +63,14 @@ def remove_dataframe_duplicates(df: IntoDataFrame,
 
 # Fonction de construction d'une requête SQL de suppression des duplicats en base
 def build_database_duplicate_removal_query(columns_to_check: list,
-                                         keep: Literal[False, 'first', 'last'],
+                                         keep: Literal['any', 'none', 'first', 'last'],
                                          table_name: str = 'fact_table') -> str:
     """
     Build SQL query for removing duplicates from a database table.
 
     Args:
         columns_to_check (list): List of column names to check for duplicates
-        keep (Literal[False, 'first', 'last']): Strategy for keeping duplicates
+        keep (Literal['any', 'none', 'first', 'last']): Strategy for keeping duplicates
         table_name (str): Name of the table to deduplicate
 
     Returns:
@@ -87,7 +87,7 @@ def build_database_duplicate_removal_query(columns_to_check: list,
     # Construction de la chaîne des colonnes
     columns_str = ', '.join(columns_to_check)
 
-    if keep == False:
+    if keep == 'none':
         # Suppression de TOUTES les occurrences des clés en doublon.
         # On identifie les groupes ayant plus d'une ligne par leur valeur de colonnes.
         return f"""
@@ -104,7 +104,8 @@ def build_database_duplicate_removal_query(columns_to_check: list,
         # rowid est utilisé comme discriminant au sein d'une seule instruction DML :
         # il est stable dans ce contexte (file + row-group offset Parquet, cohérent
         # pour toute la durée du DELETE). Il n'est pas supposé stable entre sessions.
-        order_clause = "ASC" if keep == 'first' else "DESC"
+        # 'any' est traité comme 'first' (conservation d'une occurrence arbitraire).
+        order_clause = "ASC" if keep in ('first', 'any') else "DESC"
         return f"""
         DELETE FROM {table_name}
         WHERE rowid NOT IN (

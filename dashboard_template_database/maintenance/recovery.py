@@ -594,7 +594,7 @@ class DatabaseRecoveryManager:
     
     # Méthode de création d'une sauvegarde du schéma
     def _create_schema_backup(self, backup_path: Path) -> bool:
-        """Create a schema-only backup (table structures and indexes).
+        """Create a schema-only backup (table structures).
 
         Args:
             backup_path: Directory path where schema backup will be stored.
@@ -605,7 +605,6 @@ class DatabaseRecoveryManager:
         try:
             schema_info = {
                 'tables': {},
-                'indexes': [],
                 'timestamp': time.time()
             }
             
@@ -615,13 +614,6 @@ class DatabaseRecoveryManager:
             for table_name in tables:
                 structure = self.conn.execute(f"DESCRIBE {table_name}").fetchall()
                 schema_info['tables'][table_name] = structure
-            
-            # Sauvegarde des index
-            try:
-                indexes = self.conn.execute("SELECT index_name, expressions FROM duckdb_indexes()").fetchall()
-                schema_info['indexes'] = indexes
-            except:
-                schema_info['indexes'] = []
             
             # Sauvegarde dans un fichier JSON
             schema_file = backup_path / "schema_backup.json"
@@ -719,11 +711,11 @@ class DatabaseRecoveryManager:
                 snapshots_df = self.conn.execute(
                     f"SELECT * FROM {self.catalog_alias}.ducklake_snapshots"
                     f"('{self.ducklake_schema}') ORDER BY snapshot_id DESC"
-                ).fetchdf()
+                ).pl()
                 snapshot_count = len(snapshots_df)
                 operations_performed.append(
-                    f"Snapshots disponibles : {snapshot_count} "
-                    f"(dernier snapshot_id = {snapshots_df['snapshot_id'].iloc[0] if snapshot_count > 0 else 'N/A'})"
+                    f"Available snapshots : {snapshot_count} "
+                    f"(last snapshot_id = {snapshots_df['snapshot_id'][0] if snapshot_count > 0 else 'N/A'})"
                 )
 
                 # Identification du snapshot cible si fourni
@@ -734,8 +726,8 @@ class DatabaseRecoveryManager:
                     # Suggérer l'avant-dernier snapshot comme point de restauration sûr
                     suggested = snapshots_df['snapshot_id'].iloc[1]
                     operations_performed.append(
-                        f"Snapshot suggéré pour time-travel : {suggested} "
-                        f"(avant-dernier)"
+                        f"Suggested snapshot for time-travel : {suggested} "
+                        f"(second to last)"
                     )
 
             except Exception as e:
@@ -938,7 +930,7 @@ class DatabaseRecoveryManager:
                     # Récupération des valeurs distinctes de la fact_table
                     values = self.conn.execute(
                         f"SELECT DISTINCT {col_name} FROM fact_table WHERE {col_name} IS NOT NULL"
-                    ).fetchdf()[col_name]
+                    ).pl()[col_name]
                     dim_mgr.update_dimension_values(col_name, values)
                     self.logger.info(f"Created missing dimension table for {col_name}")
                     return True
@@ -1023,8 +1015,8 @@ class DatabaseRecoveryManager:
 
             # Étape 2: Reconstruction des tables de dimension manquantes
             try:
-                metadata = self.conn.execute("SELECT name, is_categorical FROM metadata").fetchdf()
-                categorical_cols = metadata[metadata['is_categorical'] == True]['name'].tolist()
+                metadata = self.conn.execute("SELECT name, is_categorical FROM metadata").pl()
+                categorical_cols = metadata.filter(pl.col('is_categorical') == True)['name'].to_list()
 
                 for col_name in categorical_cols:
                     dim_table = f"dim_{col_name}"
@@ -1033,7 +1025,7 @@ class DatabaseRecoveryManager:
                         dim_mgr.create_dimension_table(col_name)
                         values = self.conn.execute(
                             f"SELECT DISTINCT {col_name} FROM fact_table WHERE {col_name} IS NOT NULL"
-                        ).fetchdf()[col_name]
+                        ).pl()[col_name]
                         added = dim_mgr.update_dimension_values(col_name, values)
                         operations_performed.append(f"Recreated {dim_table} with {added} values")
             except Exception as e:
@@ -1047,7 +1039,7 @@ class DatabaseRecoveryManager:
                         # Ajout des valeurs de fact_table manquantes dans dimension
                         fact_values = self.conn.execute(
                             f"SELECT DISTINCT {col_name} FROM fact_table WHERE {col_name} IS NOT NULL"
-                        ).fetchdf()[col_name]
+                        ).pl()[col_name]
                         added = dim_mgr.update_dimension_values(col_name, fact_values)
                         if added > 0:
                             operations_performed.append(f"Added {added} missing entries to {dim_table}")
@@ -1698,7 +1690,7 @@ class DatabaseRecoveryManager:
                 dim_mgr.create_dimension_table(col_name)
                 values = self.conn.execute(
                     f"SELECT DISTINCT {col_name} FROM fact_table WHERE {col_name} IS NOT NULL"
-                ).fetchdf()[col_name]
+                ).pl()[col_name]
                 dim_mgr.update_dimension_values(col_name, values)
                 self.logger.info(f"Created missing dimension table {dim_table}")
                 return True
@@ -1709,7 +1701,7 @@ class DatabaseRecoveryManager:
                 dim_mgr.create_dimension_table(col_name)
                 values = self.conn.execute(
                     f"SELECT DISTINCT {col_name} FROM fact_table WHERE {col_name} IS NOT NULL"
-                ).fetchdf()[col_name]
+                ).pl()[col_name]
                 dim_mgr.update_dimension_values(col_name, values)
                 self.logger.info(f"Rebuilt corrupted dimension table {dim_table}")
                 return True
