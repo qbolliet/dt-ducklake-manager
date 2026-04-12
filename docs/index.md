@@ -29,7 +29,7 @@ The package is then usable as any other python package.
 
 ### Parametrisation
 
-File in the `config.yaml` file :
+File in the `config/database.yaml` file :
 ```yaml
 INPUT_DATA : '../data/df_origin.csv'
 OUTPUT_DATA : '../outputs/database.db'

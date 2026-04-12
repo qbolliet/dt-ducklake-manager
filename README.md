@@ -18,7 +18,7 @@ The repository is organized as follow :
 * the `notebooks` folder contains illustrative notebooks
 * the `outputs` folder contains program outputs.
 * the `parameters` folder contains default labels for naming columns.
-* the `scripts` folder contains a script for building a database from the table and with the paramters listed in the `config.yaml` file at the root.
+* the `scripts` folder contains a script for building a database from the table and with the paramters listed in the `config/database.yaml` file.
 
 ## Installation
 
@@ -33,7 +33,7 @@ The package is then usable as any other python package.
 
 ### Parametrisation
 
-File in the `config.yaml` file :
+File in the `config/database.yaml` file :
 ```yaml
 INPUT_DATA : '../data/df_origin.csv'
 OUTPUT_DATA : '../outputs/database.db'
