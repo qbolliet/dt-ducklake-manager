@@ -436,7 +436,7 @@ class DatabaseAuditor:
             # Vérification des valeurs nulles dans les colonnes critiques
             for col in ['name', 'python_type', 'sql_type']:
                 if col in metadata_df.columns:
-                    null_count = metadata_df[col].isna().sum()
+                    null_count = metadata_df[col].is_null().sum()
                     if null_count > 0:
                         issue = ValidationIssue(
                             issue_type=IssueType.DATA_INTEGRITY,
@@ -451,7 +451,7 @@ class DatabaseAuditor:
             
             # Vérification des doublons dans les noms de colonnes (il s'agit d ela clé primaire de la base de données)
             if 'name' in metadata_df.columns:
-                duplicate_names = metadata_df[metadata_df['name'].duplicated()]['name'].tolist()
+                duplicate_names = metadata_df.filter(pl.col('name').is_duplicated())['name'].to_list()
                 if duplicate_names:
                     issue = ValidationIssue(
                         issue_type=IssueType.DATA_INTEGRITY,
@@ -492,7 +492,7 @@ class DatabaseAuditor:
             fact_columns = set(self._get_fact_table_columns())
             
             # Vérification des colonnes catégorielles
-            categorical_columns = metadata_df[metadata_df['is_categorical'] == True]['name'].tolist()
+            categorical_columns = metadata_df.filter(pl.col('is_categorical'))['name'].to_list()
             
             # Parcours des colonnes catégorielles
             for col_name in categorical_columns:
@@ -534,7 +534,7 @@ class DatabaseAuditor:
                     self._validate_referential_integrity(report, col_name, dim_table_name)
             
             # Vérification des colonnes dans fact_table qui ne sont pas dans metadata
-            metadata_columns = set(metadata_df['name'].tolist())
+            metadata_columns = set(metadata_df['name'].to_list())
             missing_metadata = fact_columns - metadata_columns
             
             if missing_metadata:
@@ -643,7 +643,7 @@ class DatabaseAuditor:
             metadata_df = self._get_metadata()
             fact_structure = self._get_table_structure('fact_table')
             # Parcours des colonnes de méta-données
-            for _, metadata_row in metadata_df.iterrows():
+            for metadata_row in metadata_df.iter_rows(named=True):
                 # Extraction du nom de la colonne
                 col_name = metadata_row['name']
                 # Extraction du type SQL attendu
@@ -769,7 +769,7 @@ class DatabaseAuditor:
             dimension_tables = [table for table in existing_tables if table.startswith('dim_')]
             # Extraction des métadonnées
             metadata_df = self._get_metadata()
-            expected_dimensions = set(f"dim_{row['name']}" for _, row in metadata_df.iterrows() if row['is_categorical'])
+            expected_dimensions = set(f"dim_{name}" for name in metadata_df.filter(pl.col('is_categorical'))['name'].to_list())
             
             # Tables de dimension sans métadonnées correspondantes
             orphaned_dimension_tables = set(dimension_tables) - expected_dimensions
@@ -785,7 +785,7 @@ class DatabaseAuditor:
                 report.add_issue(issue)
             
             # Vérification des entrées orphelines dans les dimensions existantes
-            for _, metadata_row in metadata_df.iterrows():
+            for metadata_row in metadata_df.iter_rows(named=True):
                 if metadata_row['is_categorical']:
                     # Nom de la table de dimension
                     col_name = metadata_row['name']
