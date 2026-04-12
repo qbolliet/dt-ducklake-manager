@@ -131,7 +131,7 @@ class BaseSchemaManager(ABC):
         """
         # Exécution de la requête
         result = self.conn.execute(
-            "SELECT name FROM metadata WHERE is_categorical = true"
+            "SELECT name FROM metadata WHERE is_categorical IS TRUE"
         ).fetchall()
         return [row[0] for row in result]
     
@@ -223,7 +223,7 @@ class BaseSchemaManager(ABC):
         """
         # Requête pour récupérer les noms des colonnes marquées comme clés primaires
         result = self.conn.execute(
-            "SELECT name FROM metadata WHERE is_primary_key = true"
+            "SELECT name FROM metadata WHERE is_primary_key IS TRUE"
         ).fetchall()
         return [row[0] for row in result]
 
@@ -290,7 +290,7 @@ class BaseSchemaManager(ABC):
                 SET label = ?, python_type = ?, sql_type = ?, is_categorical = ?
                 WHERE name = ?
                 """,
-                [label, dtype, sql_type, is_categorical, column],
+                [label, dtype_str, sql_type, is_categorical, column],
             )
         
         # Invalidation du cache
