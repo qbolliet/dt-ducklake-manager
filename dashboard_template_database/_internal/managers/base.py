@@ -117,12 +117,9 @@ class BaseSchemaManager(ABC):
         Returns:
             List of column names
         """
-        try:
-            # Exécution de la requête
-            result = self.conn.execute("DESCRIBE fact_table").fetchall()
-            return [row[0] for row in result]
-        except:
-            return []
+        # Exécution de la requête
+        result = self.conn.execute("DESCRIBE fact_table").fetchall()
+        return [row[0] for row in result]
     
     # Méthode d'extraction des colonnes catégorielles
     def _get_categorical_columns(self) -> List[str]:
@@ -132,14 +129,11 @@ class BaseSchemaManager(ABC):
         Returns:
             List of categorical column names
         """
-        try:
-            # Exécution de la requête
-            result = self.conn.execute(
-                "SELECT name FROM metadata WHERE is_categorical = true"
-            ).fetchall()
-            return [row[0] for row in result]
-        except:
-            return []
+        # Exécution de la requête
+        result = self.conn.execute(
+            "SELECT name FROM metadata WHERE is_categorical = true"
+        ).fetchall()
+        return [row[0] for row in result]
     
     # Méthode de vérification de l'existance d'une table dans la base de données
     def _table_exists(self, table_name: str) -> bool:
@@ -152,15 +146,12 @@ class BaseSchemaManager(ABC):
         Returns:
             True if table exists
         """
-        try:
-            # Exécution de la requête
-            result = self.conn.execute(
-                "SELECT COUNT(*) FROM information_schema.tables WHERE table_name = ?",
-                [table_name]
-            ).fetchone()
-            return result[0] > 0
-        except:
-            return False
+        # Exécution de la requête
+        result = self.conn.execute(
+            "SELECT COUNT(*) FROM information_schema.tables WHERE table_name = ?",
+            [table_name]
+        ).fetchone()
+        return result[0] > 0
     
     # Méthode de vérification de l'existence d'une colonne dans une table
     def _column_exists(self, column: str, table: str = "fact_table") -> bool:
@@ -174,12 +165,9 @@ class BaseSchemaManager(ABC):
         Returns:
             True if column exists
         """
-        try:
-            # Extraction des colonnes de la table
-            columns = [row[0] for row in self.conn.execute(f"DESCRIBE {table}").fetchall()]
-            return column in columns
-        except:
-            return False
+        # Extraction des colonnes de la table
+        columns = [row[0] for row in self.conn.execute(f"DESCRIBE {table}").fetchall()]
+        return column in columns
     
     # Méthode de vérification si une colonne a une table de dimension (équivalent à vérifier si elle est catégorielle)
     def _is_dimension_column(self, column: str) -> bool:
@@ -192,14 +180,12 @@ class BaseSchemaManager(ABC):
         Returns:
             True if column is categorical
         """
-        try:
-            result = self.conn.execute(
-                "SELECT is_categorical FROM metadata WHERE name = ?",
-                [column]
-            ).fetchone()
-            return result[0] if result else False
-        except:
-            return False
+        # Recherche du statut catégoriel
+        result = self.conn.execute(
+            "SELECT is_categorical FROM metadata WHERE name = ?",
+            [column]
+        ).fetchone()
+        return result[0] if result else False
 
     # Méthode de vérification si une colonne est marquée comme clé primaire
     def _is_primary_key_column(self, column: str) -> bool:
@@ -216,14 +202,12 @@ class BaseSchemaManager(ABC):
             >>> manager._is_primary_key_column('user_id')
             True
         """
-        try:
-            result = self.conn.execute(
-                "SELECT is_primary_key FROM metadata WHERE name = ?",
-                [column]
-            ).fetchone()
-            return result[0] if result else False
-        except:
-            return False
+        # Recherche du statut de clé primaire dans les méta-données
+        result = self.conn.execute(
+            "SELECT is_primary_key FROM metadata WHERE name = ?",
+            [column]
+        ).fetchone()
+        return result[0] if result else False
 
     # Méthode d'extraction de toutes les colonnes marquées comme clés primaires
     def _get_primary_key_columns(self) -> List[str]:
@@ -237,14 +221,11 @@ class BaseSchemaManager(ABC):
             >>> manager._get_primary_key_columns()
             ['user_id', 'timestamp']
         """
-        try:
-            # Requête pour récupérer les noms des colonnes marquées comme clés primaires
-            result = self.conn.execute(
-                "SELECT name FROM metadata WHERE is_primary_key = true"
-            ).fetchall()
-            return [row[0] for row in result]
-        except:
-            return []
+        # Requête pour récupérer les noms des colonnes marquées comme clés primaires
+        result = self.conn.execute(
+            "SELECT name FROM metadata WHERE is_primary_key = true"
+        ).fetchall()
+        return [row[0] for row in result]
 
     # Méthodes de gestion des métadonnées
     # Méthode d'ajout d'une colonne aux méta-données
@@ -450,8 +431,8 @@ class BaseSchemaManager(ABC):
                 
         except Exception as e:
             self.logger.error(f"An error occurred while detecting null values: {e}")
+            raise
         
-        return null_only_columns
     
     # Méthode de vérification du seuil catégoriel
     def _check_categorical_threshold(self, values: nw.Series, threshold: Optional[int] = None) -> bool:
