@@ -1,17 +1,19 @@
 # Importation des modules
 # Modules de base
 import os
-import narwhals as nw
-from narwhals.typing import IntoDataFrame
 from pathlib import Path
-from typing import Dict, Optional, Literal, List
+from typing import Literal
+
 # Duckdb
 import duckdb
+import narwhals as nw
+from narwhals.typing import IntoDataFrame
+
+# Utilitaires de traitement des données
+from ..utils.sql import remove_dataframe_duplicates
 
 # Modules ad hoc
 from .inference import SchemaBuilder
-# Utilitaires de traitement des données
-from ..utils.sql import remove_dataframe_duplicates
 
 # Emplacement du fichier
 FILE_PATH = Path(os.path.abspath(__file__))
@@ -46,14 +48,16 @@ class DuckLakeTablesBuilder:
     """
 
     # Initialisation
-    def __init__(self,
-                 df: IntoDataFrame,
-                 categorical_threshold: Optional[int] = None,
-                 primary_keys: Optional[List[str]] = None,
-                 connection: Optional[duckdb.DuckDBPyConnection] = None,
-                 log_filename: Optional[os.PathLike] = os.path.join(
-                     FILE_PATH.parents[2], "logs/ducklake_tables_builder.log"
-                 )):
+    def __init__(
+        self,
+        df: IntoDataFrame,
+        categorical_threshold: int | None = None,
+        primary_keys: list[str] | None = None,
+        connection: duckdb.DuckDBPyConnection | None = None,
+        log_filename: os.PathLike | None = os.path.join(
+            FILE_PATH.parents[2], "logs/ducklake_tables_builder.log"
+        ),
+    ):
         """
         Initialize the DuckLakeTablesBuilder.
 
@@ -91,10 +95,14 @@ class DuckLakeTablesBuilder:
         # Initialisation de la connexion DuckLake.
         # Le fallback :memory: est réservé aux tests unitaires ; en production la
         # connexion doit toujours être fournie via DuckLakeConnector.connect().
-        self.conn = connection if connection is not None else duckdb.connect(':memory:')
+        self.conn = connection if connection is not None else duckdb.connect(":memory:")
 
     # Méthode de création de la table des méta-données
-    def create_duckdb_metadata_table(self, table_name: Optional[str] = 'metadata', column_labels: Optional[Dict[str, str]] = None) -> None:
+    def create_duckdb_metadata_table(
+        self,
+        table_name: str | None = "metadata",
+        column_labels: dict[str, str] | None = None,
+    ) -> None:
         """
         Create a metadata table in DuckDB.
 
@@ -104,7 +112,7 @@ class DuckLakeTablesBuilder:
 
         """
         # Création de la table des méta-données si elle n'existe pas déjà
-        if not hasattr(self.schema_builder, 'df_metadata'):
+        if not hasattr(self.schema_builder, "df_metadata"):
             _ = self.schema_builder.create_metadata_table(column_labels)
 
         # Création de la table avec schéma explicite
@@ -114,7 +122,9 @@ class DuckLakeTablesBuilder:
         # supplémentaire dans pa.Table.from_pandas() lorsque l'index n'est pas séquentiel
         # (ex. après un .sort()). On filtre explicitement sur les colonnes nommées du DataFrame.
         df_meta = self.schema_builder.df_metadata
-        self.conn.register('temp_metadata', df_meta.to_arrow().select(list(df_meta.columns)))
+        self.conn.register(
+            "temp_metadata", df_meta.to_arrow().select(list(df_meta.columns))
+        )
         self.conn.execute(f"""
             CREATE TABLE {table_name} (
                 name VARCHAR,
@@ -131,13 +141,17 @@ class DuckLakeTablesBuilder:
             INSERT INTO {table_name}
             SELECT * FROM temp_metadata
         """)
-        self.conn.execute('DROP VIEW temp_metadata')
+        self.conn.execute("DROP VIEW temp_metadata")
 
         # Logging
         self.logger.info("Successfully registered duckdb meta-data table")
 
     # Méthode de création des tables de dimensions
-    def create_duckdb_dimension_tables(self, table_prefix: Optional[str] = 'dim_', column_labels: Optional[Dict[str, str]] = None) -> None:
+    def create_duckdb_dimension_tables(
+        self,
+        table_prefix: str | None = "dim_",
+        column_labels: dict[str, str] | None = None,
+    ) -> None:
         """
         Create dimension tables in DuckDB for categorical variables.
 
@@ -147,7 +161,7 @@ class DuckLakeTablesBuilder:
 
         """
         # Création du dictionnaire des tables de dimensions si elles n'existent pas déjà
-        if not hasattr(self.schema_builder, 'dimension_tables'):
+        if not hasattr(self.schema_builder, "dimension_tables"):
             _ = self.schema_builder.create_dimension_tables(column_labels)
 
         # Création de chaque table de dimension dans DuckDB
@@ -156,7 +170,9 @@ class DuckLakeTablesBuilder:
             table_name = f"{table_prefix}{dim_name}"
             # Conversion vers Arrow pour garantir la compatibilité DuckDB quel que soit le backend narwhals.
             # Note : .select() filtre l'index pandas éventuel (cf. create_duckdb_metadata_table).
-            self.conn.register('temp_dim', dim_df.to_arrow().select(list(dim_df.columns)))
+            self.conn.register(
+                "temp_dim", dim_df.to_arrow().select(list(dim_df.columns))
+            )
 
             # Création d'une table avec schéma explicite.
             # Pas de contrainte PRIMARY KEY : DuckLake ne supporte pas les contraintes DDL.
@@ -175,13 +191,21 @@ class DuckLakeTablesBuilder:
             """)
 
             # Ajout de la vue correspondante
-            self.conn.execute('DROP VIEW temp_dim')
+            self.conn.execute("DROP VIEW temp_dim")
 
             # Logging
-            self.logger.info(f"Successfully registered duckdb dimension table for {dim_name}")
+            self.logger.info(
+                f"Successfully registered duckdb dimension table for {dim_name}"
+            )
 
     # Méthode de création de la table d'informations
-    def create_duckdb_fact_table(self, table_name: Optional[str] = 'fact_table', table_prefix: Optional[str] = 'dim_', column_labels: Optional[Dict[str, str]] = None, partition_by: Optional[List[str]] = None) -> None:
+    def create_duckdb_fact_table(
+        self,
+        table_name: str | None = "fact_table",
+        table_prefix: str | None = "dim_",
+        column_labels: dict[str, str] | None = None,
+        partition_by: list[str] | None = None,
+    ) -> None:
         """
         Create a fact table in DuckDB with optional Hive partitioning.
 
@@ -197,7 +221,7 @@ class DuckLakeTablesBuilder:
             >>> builder.create_duckdb_fact_table(partition_by=['country', 'year'])
         """
         # Création de la table d'informations si elle n'existe pas déjà
-        if not hasattr(self.schema_builder, 'df_fact'):
+        if not hasattr(self.schema_builder, "df_fact"):
             _ = self.schema_builder.create_fact_table(column_labels)
 
         df_fact = self.schema_builder.df_fact
@@ -206,14 +230,13 @@ class DuckLakeTablesBuilder:
 
         # Conversion vers Arrow pour garantir la compatibilité DuckDB quel que soit le backend narwhals.
         # Note : .select() filtre l'index pandas éventuel (cf. create_duckdb_metadata_table).
-        self.conn.register('temp_fact', df_fact.to_arrow().select(list(df_fact.columns)))
+        self.conn.register(
+            "temp_fact", df_fact.to_arrow().select(list(df_fact.columns))
+        )
 
         # Inférence du schéma de colonnes depuis la table de métadonnées.
         # Utilisée dans les deux chemins DDL explicites (avec primary_keys ou avec partition_by).
-        needs_explicit_ddl = (
-            (primary_keys and len(primary_keys) > 0)
-            or partition_by
-        )
+        needs_explicit_ddl = (primary_keys and len(primary_keys) > 0) or partition_by
 
         if needs_explicit_ddl:
             # Récupération des types SQL pour chaque colonne depuis la table de métadonnées
@@ -235,7 +258,7 @@ class DuckLakeTablesBuilder:
             # Création de la table avec DDL explicite
             query = f"""
                 CREATE TABLE {table_name} (
-                    {', '.join(column_definitions)}
+                    {", ".join(column_definitions)}
                 ){partition_clause}
             """
             self.conn.execute(query)
@@ -243,13 +266,13 @@ class DuckLakeTablesBuilder:
             # Insertion des données depuis la vue temporaire
             self.conn.execute(f"""
                 INSERT INTO {table_name}
-                SELECT {', '.join(df_fact.columns)}
+                SELECT {", ".join(df_fact.columns)}
                 FROM temp_fact
             """)
 
             # Logging des clés logiques (non contraintes DDL)
             if primary_keys and len(primary_keys) > 0:
-                pk_columns = ', '.join(primary_keys)
+                pk_columns = ", ".join(primary_keys)
                 self.logger.info(
                     f"Logical primary keys registered in the metadata table for the fact_table : ({pk_columns})"
                 )
@@ -257,23 +280,34 @@ class DuckLakeTablesBuilder:
             # Chemin CTAS (sans partition ni clés primaires) : plus performant, pas de DDL intermédiaire
             query = f"""
                 CREATE TABLE {table_name} AS
-                SELECT {', '.join(df_fact.columns)}
+                SELECT {", ".join(df_fact.columns)}
                 FROM temp_fact
             """
             self.conn.execute(query)
 
         # Suppression de la vue temporaire
-        self.conn.execute('DROP VIEW temp_fact')
+        self.conn.execute("DROP VIEW temp_fact")
 
         # Logging des clés étrangères créées (pour information)
         for dim_name in self.schema_builder.dimension_tables.keys():
-            self.logger.info(f"Foreign key created for dimension '{dim_name}' - can be joined on {table_name}.{dim_name} = {table_prefix}{dim_name}.value")
+            self.logger.info(
+                f"Foreign key created for dimension '{dim_name}' - can be joined on {table_name}.{dim_name} = {table_prefix}{dim_name}.value"
+            )
 
         # Logging
-        self.logger.info(f"Successfully registered duckdb fact table")
+        self.logger.info("Successfully registered duckdb fact table")
 
     # Méthode de construction du schéma
-    def build_schema(self, metadata_table: Optional[str] = 'metadata', fact_table: Optional[str] = 'fact_table', dim_table_prefix: Optional[str] = 'dim_', column_labels: Optional[Dict[str, str]] = None, check_duplicates: bool = True, keep: Literal['any', 'none', 'first', 'last'] = 'none', partition_by: Optional[List[str]] = None) -> None:
+    def build_schema(
+        self,
+        metadata_table: str | None = "metadata",
+        fact_table: str | None = "fact_table",
+        dim_table_prefix: str | None = "dim_",
+        column_labels: dict[str, str] | None = None,
+        check_duplicates: bool = True,
+        keep: Literal["any", "none", "first", "last"] = "none",
+        partition_by: list[str] | None = None,
+    ) -> None:
         """
         Build the entire schema in DuckDB, including metadata, dimension, and fact tables.
 
@@ -308,7 +342,9 @@ class DuckLakeTablesBuilder:
         # Vérification des doublons basée sur les clés primaires
         if len(primary_keys) > 0:
             # Réduction aux colonnes clés avant détection des doublons
-            duplicates_mask = self.schema_builder.df.select(primary_keys).is_duplicated()
+            duplicates_mask = self.schema_builder.df.select(
+                primary_keys
+            ).is_duplicated()
             n_duplicates = duplicates_mask.sum()
             if n_duplicates > 0:
                 raise ValueError(
@@ -318,14 +354,12 @@ class DuckLakeTablesBuilder:
 
         # Création de la table des méta-données
         self.create_duckdb_metadata_table(
-            table_name=metadata_table,
-            column_labels=column_labels
+            table_name=metadata_table, column_labels=column_labels
         )
 
         # Création de la table de dimensions
         self.create_duckdb_dimension_tables(
-            table_prefix=dim_table_prefix,
-            column_labels=column_labels
+            table_prefix=dim_table_prefix, column_labels=column_labels
         )
 
         # Création de la table d'informations avec partitionnement optionnel

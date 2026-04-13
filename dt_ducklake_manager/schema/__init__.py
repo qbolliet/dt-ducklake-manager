@@ -4,6 +4,6 @@ from .persistence import DuckLakeTablesBuilder
 
 # Exportation au niveau du module
 __all__ = [
-    'SchemaBuilder',
-    'DuckLakeTablesBuilder',
+    "SchemaBuilder",
+    "DuckLakeTablesBuilder",
 ]

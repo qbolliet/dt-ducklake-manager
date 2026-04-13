@@ -1,20 +1,20 @@
 # Importation des modules
 # Modules de base
-import os
 # Module de tests
 import pytest
+
 # Modules du package à tester
 from dt_ducklake_manager.maintenance import (
     DatabaseRecoveryManager,
-    RecoveryStrategy,
     RecoveryOperation,
+    RecoveryStrategy,
 )
-from dt_ducklake_manager.maintenance.recovery import BackupType, RecoveryPoint, RecoveryResult
-
+from dt_ducklake_manager.maintenance.recovery import BackupType, RecoveryResult
 
 # ===========================================================================
 # Tests des dataclasses
 # ===========================================================================
+
 
 # Test de l'initialisation de RecoveryOperation
 def test_recovery_operation_initialization():
@@ -47,13 +47,13 @@ def test_recovery_operation_custom_parameters():
     """
     op = RecoveryOperation(
         strategy=RecoveryStrategy.USE_SNAPSHOT_HISTORY,
-        target_recovery_point='rp_001',
-        parameters={'snapshot_version': 5},
+        target_recovery_point="rp_001",
+        parameters={"snapshot_version": 5},
         auto_validate=False,
-        description='Test recovery',
+        description="Test recovery",
     )
-    assert op.target_recovery_point == 'rp_001'
-    assert op.parameters == {'snapshot_version': 5}
+    assert op.target_recovery_point == "rp_001"
+    assert op.parameters == {"snapshot_version": 5}
     assert op.auto_validate is False
 
 
@@ -71,7 +71,7 @@ def test_recovery_result_initialization():
         success=True,
         strategy_used=RecoveryStrategy.VALIDATE_AND_FIX,
         recovery_time=1.5,
-        operations_performed=['validate', 'fix'],
+        operations_performed=["validate", "fix"],
     )
     assert result.success is True
     assert result.strategy_used == RecoveryStrategy.VALIDATE_AND_FIX
@@ -80,6 +80,7 @@ def test_recovery_result_initialization():
 # ===========================================================================
 # Tests de DatabaseRecoveryManager
 # ===========================================================================
+
 
 # Initialisation d'un gestionnaire de récupération pour les tests
 @pytest.fixture
@@ -95,7 +96,7 @@ def recovery_manager(built_ducklake_schema, tmp_path):
     """
     return DatabaseRecoveryManager(
         connection=built_ducklake_schema,
-        backup_dir=str(tmp_path / 'backups'),
+        backup_dir=str(tmp_path / "backups"),
         categorical_threshold=4,
         max_backup_age_days=30,
         auto_backup_on_changes=False,
@@ -122,7 +123,7 @@ def test_create_recovery_point(recovery_manager):
     """
     recovery_id = recovery_manager.create_recovery_point(
         backup_type=BackupType.METADATA_BACKUP,
-        description='Test recovery point',
+        description="Test recovery point",
     )
     # Vérification que l'identifiant est bien retourné
     assert recovery_id is not None
@@ -140,7 +141,7 @@ def test_list_recovery_points_after_creation(recovery_manager):
     # Création d'un point de récupération
     recovery_manager.create_recovery_point(
         backup_type=BackupType.METADATA_BACKUP,
-        description='Test point',
+        description="Test point",
     )
 
     # Vérification que le point est bien listé
@@ -159,7 +160,7 @@ def test_delete_recovery_point(recovery_manager):
     # Création d'un point de récupération à supprimer
     recovery_id = recovery_manager.create_recovery_point(
         backup_type=BackupType.METADATA_BACKUP,
-        description='Point à supprimer',
+        description="Point à supprimer",
     )
     assert recovery_id is not None
 
@@ -182,11 +183,13 @@ def test_create_schema_backup(recovery_manager):
     """
     recovery_id = recovery_manager.create_recovery_point(
         backup_type=BackupType.METADATA_BACKUP,
-        description='Schema backup test',
+        description="Schema backup test",
     )
     assert recovery_id is not None
 
     # Vérification du type de backup
-    points = recovery_manager.list_recovery_points(backup_type=BackupType.METADATA_BACKUP)
+    points = recovery_manager.list_recovery_points(
+        backup_type=BackupType.METADATA_BACKUP
+    )
     assert len(points) >= 1
     assert points[0].backup_type == BackupType.METADATA_BACKUP

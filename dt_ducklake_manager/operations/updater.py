@@ -1,24 +1,27 @@
 # Importation des modules
 # Modules de base
 import os
-import narwhals as nw
-from narwhals.typing import IntoDataFrame
 from pathlib import Path
-from typing import Dict, List, Optional, Literal, Any, Tuple
+from typing import Any, Literal
+
 # DuckDB
 import duckdb
+import narwhals as nw
+from narwhals.typing import IntoDataFrame
 
 # Import des gestionnaires
 from .._internal.managers.base import BaseSchemaManager
-from .._internal.managers.dimension import DimensionManager
 from .._internal.managers.data import DataManager
-from .._internal.managers.transaction import (
-    TransactionManager, TransactionOperation
-)
-from ..maintenance.auditor import DatabaseAuditor, ValidationLevel, IssueSeverity
+from .._internal.managers.dimension import DimensionManager
+from .._internal.managers.transaction import TransactionManager, TransactionOperation
+from ..maintenance.auditor import DatabaseAuditor, IssueSeverity, ValidationLevel
 
 # Import des utilitaires
-from ..utils.sql import remove_dataframe_duplicates, build_database_duplicate_removal_query
+from ..utils.sql import (
+    build_database_duplicate_removal_query,
+    remove_dataframe_duplicates,
+)
+
 # Emplacement du fichier
 FILE_PATH = Path(os.path.abspath(__file__))
 
@@ -27,11 +30,11 @@ FILE_PATH = Path(os.path.abspath(__file__))
 class DatabaseUpdater(BaseSchemaManager):
     """
     Refactored database updater using the new modular architecture.
-    
+
     Provides atomic, transactional updates to DuckDB databases with proper
     validation, error recovery, and state consistency. Uses specialized managers
     for different aspects of database operations.
-    
+
     Attributes:
         dimension_mgr (DimensionManager): Manages dimension table operations
         data_mgr (DataManager): Manages fact table operations
@@ -40,16 +43,19 @@ class DatabaseUpdater(BaseSchemaManager):
         max_workers (int): Maximum number of parallel workers
         batch_size (int): Size of batches for processing large datasets
     """
+
     # Initialisation
-    def __init__(self,
-                 connection: Optional[duckdb.DuckDBPyConnection] = None,
-                 categorical_threshold: Optional[int] = 50,
-                 log_filename: Optional[os.PathLike] = None,
-                 max_workers: int = 4,
-                 batch_size: int = 10000,
-                 enable_validation: bool = True,
-                 ducklake_catalog_alias: str = 'db',
-                 ducklake_schema: str = 'main'):
+    def __init__(
+        self,
+        connection: duckdb.DuckDBPyConnection | None = None,
+        categorical_threshold: int | None = 50,
+        log_filename: os.PathLike | None = None,
+        max_workers: int = 4,
+        batch_size: int = 10000,
+        enable_validation: bool = True,
+        ducklake_catalog_alias: str = "db",
+        ducklake_schema: str = "main",
+    ):
         """
         Initialize the refactored database updater.
 
@@ -72,15 +78,25 @@ class DatabaseUpdater(BaseSchemaManager):
             >>> updater = DatabaseUpdater(conn, max_workers=8, enable_validation=True)
         """
         # Initialisation du parent
-        super().__init__(connection=connection, categorical_threshold=categorical_threshold, log_filename=log_filename)
+        super().__init__(
+            connection=connection,
+            categorical_threshold=categorical_threshold,
+            log_filename=log_filename,
+        )
 
         # Initialisation des gestionnaires spécialisés
         self.dimension_mgr = DimensionManager(
-            connection=connection, categorical_threshold=categorical_threshold, log_filename=log_filename, max_workers=max_workers
+            connection=connection,
+            categorical_threshold=categorical_threshold,
+            log_filename=log_filename,
+            max_workers=max_workers,
         )
 
         self.data_mgr = DataManager(
-            connection=connection, categorical_threshold=categorical_threshold, log_filename=log_filename, batch_size=batch_size
+            connection=connection,
+            categorical_threshold=categorical_threshold,
+            log_filename=log_filename,
+            batch_size=batch_size,
         )
 
         self.transaction_mgr = TransactionManager(
@@ -91,9 +107,15 @@ class DatabaseUpdater(BaseSchemaManager):
             ducklake_schema=ducklake_schema,
         )
 
-        self.auditor = DatabaseAuditor(
-            connection=connection, categorical_threshold=categorical_threshold, log_filename=log_filename
-        ) if enable_validation else None
+        self.auditor = (
+            DatabaseAuditor(
+                connection=connection,
+                categorical_threshold=categorical_threshold,
+                log_filename=log_filename,
+            )
+            if enable_validation
+            else None
+        )
 
         # Configuration
         self.max_workers = max_workers
@@ -103,55 +125,65 @@ class DatabaseUpdater(BaseSchemaManager):
         # Configuration DuckLake pour les appels de maintenance (compaction)
         self.ducklake_catalog_alias = ducklake_catalog_alias
         self.ducklake_schema = ducklake_schema
-    
+
     # Méthode de validation d'une opération
     def validate_operation(self, operation_type: str, **kwargs) -> bool:
         """
         Validate update operations before execution.
-        
+
         Args:
             operation_type: Type of operation to validate
             **kwargs: Operation-specific parameters
-            
+
         Returns:
             True if operation is valid
         """
         # Absence de validation si un auditeur n'est pas spécifié ou si elle n'est pas permise
         if not self.enable_validation or not self.auditor:
             return True
-        
+
         # Validation par l'auditeur
-        validation_report = self.auditor.validate_operation_preconditions(operation_type, **kwargs)
-        
+        validation_report = self.auditor.validate_operation_preconditions(
+            operation_type, **kwargs
+        )
+
         # Vérification des problèmes critiques
         if validation_report.get_critical_issues_count() > 0:
             # Logging
-            self.logger.error(f"Critical validation issues found for {operation_type} operation:")
+            self.logger.error(
+                f"Critical validation issues found for {operation_type} operation:"
+            )
             # Logging des erreurs critiques
-            for issue in validation_report.get_issues_by_severity(IssueSeverity.CRITICAL):
+            for issue in validation_report.get_issues_by_severity(
+                IssueSeverity.CRITICAL
+            ):
                 self.logger.error(f"  - {issue.description}")
             return False
-        
+
         # Avertissements pour les problèmes de priorité haute
         high_issues = validation_report.get_issues_by_severity(IssueSeverity.HIGH)
         if high_issues:
             # Logging
-            self.logger.warning(f"High priority validation issues found for {operation_type} operation:")
+            self.logger.warning(
+                f"High priority validation issues found for {operation_type} operation:"
+            )
             # Logging des problèmes de priorité haute
             for issue in high_issues:
                 self.logger.warning(f"  - {issue.description}")
-        
+
         return True
-    
+
     # Méthode principale de mise à jour
-    def update_database(self,
-                        update_df: IntoDataFrame,
-                        check_duplicates_db: bool = True,
-                        check_duplicates_update: bool = True,
-                        keep: Literal['any', 'none', 'first', 'last'] = 'none',
-                        use_batch_processing: bool = True,
-                        use_transaction: bool = True,
-                        compact_after_update: bool = True) -> bool:
+    def update_database(
+        self,
+        update_df: IntoDataFrame,
+        check_duplicates_db: bool = True,
+        check_duplicates_update: bool = True,
+        keep: Literal["any", "none", "first", "last"] = "none",
+        use_batch_processing: bool = True,
+        use_transaction: bool = True,
+        compact_after_update: bool = True,
+    ) -> bool:
         """
         Update the entire database with new data using atomic operations.
 
@@ -177,7 +209,7 @@ class DatabaseUpdater(BaseSchemaManager):
         update_df = nw.from_native(update_df, eager_only=True)
 
         # Validation préalable
-        if not self.validate_operation('update', df=update_df):
+        if not self.validate_operation("update", df=update_df):
             # Logging
             self.logger.error("Pre-update validation failed")
             return False
@@ -194,29 +226,41 @@ class DatabaseUpdater(BaseSchemaManager):
             return False
 
         # Logging
-        self.logger.info(f"Starting database update with {len(update_df)} rows (transaction: {use_transaction})")
-        
+        self.logger.info(
+            f"Starting database update with {len(update_df)} rows (transaction: {use_transaction})"
+        )
+
         # Utilisation de la transaction pour la mise à jour de la base de données
         if use_transaction:
             return self._update_database_transactional(
-                update_df, check_duplicates_db, check_duplicates_update,
-                keep, use_batch_processing, compact_after_update
+                update_df,
+                check_duplicates_db,
+                check_duplicates_update,
+                keep,
+                use_batch_processing,
+                compact_after_update,
             )
         # Sinon mise à jour directe
         else:
             return self._update_database_direct(
-                update_df, check_duplicates_db, check_duplicates_update,
-                keep, use_batch_processing, compact_after_update
+                update_df,
+                check_duplicates_db,
+                check_duplicates_update,
+                keep,
+                use_batch_processing,
+                compact_after_update,
             )
-    
+
     # Méthode de mise à jour de la base de données de manière transactionnelle
-    def _update_database_transactional(self,
-                                      update_df: nw.DataFrame,
-                                      check_duplicates_db: bool,
-                                      check_duplicates_update: bool,
-                                      keep: Literal['any', 'none', 'first', 'last'],
-                                      use_batch_processing: bool,
-                                      compact_after_update: bool) -> bool:
+    def _update_database_transactional(
+        self,
+        update_df: nw.DataFrame,
+        check_duplicates_db: bool,
+        check_duplicates_update: bool,
+        keep: Literal["any", "none", "first", "last"],
+        use_batch_processing: bool,
+        compact_after_update: bool,
+    ) -> bool:
         """Perform transactional database update with validation and rollback.
 
         Executes the update within a transaction, allowing rollback on failure.
@@ -233,97 +277,99 @@ class DatabaseUpdater(BaseSchemaManager):
         Returns:
             True if update succeeded and committed, False otherwise.
         """
-        
+
         # Début de la transaction
-        tx_id = self.transaction_mgr.begin_transaction("Database update with validation and rollback")
-        
+        tx_id = self.transaction_mgr.begin_transaction(
+            "Database update with validation and rollback"
+        )
+
         try:
             # Étape 1: Suppression des doublons dans les données de mise à jour
             if check_duplicates_update:
                 # Initialisation de l'opération de transaction
                 operation = TransactionOperation(
-                    operation_type='preprocess',
+                    operation_type="preprocess",
                     operation_func=self._remove_update_duplicates,
                     operation_args=(update_df, keep),
-                    description="Remove duplicates from update data"
+                    description="Remove duplicates from update data",
                 )
-                
+
                 # Annulation de la transaction si l'opération ne peut être ajoutée
                 if not self.transaction_mgr.add_operation(tx_id, **operation.__dict__):
                     self.transaction_mgr.rollback_transaction(tx_id)
                     return False
-                
+
                 # Annulation de la transaction si l'opération ne peut être exécutée
                 if not self.transaction_mgr.execute_operation(tx_id):
                     self.transaction_mgr.rollback_transaction(tx_id)
                     return False
-                
+
                 # Récupération des données nettoyées
                 update_df = self._get_cleaned_update_data(update_df, keep)
-            
+
             # Étape 2: Suppression des doublons dans la base de données
             if check_duplicates_db:
                 # Initialisation de l'opération de transacti
                 operation = TransactionOperation(
-                    operation_type='cleanup',
+                    operation_type="cleanup",
                     operation_func=self._remove_database_duplicates,
                     operation_args=(keep,),
                     rollback_func=self._restore_database_state,
-                    description="Remove duplicates from existing database"
+                    description="Remove duplicates from existing database",
                 )
-                
+
                 # Annulation de la transaction si l'opération ne peut être ajoutée
                 if not self.transaction_mgr.add_operation(tx_id, **operation.__dict__):
                     self.transaction_mgr.rollback_transaction(tx_id)
                     return False
-                
+
                 # Annulation de la transaction si l'opération ne peut être exécutée
                 if not self.transaction_mgr.execute_operation(tx_id):
                     self.transaction_mgr.rollback_transaction(tx_id)
                     return False
-            
+
             # Création d'un savepoint avant les modifications majeures
             self.transaction_mgr.create_savepoint(tx_id, "before_major_updates")
-            
+
             # Étape 3: Mise à jour des métadonnées
             # Initialisation de l'opération de transaction
             operation = TransactionOperation(
-                operation_type='metadata_update',
+                operation_type="metadata_update",
                 operation_func=self._update_metadata_safe,
                 operation_args=(update_df,),
                 rollback_func=self._rollback_metadata_changes,
-                description="Update metadata table"
+                description="Update metadata table",
             )
-            
+
             # Annulation de la transaction si l'opération ne peut être ajoutée
             if not self.transaction_mgr.add_operation(tx_id, **operation.__dict__):
                 self.transaction_mgr.rollback_transaction(tx_id)
                 return False
-            
+
             # Annulation de la transaction si l'opération ne peut être exécutée
             if not self.transaction_mgr.execute_operation(tx_id):
                 self.transaction_mgr.rollback_transaction(tx_id)
                 return False
-            
+
             # Étape 4: Mise à jour de la table de faits (avant les dimensions pour refléter l'état actuel)
             # Mise à jour en batch si spécifié
             if use_batch_processing and len(update_df) > self.batch_size:
                 # Initialisation de l'opération de transaction
                 operation = TransactionOperation(
-                    operation_type='fact_update_batch',
+                    operation_type="fact_update_batch",
                     operation_func=self._update_fact_table_batch,
                     operation_args=(update_df,),
                     rollback_func=self._rollback_fact_changes,
-                    description="Update fact table (batch processing)"
+                    description="Update fact table (batch processing)",
                 )
             else:
                 # Initialisation de l'opération de transaction
                 operation = TransactionOperation(
-                    operation_type='fact_update_direct',
+                    operation_type="fact_update_direct",
                     operation_func=self._update_fact_table_direct,
                     operation_args=(update_df,),
                     rollback_func=self._rollback_fact_changes,
-                    description="Update fact table (direct)"
+                    description="Update fact table (direct)",
                 )
 
             # Annulation de la transaction si l'opération ne peut être ajoutée
@@ -339,11 +385,11 @@ class DatabaseUpdater(BaseSchemaManager):
             # Étape 5: Mise à jour des tables de dimensions (après fact table pour refléter les données actuelles)
             # Initialisation de l'opération de transaction
             operation = TransactionOperation(
-                operation_type='dimension_update',
+                operation_type="dimension_update",
                 operation_func=self._update_dimensions_safe,
                 operation_args=(update_df,),
                 rollback_func=self._rollback_dimension_changes,
-                description="Update dimension tables"
+                description="Update dimension tables",
             )
 
             # Annulation de la transaction si l'opération ne peut être ajoutée
@@ -358,13 +404,15 @@ class DatabaseUpdater(BaseSchemaManager):
 
             # Étape 5b: Nettoyage des entrées orphelines dans les tables de dimension
             cleanup_operation = TransactionOperation(
-                operation_type='dimension_cleanup',
+                operation_type="dimension_cleanup",
                 operation_func=self.dimension_mgr.cleanup_orphaned_dimension_entries,
                 operation_args=(),
-                description="Clean orphaned dimension entries"
+                description="Clean orphaned dimension entries",
             )
 
-            if not self.transaction_mgr.add_operation(tx_id, **cleanup_operation.__dict__):
+            if not self.transaction_mgr.add_operation(
+                tx_id, **cleanup_operation.__dict__
+            ):
                 self.transaction_mgr.rollback_transaction(tx_id)
                 return False
 
@@ -375,12 +423,16 @@ class DatabaseUpdater(BaseSchemaManager):
             # Validation post-update
             if self.enable_validation and self.auditor:
                 # Validation de la base de données
-                validation_report = self.auditor.validate_database(ValidationLevel.STANDARD)
+                validation_report = self.auditor.validate_database(
+                    ValidationLevel.STANDARD
+                )
 
                 # Vérification des problèmes critiques
                 if validation_report.get_critical_issues_count() > 0:
                     # Logging
-                    self.logger.error("Critical issues found after update, rolling back")
+                    self.logger.error(
+                        "Critical issues found after update, rolling back"
+                    )
                     # Annulation de la transaction
                     self.transaction_mgr.rollback_transaction(tx_id)
                     return False
@@ -399,22 +451,24 @@ class DatabaseUpdater(BaseSchemaManager):
                 # Logging
                 self.logger.error("Failed to commit transaction")
                 return False
-            
+
         except Exception as e:
             # Logging
             self.logger.error(f"Error during transactional update: {e}")
             # Annulation de la transaction
             self.transaction_mgr.rollback_transaction(tx_id)
             return False
-    
+
     # Méthode auxiliaire de mise à jour directe de la base de données
-    def _update_database_direct(self,
-                                update_df: nw.DataFrame,
-                                check_duplicates_db: bool,
-                                check_duplicates_update: bool,
-                                keep: Literal['any', 'none', 'first', 'last'],
-                                use_batch_processing: bool,
-                                compact_after_update: bool) -> bool:
+    def _update_database_direct(
+        self,
+        update_df: nw.DataFrame,
+        check_duplicates_db: bool,
+        check_duplicates_update: bool,
+        keep: Literal["any", "none", "first", "last"],
+        use_batch_processing: bool,
+        compact_after_update: bool,
+    ) -> bool:
         """Perform direct database update without transaction wrapping.
 
         Suitable for simple updates where rollback capability is not needed.
@@ -434,12 +488,14 @@ class DatabaseUpdater(BaseSchemaManager):
         try:
             # Suppression des doublons dans les données de mise à jour
             if check_duplicates_update:
-                update_df = remove_dataframe_duplicates(update_df, keep, self.logger, 'update')
-            
+                update_df = remove_dataframe_duplicates(
+                    update_df, keep, self.logger, "update"
+                )
+
             # Suppression des doublons dans la base de données
             if check_duplicates_db:
                 self._remove_database_duplicates(keep)
-            
+
             # Mise à jour des métadonnées
             if not self._update_metadata_safe(update_df):
                 return False
@@ -471,12 +527,12 @@ class DatabaseUpdater(BaseSchemaManager):
             if compact_after_update:
                 self._run_ducklake_compaction()
             return True
-            
+
         except Exception as e:
             # Logging
             self.logger.error(f"Error during direct update: {e}")
             return False
-    
+
     # Méthodes de mise à jour sécurisées
     # Méthode auxiliaire de mise à jour des méta-données
     def _update_metadata_safe(self, update_df: nw.DataFrame) -> bool:
@@ -491,7 +547,11 @@ class DatabaseUpdater(BaseSchemaManager):
         try:
             # Chargement des métadonnées actuelles
             current_metadata = self._load_current_metadata()
-            current_columns = set(current_metadata['name'].to_list()) if len(current_metadata) > 0 else set()
+            current_columns = (
+                set(current_metadata["name"].to_list())
+                if len(current_metadata) > 0
+                else set()
+            )
             new_columns = set(update_df.columns)
 
             # Vérification des conflits de types pour les colonnes existantes
@@ -504,7 +564,7 @@ class DatabaseUpdater(BaseSchemaManager):
             # Logging
             self.logger.error(f"Error updating metadata: {e}")
             return False
-    
+
     # Méthode auxiliaire de mise à jour des tables de dimension
     def _update_dimensions_safe(self, update_df: nw.DataFrame) -> bool:
         """Safely update dimension tables with categorical threshold checks.
@@ -523,33 +583,40 @@ class DatabaseUpdater(BaseSchemaManager):
             current_metadata = self._load_current_metadata()
 
             # Classification des colonnes par statut catégoriel via filtrage narwhals
-            cat_names = current_metadata.filter(nw.col('is_categorical') == True)['name'].to_list()
+            cat_names = current_metadata.filter(nw.col("is_categorical") == True)[
+                "name"
+            ].to_list()
             # Colonnes non-catégorielles de type String (ex-'object' pandas) : candidates à conversion
             non_cat_string_names = current_metadata.filter(
-                (nw.col('is_categorical') == False) & (nw.col('python_type') == 'String')
-            )['name'].to_list()
+                (nw.col("is_categorical") == False)
+                & (nw.col("python_type") == "String")
+            )["name"].to_list()
 
             categorical_columns = {
                 col: update_df[col] for col in cat_names if col in update_df.columns
             }
             non_categorical_columns = {
-                col: update_df[col] for col in non_cat_string_names if col in update_df.columns
+                col: update_df[col]
+                for col in non_cat_string_names
+                if col in update_df.columns
             }
-            
+
             # Mise à jour des dimensions existantes
             if categorical_columns:
                 results = self.dimension_mgr.batch_update_dimensions(
-                    categorical_columns, 
-                    use_parallel=(len(categorical_columns) > 1 and self.max_workers > 1)
+                    categorical_columns,
+                    use_parallel=(
+                        len(categorical_columns) > 1 and self.max_workers > 1
+                    ),
                 )
-                
+
                 # Vérification des résultats
                 for col_name, added_count in results.items():
                     if added_count < 0:  # Erreur
                         # Logging
                         self.logger.error(f"Failed to update dimension for {col_name}")
                         return False
-            
+
             # Vérification des conversions vers catégoriel pour les colonnes non-catégorielles
             # La vérification porte sur l'état GLOBAL de fact_table après l'upsert, et non
             # sur le seul update_df : un petit update_df pourrait avoir < seuil valeurs uniques
@@ -565,9 +632,13 @@ class DatabaseUpdater(BaseSchemaManager):
                 # Vérification du seuil sur l'ensemble complet des valeurs
                 if self._check_categorical_threshold(db_values_series):
                     # Conversion en catégoriel (les valeurs DB sont passées pour créer la dim table)
-                    if not self.dimension_mgr.convert_to_categorical(col_name, db_values_series):
+                    if not self.dimension_mgr.convert_to_categorical(
+                        col_name, db_values_series
+                    ):
                         # Logging
-                        self.logger.warning(f"Failed to convert {col_name} to categorical")
+                        self.logger.warning(
+                            f"Failed to convert {col_name} to categorical"
+                        )
 
             # Vérification des conversions vers non-catégoriel pour les colonnes catégorielles
             # La vérification porte sur le nombre d'entrées dans la table de dimension (état
@@ -582,15 +653,17 @@ class DatabaseUpdater(BaseSchemaManager):
                     # Conversion en non-catégoriel
                     if not self.dimension_mgr.convert_to_non_categorical(col_name):
                         # Logging
-                        self.logger.warning(f"Failed to convert {col_name} to non-categorical")
-            
+                        self.logger.warning(
+                            f"Failed to convert {col_name} to non-categorical"
+                        )
+
             return True
-            
+
         except Exception as e:
             # Logging
             self.logger.error(f"Error updating dimensions: {e}")
             return False
-    
+
     # Méthode auxiliaire de mise à jour directe de la table des faits
     def _update_fact_table_direct(self, update_df: nw.DataFrame) -> bool:
         """Update fact table directly without batch processing.
@@ -614,7 +687,9 @@ class DatabaseUpdater(BaseSchemaManager):
             primary_keys = self._get_primary_key_columns()
 
             # Vérification que les clés primaires sont présentes dans le DataFrame
-            missing_keys = [key for key in primary_keys if key not in prepared_df.columns]
+            missing_keys = [
+                key for key in primary_keys if key not in prepared_df.columns
+            ]
             if missing_keys:
                 self.logger.error(f"Primary keys missing in DataFrame: {missing_keys}")
                 return False
@@ -625,12 +700,14 @@ class DatabaseUpdater(BaseSchemaManager):
                 prepared_df, primary_keys
             )
 
-            # Initialisation des nombres de données insérées et mises à jour 
+            # Initialisation des nombres de données insérées et mises à jour
             total_inserted, total_updated = 0, 0
 
             # Insertion des données
             if len(rows_to_insert) > 0:
-                total_inserted = self.data_mgr.insert_data(rows_to_insert, use_batch=False)
+                total_inserted = self.data_mgr.insert_data(
+                    rows_to_insert, use_batch=False
+                )
 
             # Mise à jour des données
             if len(rows_to_update) > 0:
@@ -648,7 +725,7 @@ class DatabaseUpdater(BaseSchemaManager):
             # Logging
             self.logger.error(f"Error updating fact table: {e}")
             return False
-    
+
     # Méthode auxiliaire de la mise à jour par batch de la table des faits
     def _update_fact_table_batch(self, update_df: nw.DataFrame) -> bool:
         """Update fact table using batch processing for large datasets.
@@ -672,7 +749,9 @@ class DatabaseUpdater(BaseSchemaManager):
             primary_keys = self._get_primary_key_columns()
 
             # Vérification que les clés primaires sont présentes dans le DataFrame
-            missing_keys = [key for key in primary_keys if key not in prepared_df.columns]
+            missing_keys = [
+                key for key in primary_keys if key not in prepared_df.columns
+            ]
             if missing_keys:
                 self.logger.error(f"Primary keys missing in DataFrame: {missing_keys}")
                 return False
@@ -688,7 +767,9 @@ class DatabaseUpdater(BaseSchemaManager):
 
             # Insertion des nouvelles données
             if len(rows_to_insert) > 0:
-                total_inserted = self.data_mgr.insert_data(rows_to_insert, use_batch=True)
+                total_inserted = self.data_mgr.insert_data(
+                    rows_to_insert, use_batch=True
+                )
 
             # Mise à jour des données
             if len(rows_to_update) > 0:
@@ -709,8 +790,8 @@ class DatabaseUpdater(BaseSchemaManager):
 
     # Méthode auxiliaire de séparation des lignes selon l'existence de leur clé primaire
     def _split_dataframe_by_pk_existence(
-        self, df: nw.DataFrame, primary_keys: List[str]
-    ) -> Tuple[nw.DataFrame, nw.DataFrame]:
+        self, df: nw.DataFrame, primary_keys: list[str]
+    ) -> tuple[nw.DataFrame, nw.DataFrame]:
         """Split a DataFrame into rows to INSERT and rows to UPDATE based on primary key existence.
 
         For each row in the DataFrame, checks whether its primary key combination already
@@ -737,7 +818,7 @@ class DatabaseUpdater(BaseSchemaManager):
 
         try:
             # Vérification de l'existence de la fact_table
-            if not self._table_exists('fact_table'):
+            if not self._table_exists("fact_table"):
                 # Aucune fact_table : toutes les lignes sont à insérer
                 return df.clone(), df.head(0)
 
@@ -751,38 +832,46 @@ class DatabaseUpdater(BaseSchemaManager):
             conditions = " AND ".join([f"f.{key} = upd.{key}" for key in primary_keys])
 
             # Enregistrement dans DuckDB
-            self.conn.register('_upd_split', df.to_arrow().select(df.columns))
+            self.conn.register("_upd_split", df.to_arrow().select(df.columns))
 
             # Lignes dont les clés primaires existent déjà en base → à mettre à jour
-            rows_to_update = nw.from_native(self.conn.execute(f"""
+            rows_to_update = nw.from_native(
+                self.conn.execute(f"""
                 SELECT upd.* FROM _upd_split upd
                 WHERE EXISTS (
                     SELECT 1 FROM fact_table f
                     WHERE {conditions}
                 )
-            """).pl(), eager_only=True)
+            """).pl(),
+                eager_only=True,
+            )
 
             # Lignes dont les clés primaires sont absentes de la base → à insérer
-            rows_to_insert = nw.from_native(self.conn.execute(f"""
+            rows_to_insert = nw.from_native(
+                self.conn.execute(f"""
                 SELECT upd.* FROM _upd_split upd
                 WHERE NOT EXISTS (
                     SELECT 1 FROM fact_table f
                     WHERE {conditions}
                 )
-            """).pl(), eager_only=True)
+            """).pl(),
+                eager_only=True,
+            )
 
             # Nettoyage de l'enregistrement temporaire
-            self.conn.unregister('_upd_split')
+            self.conn.unregister("_upd_split")
 
             return rows_to_insert, rows_to_update
 
         except Exception as e:
-            self.logger.error(f"Error splitting DataFrame by primary key existence: {e}")
+            self.logger.error(
+                f"Error splitting DataFrame by primary key existence: {e}"
+            )
             # En cas d'erreur, on traite toutes les lignes comme des insertions
             return df.clone(), df.head(0)
 
     # Méthode auxiliaire de compaction DuckLake
-    def _run_ducklake_compaction(self, fact_table: str = 'fact_table') -> None:
+    def _run_ducklake_compaction(self, fact_table: str = "fact_table") -> None:
         """Trigger DuckLake compaction on the fact table after a successful update.
 
         Merges small adjacent Parquet delta files and rewrites delete files to
@@ -836,7 +925,7 @@ class DatabaseUpdater(BaseSchemaManager):
             # Logging
             self.logger.error(f"Error rolling back metadata changes: {e}")
             return False
-    
+
     # Méthode auxiliaire de rollback des changements de dimensions
     def _rollback_dimension_changes(self) -> bool:
         """Rollback dimension table changes (handled by DuckDB transaction).
@@ -852,7 +941,7 @@ class DatabaseUpdater(BaseSchemaManager):
             # Logging
             self.logger.error(f"Error rolling back dimension changes: {e}")
             return False
-    
+
     # Méthode auxiliaire de rollback des changements de la fact table.
     def _rollback_fact_changes(self) -> bool:
         """Rollback fact table changes (handled by DuckDB transaction).
@@ -869,7 +958,7 @@ class DatabaseUpdater(BaseSchemaManager):
             # Logging
             self.logger.error(f"Error rolling back fact table changes: {e}")
             return False
-    
+
     # Méthode auxiliaire de rollback des changements d'index.
     def _rollback_index_changes(self) -> bool:
         """Rollback index changes (handled by DuckDB transaction).
@@ -886,7 +975,7 @@ class DatabaseUpdater(BaseSchemaManager):
             # Logging
             self.logger.error(f"Error rolling back index changes: {e}")
             return False
-    
+
     # Méthodes utilitaires
     # Méthode auxiliaire de préparation du jeu de données pour la table des faits
     def _prepare_dataframe_for_fact_table(self, df: nw.DataFrame) -> nw.DataFrame:
@@ -909,7 +998,9 @@ class DatabaseUpdater(BaseSchemaManager):
             current_metadata = self._load_current_metadata()
 
             # Extraction des colonnes catégorielles via filtrage narwhals
-            cat_names = current_metadata.filter(nw.col('is_categorical') == True)['name'].to_list()
+            cat_names = current_metadata.filter(nw.col("is_categorical") == True)[
+                "name"
+            ].to_list()
 
             # Conversion des colonnes catégorielles : label → valeur entière de dimension
             for col_name in cat_names:
@@ -917,40 +1008,47 @@ class DatabaseUpdater(BaseSchemaManager):
                     continue
 
                 # Mise à jour préalable de la table de dimension avec les nouvelles valeurs
-                self.dimension_mgr.update_dimension_values(col_name, prepared_df[col_name])
+                self.dimension_mgr.update_dimension_values(
+                    col_name, prepared_df[col_name]
+                )
 
                 # Récupération du mapping label → value (nw.DataFrame)
                 mapping_df = self.dimension_mgr.get_dimension_mapping(col_name)
 
                 if mapping_df is not None and len(mapping_df) > 0:
-                    label_to_value = dict(zip(
-                        mapping_df['label'].to_list(),
-                        mapping_df['value'].to_list()
-                    ))
+                    label_to_value = dict(
+                        zip(
+                            mapping_df["label"].to_list(), mapping_df["value"].to_list()
+                        )
+                    )
                     # Sauvegarde de l'ordre des colonnes
                     original_columns = prepared_df.columns
                     # Jointure narwhals pour remplacer les labels par leurs IDs
                     # Création du DataFrame de mapping avec le même backend que prepared_df
                     # pour éviter une incompatibilité lors du join narwhals.
                     dim_nw = nw.from_dict(
-                        {'_lbl_': list(label_to_value.keys()), '_val_': list(label_to_value.values())},
-                        native_namespace=nw.get_native_namespace(prepared_df)
+                        {
+                            "_lbl_": list(label_to_value.keys()),
+                            "_val_": list(label_to_value.values()),
+                        },
+                        native_namespace=nw.get_native_namespace(prepared_df),
                     )
                     prepared_df = (
-                        prepared_df
-                        .rename({col_name: '_lbl_'})
-                        .join(dim_nw, on='_lbl_', how='left')
-                        .drop('_lbl_')
-                        .rename({'_val_': col_name})
+                        prepared_df.rename({col_name: "_lbl_"})
+                        .join(dim_nw, on="_lbl_", how="left")
+                        .drop("_lbl_")
+                        .rename({"_val_": col_name})
                         .select(original_columns)
                     )
 
                     # Gestion des valeurs non mappées (join left → null si absent)
                     unmapped_count = prepared_df[col_name].is_null().sum()
                     if unmapped_count > 0:
-                        self.logger.warning(f"Found {unmapped_count} unmapped values in {col_name}")
+                        self.logger.warning(
+                            f"Found {unmapped_count} unmapped values in {col_name}"
+                        )
                         prepared_df = prepared_df.with_columns(
-                            nw.col(col_name).fill_null('-1')
+                            nw.col(col_name).fill_null("-1")
                         )
 
             return prepared_df
@@ -959,9 +1057,11 @@ class DatabaseUpdater(BaseSchemaManager):
             # Logging
             self.logger.error(f"Error preparing DataFrame for fact table: {e}")
             return df
-    
+
     # Méthode auxiliaire de suppression des doublons des données de mise à jour
-    def _remove_update_duplicates(self, update_df: nw.DataFrame, keep: Literal[False, 'first', 'last']) -> bool:
+    def _remove_update_duplicates(
+        self, update_df: nw.DataFrame, keep: Literal[False, "first", "last"]
+    ) -> bool:
         """Remove duplicates from update DataFrame.
 
         Args:
@@ -973,15 +1073,19 @@ class DatabaseUpdater(BaseSchemaManager):
         """
         try:
             # Cette méthode modifie le DataFrame en place via la référence
-            cleaned_df = remove_dataframe_duplicates(update_df, keep, self.logger, 'update')
+            cleaned_df = remove_dataframe_duplicates(
+                update_df, keep, self.logger, "update"
+            )
             return True
         except Exception as e:
             # Logging
             self.logger.error(f"Error removing update duplicates: {e}")
             return False
-    
+
     # Méthode auxiliaire de nettoyage des données mises à jour
-    def _get_cleaned_update_data(self, update_df: nw.DataFrame, keep: Literal[False, 'first', 'last']) -> nw.DataFrame:
+    def _get_cleaned_update_data(
+        self, update_df: nw.DataFrame, keep: Literal[False, "first", "last"]
+    ) -> nw.DataFrame:
         """Get deduplicated update data.
 
         Args:
@@ -991,10 +1095,12 @@ class DatabaseUpdater(BaseSchemaManager):
         Returns:
             DataFrame with duplicates removed according to keep strategy.
         """
-        return remove_dataframe_duplicates(update_df, keep, self.logger, 'update')
-    
+        return remove_dataframe_duplicates(update_df, keep, self.logger, "update")
+
     # Méthode auxiliaire de suppression des doublons dans la base de données
-    def _remove_database_duplicates(self, keep: Literal[False, 'first', 'last']) -> bool:
+    def _remove_database_duplicates(
+        self, keep: Literal[False, "first", "last"]
+    ) -> bool:
         """Remove duplicate rows from the database fact table.
 
         Args:
@@ -1003,36 +1109,46 @@ class DatabaseUpdater(BaseSchemaManager):
         Returns:
             True if deduplication succeeded, False on error.
         """
-        try:            
+        try:
             # Récupération du nombre initial de lignes
-            initial_count = self.conn.execute("SELECT COUNT(*) FROM fact_table").fetchone()[0]
-            
+            initial_count = self.conn.execute(
+                "SELECT COUNT(*) FROM fact_table"
+            ).fetchone()[0]
+
             # Récupération des colonnes
-            all_columns = [col[0] for col in self.conn.execute("DESCRIBE fact_table").fetchall()]
-            columns_to_check = [col for col in all_columns if col != 'value']
-            
+            all_columns = [
+                col[0] for col in self.conn.execute("DESCRIBE fact_table").fetchall()
+            ]
+            columns_to_check = [col for col in all_columns if col != "value"]
+
             if not columns_to_check:
                 return True
-            
+
             # Construction et exécution de la requête de suppression des doublons
-            delete_query = build_database_duplicate_removal_query(columns_to_check, keep, 'fact_table')
+            delete_query = build_database_duplicate_removal_query(
+                columns_to_check, keep, "fact_table"
+            )
             self.conn.execute(delete_query)
-            
+
             # Calcul des lignes supprimées
-            final_count = self.conn.execute("SELECT COUNT(*) FROM fact_table").fetchone()[0]
+            final_count = self.conn.execute(
+                "SELECT COUNT(*) FROM fact_table"
+            ).fetchone()[0]
             removed_count = initial_count - final_count
-            
+
             if removed_count > 0:
                 # Logging
-                self.logger.info(f"Database duplicate removal: {removed_count} rows removed")
-            
+                self.logger.info(
+                    f"Database duplicate removal: {removed_count} rows removed"
+                )
+
             return True
-            
+
         except Exception as e:
             # Logging
             self.logger.error(f"Error removing database duplicates: {e}")
             return False
-    
+
     # Méthode auxuliaire de restoration de la base de données
     def _restore_database_state(self) -> bool:
         """Restore database state (placeholder - handled by DuckDB transaction).
@@ -1044,7 +1160,7 @@ class DatabaseUpdater(BaseSchemaManager):
         # En pratique, cela serait géré par la transaction DuckDB
         self.logger.info("Database state restoration handled by transaction")
         return True
-    
+
     # Méthode auxiliaire de nettoyage des données orphelines
     def _cleanup_orphaned_data(self) -> None:
         """Clean up orphaned data after update operations.
@@ -1054,76 +1170,80 @@ class DatabaseUpdater(BaseSchemaManager):
         try:
             # Nettoyage des entrées orphelines dans les dimensions
             removed_counts = self.dimension_mgr.cleanup_orphaned_dimension_entries()
-            
+
             if removed_counts:
-                self.logger.info(f"Cleaned orphaned dimension entries: {removed_counts}")
-            
+                self.logger.info(
+                    f"Cleaned orphaned dimension entries: {removed_counts}"
+                )
+
             # Suppression des colonnes ne contenant que des nulles
             null_only_columns = self._get_null_only_columns()
             if null_only_columns:
                 dropped_columns = self.data_mgr.drop_columns(null_only_columns)
                 if dropped_columns:
                     self.logger.info(f"Dropped null-only columns: {dropped_columns}")
-            
+
         except Exception as e:
             self.logger.error(f"Error cleaning orphaned data: {e}")
-    
+
     # Méthodes publiques additionnelles
     # Méthode d'extraction du statut de la base de données
-    def get_update_status(self) -> Dict[str, Any]:
+    def get_update_status(self) -> dict[str, Any]:
         """
         Get the status of the database update system.
-        
+
         Returns:
             Dictionary containing system status information
-            
+
         Example:
             >>> status = updater.get_update_status()
             >>> print(f"System health: {status['health_status']}")
         """
         try:
             status = {
-                'timestamp': pd.Timestamp.now(),
-                'health_status': 'unknown',
-                'active_transactions': 0,
-                'validation_enabled': self.enable_validation,
-                'batch_size': self.batch_size,
-                'max_workers': self.max_workers
+                "timestamp": pd.Timestamp.now(),
+                "health_status": "unknown",
+                "active_transactions": 0,
+                "validation_enabled": self.enable_validation,
+                "batch_size": self.batch_size,
+                "max_workers": self.max_workers,
             }
-            
+
             # Vérification des transactions actives
             active_txs = self.transaction_mgr.list_active_transactions()
-            status['active_transactions'] = len(active_txs)
-            
+            status["active_transactions"] = len(active_txs)
+
             # Vérification de la santé de la base de données
             if self.auditor:
                 health_check = self.auditor.get_quick_health_check()
-                status['health_status'] = health_check.get('status', 'unknown')
-                status['database_info'] = health_check
-            
+                status["health_status"] = health_check.get("status", "unknown")
+                status["database_info"] = health_check
+
             # Statistiques de la fact table
-            if self._table_exists('fact_table'):
+            if self._table_exists("fact_table"):
                 table_stats = self.data_mgr.get_table_stats()
-                status['fact_table_stats'] = table_stats
-            
+                status["fact_table_stats"] = table_stats
+
             return status
-            
+
         except Exception as e:
             # Logging
             self.logger.error(f"Error getting update status: {e}")
-            return {'error': str(e), 'timestamp': pd.Timestamp.now()}
-    
+            return {"error": str(e), "timestamp": pd.Timestamp.now()}
+
     # Méthode de validation de l'état de la base de données
-    def validate_database_state(self, validation_level: ValidationLevel = ValidationLevel.STANDARD) -> Any:
+    def validate_database_state(
+        self, validation_level: ValidationLevel = ValidationLevel.STANDARD
+    ) -> Any:
         """
         Validate the current state of the database.
-        
+
         Args:
             validation_level: Level of validation to perform
-            
+
         Returns:
             ValidationReport from the auditor
-            
+
         Example:
             >>> report = updater.validate_database_state(ValidationLevel.COMPREHENSIVE)
             >>> if report.get_critical_issues_count() > 0:
@@ -1134,17 +1254,17 @@ class DatabaseUpdater(BaseSchemaManager):
             # Logging
             self.logger.warning("Validation disabled - no auditor available")
             return None
-        
+
         return self.auditor.validate_database(validation_level)
-    
+
     # Méthode d'optimisation de la base de données
     def optimize_database(self) -> bool:
         """
         Perform database optimization operations.
-        
+
         Returns:
             True if optimization was successful
-            
+
         Example:
             >>> success = updater.optimize_database()
             >>> if success:
@@ -1154,19 +1274,19 @@ class DatabaseUpdater(BaseSchemaManager):
             # Optimisation de la fact table
             if not self.data_mgr.optimize_table():
                 self.logger.warning("Failed to optimize fact table")
-            
+
             # Nettoyage des données orphelines
             self._cleanup_orphaned_data()
-            
+
             # Nettoyage des anciennes transactions
             cleaned_txs = self.transaction_mgr.cleanup_old_transactions()
             if cleaned_txs > 0:
                 self.logger.info(f"Cleaned up {cleaned_txs} old transactions")
-            
+
             # Logging
             self.logger.info("Database optimization completed")
             return True
-            
+
         except Exception as e:
             # Logging
             self.logger.error(f"Error during database optimization: {e}")

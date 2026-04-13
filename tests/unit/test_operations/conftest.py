@@ -1,16 +1,19 @@
 # Importation des modules
 # Modules de base
-import polars as pl
 from datetime import datetime
+
+import polars as pl
+
 # Module de tests
 import pytest
-# Modules du package à tester
-from dt_ducklake_manager.operations import DatabaseUpdater, DatabaseDeleter
 
+# Modules du package à tester
+from dt_ducklake_manager.operations import DatabaseDeleter, DatabaseUpdater
 
 # ---------------------------------------------------------------------------
 # Fixtures communes aux tests d'opérations
 # ---------------------------------------------------------------------------
+
 
 # Initialisation d'un DatabaseUpdater pour les tests
 @pytest.fixture
@@ -58,11 +61,15 @@ def update_df():
     Returns:
         pl.DataFrame: a small DataFrame with two new rows to insert (ids 10 and 11).
     """
-    return pl.DataFrame({
-        'id': [10, 11],
-        'category': ['A', 'C'],
-        'value': [1.1, 2.2],
-        'date': pl.date_range(datetime(2024, 2, 1), datetime(2024, 2, 2), '1d', eager=True),
-        'status': ['active', 'inactive'],
-        'high_cardinality': ['val_200', 'val_201'],
-    })
+    return pl.DataFrame(
+        {
+            "id": [10, 11],
+            "category": ["A", "C"],
+            "value": [1.1, 2.2],
+            "date": pl.date_range(
+                datetime(2024, 2, 1), datetime(2024, 2, 2), "1d", eager=True
+            ),
+            "status": ["active", "inactive"],
+            "high_cardinality": ["val_200", "val_201"],
+        }
+    )

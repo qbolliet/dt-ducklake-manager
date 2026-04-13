@@ -82,7 +82,7 @@ feat!: remove support for Python 3.12
 git checkout main && git pull
 
 # 2. Bumper la version (met à jour pyproject.toml ET crée le tag git)
-uv run bump-my-version bump minor   # ou patch / major
+uv run task bump-my-version bump minor   # ou patch / major
 
 # 3. Régénérer le CHANGELOG
 uv run git-cliff --output CHANGELOG.md

@@ -2,7 +2,6 @@
 # Modules de base
 import os
 from pathlib import Path
-from typing import Optional
 
 # DuckDB
 import duckdb
@@ -51,11 +50,11 @@ class DuckLakeConnector:
         catalog_path: str,
         data_path: str,
         read_only: bool = False,
-        snapshot_version: Optional[int] = None,
-        snapshot_time: Optional[str] = None,
-        catalog_alias: str = 'db',
-        schema: str = 'main',
-        log_filename: Optional[os.PathLike] = os.path.join(
+        snapshot_version: int | None = None,
+        snapshot_time: str | None = None,
+        catalog_alias: str = "db",
+        schema: str = "main",
+        log_filename: os.PathLike | None = os.path.join(
             FILE_PATH.parents[2], "logs/ducklake_connector.log"
         ),
     ) -> None:
@@ -95,7 +94,9 @@ class DuckLakeConnector:
         # snapshot_version et snapshot_time impliquent un accès en lecture seule :
         # DuckLake ouvre automatiquement le catalogue en READ_ONLY dans ce cas.
         # L'attribut self.read_only reflète cet état effectif pour cohérence.
-        self.read_only = read_only or snapshot_version is not None or snapshot_time is not None
+        self.read_only = (
+            read_only or snapshot_version is not None or snapshot_time is not None
+        )
         self.snapshot_version = snapshot_version
         self.snapshot_time = snapshot_time
         self.catalog_alias = catalog_alias
@@ -136,7 +137,7 @@ class DuckLakeConnector:
         # Ouverture d'une connexion DuckDB en mémoire
         # DuckLake utilise toujours :memory: comme connexion de base car le catalogue
         # est géré séparément dans le fichier .ducklake.
-        conn = duckdb.connect(':memory:')
+        conn = duckdb.connect(":memory:")
 
         # Installation et chargement de l'extension DuckLake
         conn.execute("INSTALL ducklake; LOAD ducklake;")
@@ -264,6 +265,4 @@ class DuckLakeConnector:
 
         # Assemblage de la requête ATTACH finale
         options_str = ", ".join(options)
-        return (
-            f"ATTACH 'ducklake:{self.catalog_path}' AS {self.catalog_alias} ({options_str})"
-        )
+        return f"ATTACH 'ducklake:{self.catalog_path}' AS {self.catalog_alias} ({options_str})"

@@ -1,15 +1,19 @@
 # Importation des modules
+import logging
+from typing import Any, Literal
+
 import narwhals as nw
 from narwhals.typing import IntoDataFrame
-from typing import Any, Tuple, List, Literal, Optional, Union
-import logging
+
 
 # Fonction de suppression des duplicats d'un jeu de données
-def remove_dataframe_duplicates(df: IntoDataFrame,
-                               keep: Literal['any', 'none', 'first', 'last'],
-                               logger: Optional[logging.Logger] = None,
-                               source: str = "DataFrame",
-                               primary_keys: Optional[List[str]] = None) -> nw.DataFrame :
+def remove_dataframe_duplicates(
+    df: IntoDataFrame,
+    keep: Literal["any", "none", "first", "last"],
+    logger: logging.Logger | None = None,
+    source: str = "DataFrame",
+    primary_keys: list[str] | None = None,
+) -> nw.DataFrame:
     """
     Remove duplicates from a DataFrame based on primary keys or all columns.
 
@@ -57,14 +61,19 @@ def remove_dataframe_duplicates(df: IntoDataFrame,
     # Comptage des observations supprimées et logging
     removed_count = initial_count - len(df_cleaned)
     if removed_count > 0 and logger:
-        logger.warning(f"Removing duplicates from {source}: {removed_count} removed observations")
+        logger.warning(
+            f"Removing duplicates from {source}: {removed_count} removed observations"
+        )
 
     return df_cleaned
 
+
 # Fonction de construction d'une requête SQL de suppression des duplicats en base
-def build_database_duplicate_removal_query(columns_to_check: list,
-                                         keep: Literal['any', 'none', 'first', 'last'],
-                                         table_name: str = 'fact_table') -> str:
+def build_database_duplicate_removal_query(
+    columns_to_check: list,
+    keep: Literal["any", "none", "first", "last"],
+    table_name: str = "fact_table",
+) -> str:
     """
     Build SQL query for removing duplicates from a database table.
 
@@ -85,9 +94,9 @@ def build_database_duplicate_removal_query(columns_to_check: list,
         return ""
 
     # Construction de la chaîne des colonnes
-    columns_str = ', '.join(columns_to_check)
+    columns_str = ", ".join(columns_to_check)
 
-    if keep == 'none':
+    if keep == "none":
         # Suppression de TOUTES les occurrences des clés en doublon.
         # On identifie les groupes ayant plus d'une ligne par leur valeur de colonnes.
         return f"""
@@ -105,7 +114,7 @@ def build_database_duplicate_removal_query(columns_to_check: list,
         # il est stable dans ce contexte (file + row-group offset Parquet, cohérent
         # pour toute la durée du DELETE). Il n'est pas supposé stable entre sessions.
         # 'any' est traité comme 'first' (conservation d'une occurrence arbitraire).
-        order_clause = "ASC" if keep in ('first', 'any') else "DESC"
+        order_clause = "ASC" if keep in ("first", "any") else "DESC"
         return f"""
         DELETE FROM {table_name}
         WHERE rowid NOT IN (
@@ -119,8 +128,9 @@ def build_database_duplicate_removal_query(columns_to_check: list,
         )
         """
 
+
 # Méthode auxiliaire de création d'un filtre de conjonction
-def _build_conjonction_filter(filters: List[Tuple[str, str, Any]]) -> str:
+def _build_conjonction_filter(filters: list[tuple[str, str, Any]]) -> str:
     """Constructs a SQL 'AND' filter condition from a list of filter tuples.
 
     Args:
@@ -149,7 +159,7 @@ def _build_conjonction_filter(filters: List[Tuple[str, str, Any]]) -> str:
 
 # Méthode de création des filtres
 def _build_sql_filter(
-    filters: Union[List[Tuple[str, str, Any]], List[List[Tuple[str, str, Any]]]],
+    filters: list[tuple[str, str, Any]] | list[list[tuple[str, str, Any]]],
 ) -> str:
     """Constructs a SQL filter condition from a list of filter tuples or a list of lists of filter tuples.
 
@@ -187,11 +197,14 @@ def _build_sql_filter(
             f"Invalid type for 'filters' : {filters}. Shoud be in [List[Tuple], List[List[Tuple]]]"
         )
 
+
 # Méthode de construction d'une requête SQL avec clause WHERE
 def _build_where_clause(
-    filters: Optional[
-        Union[List[Tuple[str, str, Any]], List[List[Tuple[str, str, Any]]], str, None]
-    ] = None,
+    filters: list[tuple[str, str, Any]]
+    | list[list[tuple[str, str, Any]]]
+    | str
+    | None
+    | None = None,
 ) -> str:
     """Constructs a SQL SELECT WHERE clause based on the given filters.
 
@@ -217,10 +230,8 @@ def _build_where_clause(
         # Computation du filtre sur les lignes
         sql_filters = _build_sql_filter(filters=filters)
         # Computation de la commande
-        sql_request = (
-            f"WHERE {sql_filters}"
-        )
-    else :
+        sql_request = f"WHERE {sql_filters}"
+    else:
         raise TypeError("Invalid type for 'filters'. Should be in [list, str, None]")
 
     return sql_request

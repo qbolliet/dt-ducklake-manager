@@ -1,15 +1,15 @@
 # Importation des modules
 # Modules de base
 import os
-import polars as pl
-import narwhals as nw
-from narwhals.typing import IntoDataFrame
-from pathlib import Path
-from typing import Dict, List, Optional, Any, Union
-from abc import ABC, abstractmethod
 import threading
+from abc import ABC, abstractmethod
+from pathlib import Path
+
 # DuckDB
 import duckdb
+import narwhals as nw
+import polars as pl
+from narwhals.typing import IntoDataFrame
 
 # Import des utilitaires
 from ...utils.logger import _init_logger
@@ -23,21 +23,23 @@ FILE_PATH = Path(os.path.abspath(__file__))
 class BaseSchemaManager(ABC):
     """
     Base class for database schema management operations.
-    
+
     Provides common functionality for metadata management, column operations,
     and database introspection. All concrete managers should inherit from this class.
-    
+
     Attributes:
         conn (duckdb.DuckDBPyConnection): Database connection
         categorical_threshold (int): Threshold for categorical determination
         logger: Logger instance for operation tracking
     """
-    
+
     # Initialisation
-    def __init__(self,
-                 connection: Optional[duckdb.DuckDBPyConnection] = None,
-                 categorical_threshold: Optional[int] = 50,
-                 log_filename: Optional[os.PathLike] = None):
+    def __init__(
+        self,
+        connection: duckdb.DuckDBPyConnection | None = None,
+        categorical_threshold: int | None = 50,
+        log_filename: os.PathLike | None = None,
+    ):
         """
         Initialize the base schema manager.
 
@@ -55,20 +57,22 @@ class BaseSchemaManager(ABC):
         # Initialisation de la connexion DuckLake.
         # Le fallback :memory: est réservé aux tests unitaires ; en production la
         # connexion doit toujours être fournie via DuckLakeConnector.connect().
-        self.conn = connection if connection is not None else duckdb.connect(':memory:')
-        
-        # Seuil pour déterminer si une variable est catégorielle  
+        self.conn = connection if connection is not None else duckdb.connect(":memory:")
+
+        # Seuil pour déterminer si une variable est catégorielle
         self.categorical_threshold = categorical_threshold
-        
+
         # Initialisation du logger pour traçabilité des opérations
         if log_filename is None:
-            log_filename = os.path.join(FILE_PATH.parents[3], "logs/base_schema_manager.log")
+            log_filename = os.path.join(
+                FILE_PATH.parents[3], "logs/base_schema_manager.log"
+            )
         self.logger = _init_logger(filename=log_filename)
-        
+
         # Cache thread-safe pour optimiser les accès aux métadonnées
         self._metadata_cache = None
         self._cache_lock = threading.RLock()
-    
+
     # Méthodes de gestion du cache des métadonnées
     # Méthode de chargement des méta-données
     def _load_current_metadata(self) -> nw.DataFrame:
@@ -85,20 +89,24 @@ class BaseSchemaManager(ABC):
                     # Chargement via polars (backend interne) puis encapsulation narwhals
                     self._metadata_cache = nw.from_native(
                         self.conn.execute("SELECT * FROM metadata").pl(),
-                        eager_only=True
+                        eager_only=True,
                     )
                 except:
                     # Si la table n'existe pas encore, initialisation d'un DataFrame vide
                     self._metadata_cache = nw.from_dict(
                         {
-                            'name': [], 'label': [], 'python_type': [],
-                            'sql_type': [], 'is_categorical': [], 'is_primary_key': []
+                            "name": [],
+                            "label": [],
+                            "python_type": [],
+                            "sql_type": [],
+                            "is_categorical": [],
+                            "is_primary_key": [],
                         },
-                        native_namespace=pl
+                        native_namespace=pl,
                     )
 
             return self._metadata_cache.clone()
-    
+
     # Méthode d'invalidation des méta-données mises en cache
     def _invalidate_metadata_cache(self) -> None:
         """
@@ -106,26 +114,26 @@ class BaseSchemaManager(ABC):
         """
         with self._cache_lock:
             self._metadata_cache = None
-    
+
     # Méthodes d'introspection de la base de données
     # Méthode d'extraction des colonnes de la table des faits
     # /!\ Doit être cohérent avec les colonnes dans meta-données[name]
-    def _get_fact_table_columns(self) -> List[str]:
+    def _get_fact_table_columns(self) -> list[str]:
         """
         Get list of columns in fact table.
-        
+
         Returns:
             List of column names
         """
         # Exécution de la requête
         result = self.conn.execute("DESCRIBE fact_table").fetchall()
         return [row[0] for row in result]
-    
+
     # Méthode d'extraction des colonnes catégorielles
-    def _get_categorical_columns(self) -> List[str]:
+    def _get_categorical_columns(self) -> list[str]:
         """
         Get list of categorical columns from metadata.
-        
+
         Returns:
             List of categorical column names
         """
@@ -134,41 +142,41 @@ class BaseSchemaManager(ABC):
             "SELECT name FROM metadata WHERE is_categorical IS TRUE"
         ).fetchall()
         return [row[0] for row in result]
-    
+
     # Méthode de vérification de l'existance d'une table dans la base de données
     def _table_exists(self, table_name: str) -> bool:
         """
         Check if a table exists in the database.
-        
+
         Args:
             table_name: Name of the table to check
-            
+
         Returns:
             True if table exists
         """
         # Exécution de la requête
         result = self.conn.execute(
             "SELECT COUNT(*) FROM information_schema.tables WHERE table_name = ?",
-            [table_name]
+            [table_name],
         ).fetchone()
         return result[0] > 0
-    
+
     # Méthode de vérification de l'existence d'une colonne dans une table
     def _column_exists(self, column: str, table: str = "fact_table") -> bool:
         """
         Check if a column exists in specified table.
-        
+
         Args:
             column: Column name
             table: Table name (defaults to fact_table)
-            
+
         Returns:
             True if column exists
         """
         # Extraction des colonnes de la table
         columns = [row[0] for row in self.conn.execute(f"DESCRIBE {table}").fetchall()]
         return column in columns
-    
+
     # Méthode de vérification si une colonne a une table de dimension (équivalent à vérifier si elle est catégorielle)
     def _is_dimension_column(self, column: str) -> bool:
         """
@@ -182,8 +190,7 @@ class BaseSchemaManager(ABC):
         """
         # Recherche du statut catégoriel
         result = self.conn.execute(
-            "SELECT is_categorical FROM metadata WHERE name = ?",
-            [column]
+            "SELECT is_categorical FROM metadata WHERE name = ?", [column]
         ).fetchone()
         return result[0] if result else False
 
@@ -204,13 +211,12 @@ class BaseSchemaManager(ABC):
         """
         # Recherche du statut de clé primaire dans les méta-données
         result = self.conn.execute(
-            "SELECT is_primary_key FROM metadata WHERE name = ?",
-            [column]
+            "SELECT is_primary_key FROM metadata WHERE name = ?", [column]
         ).fetchone()
         return result[0] if result else False
 
     # Méthode d'extraction de toutes les colonnes marquées comme clés primaires
-    def _get_primary_key_columns(self) -> List[str]:
+    def _get_primary_key_columns(self) -> list[str]:
         """
         Get all column names that are marked as primary keys in metadata.
 
@@ -229,7 +235,9 @@ class BaseSchemaManager(ABC):
 
     # Méthodes de gestion des métadonnées
     # Méthode d'ajout d'une colonne aux méta-données
-    def _add_column_to_metadata(self, column: str, df: IntoDataFrame, label: Optional[str] = None) -> None:
+    def _add_column_to_metadata(
+        self, column: str, df: IntoDataFrame, label: str | None = None
+    ) -> None:
         """
         Add a new column to metadata table.
 
@@ -246,11 +254,10 @@ class BaseSchemaManager(ABC):
         # Conversion du type narwhals en SQL
         sql_type = map_python_to_sql_type(dtype_obj)
         # Définition si la variable est catégorielle (String avec cardinalité ≤ seuil)
-        is_categorical = (
-            isinstance(dtype_obj, nw.String)
-            and df_nw[column].n_unique() <= (self.categorical_threshold or 0)
-        )
-        
+        is_categorical = isinstance(dtype_obj, nw.String) and df_nw[
+            column
+        ].n_unique() <= (self.categorical_threshold or 0)
+
         # Création de la table metadata si elle n'existe pas.
         self.conn.execute("""
             CREATE TABLE IF NOT EXISTS metadata (
@@ -265,7 +272,7 @@ class BaseSchemaManager(ABC):
 
         # Insertion de la nouvelle colonne
         if label is None:
-            label = column.replace('_', ' ').title()
+            label = column.replace("_", " ").title()
 
         # Upsert manuel
         # Vérification de l'existence de la colonne avant d'insérer ou de mettre à jour.
@@ -292,18 +299,18 @@ class BaseSchemaManager(ABC):
                 """,
                 [label, dtype_str, sql_type, is_categorical, column],
             )
-        
+
         # Invalidation du cache
         self._invalidate_metadata_cache()
-        
+
         # Logging
         self.logger.info(f"Added/updated column {column} in metadata")
-    
+
     # Méthode de mise à jour du statut catégoriel d'une donnée
     def _update_categorical_status(self, col_name: str, is_categorical: bool) -> None:
         """
         Update categorical status in metadata.
-        
+
         Args:
             col_name: Column name
             is_categorical: New categorical status
@@ -311,20 +318,20 @@ class BaseSchemaManager(ABC):
         # Exécution de la requête de mise à jour
         self.conn.execute(
             "UPDATE metadata SET is_categorical = ? WHERE name = ?",
-            [is_categorical, col_name]
+            [is_categorical, col_name],
         )
-        
+
         # Invalidation du cache
         self._invalidate_metadata_cache()
-        
+
         # Logging
         self.logger.info(f"Updated categorical status for {col_name}: {is_categorical}")
-    
+
     # Méthode de suppression des méta-données pour une colonne
     def delete_column_metadata(self, column_name: str) -> None:
         """
         Delete metadata for a specific column.
-        
+
         Args:
             column_name: Name of the column
         """
@@ -333,21 +340,24 @@ class BaseSchemaManager(ABC):
             delete_query = "DELETE FROM metadata WHERE name = ?"
             # Exécution de la requête
             self.conn.execute(delete_query, [column_name])
-            
+
             # Invalidation du cache
             self._invalidate_metadata_cache()
-            
+
             # Logging
             self.logger.info(f"Deleted metadata for column {column_name}")
-            
+
         except Exception as e:
             # Logging
-            self.logger.error(f"Failed to delete metadata for column {column_name}: {e}")
+            self.logger.error(
+                f"Failed to delete metadata for column {column_name}: {e}"
+            )
             raise
-    
+
     # Méthodes de résolution des conflits de types
-    def _resolve_type_conflicts(self, column: str, df: nw.DataFrame,
-                               current_metadata: nw.DataFrame) -> None:
+    def _resolve_type_conflicts(
+        self, column: str, df: nw.DataFrame, current_metadata: nw.DataFrame
+    ) -> None:
         """
         Resolve type conflicts using the least restrictive strategy.
 
@@ -357,7 +367,7 @@ class BaseSchemaManager(ABC):
             current_metadata: Current metadata (narwhals)
         """
         # Identification du type actuel de la colonne dans les métadonnées
-        matching = current_metadata.filter(nw.col('name') == column)['python_type']
+        matching = current_metadata.filter(nw.col("name") == column)["python_type"]
         if len(matching) == 0:
             return None
         current_type = matching[0]
@@ -376,11 +386,18 @@ class BaseSchemaManager(ABC):
         # Hiérarchie des types narwhals (du plus contraignant au moins contraignant).
         # Les types entiers de largeur variable sont tous regroupés au niveau 2.
         type_hierarchy = {
-            'Boolean': 1,
-            'Int8': 2, 'Int16': 2, 'Int32': 2, 'Int64': 2,
-            'UInt8': 2, 'UInt16': 2, 'UInt32': 2, 'UInt64': 2,
-            'Float32': 3, 'Float64': 3,
-            'String': 4,
+            "Boolean": 1,
+            "Int8": 2,
+            "Int16": 2,
+            "Int32": 2,
+            "Int64": 2,
+            "UInt8": 2,
+            "UInt16": 2,
+            "UInt32": 2,
+            "UInt64": 2,
+            "Float32": 3,
+            "Float64": 3,
+            "String": 4,
         }
 
         current_level = type_hierarchy.get(current_type, 0)
@@ -392,28 +409,33 @@ class BaseSchemaManager(ABC):
             resolved_type = new_type
             sql_type = map_python_to_sql_type(df.schema[column])
             # Mise à jour des métadonnées
-            self.conn.execute("""
+            self.conn.execute(
+                """
                 UPDATE metadata
                 SET python_type = ?, sql_type = ?
                 WHERE name = ?
-            """, [resolved_type, sql_type, column])
+            """,
+                [resolved_type, sql_type, column],
+            )
             # Invalidation du cache
             self._invalidate_metadata_cache()
             # Logging
-            self.logger.info(f"Type conflict resolution for {column}: {current_type} -> {resolved_type}")
+            self.logger.info(
+                f"Type conflict resolution for {column}: {current_type} -> {resolved_type}"
+            )
         # Si current_level >= new_level, le type existant est conservé sans modification
-    
+
     # Méthode utilitaire pour les colonnes contenant uniquement des valeurs nulles
-    def _get_null_only_columns(self) -> List[str]:
+    def _get_null_only_columns(self) -> list[str]:
         """
         Get list of columns that contain only null values in the fact table.
-        
+
         Returns:
             List of column names that contain only null values
         """
         # Initialisation de la liste des colonnes vides
         null_only_columns = []
-        
+
         try:
             # Récupération des colonnes de la fact table
             columns = self._get_fact_table_columns()
@@ -427,15 +449,18 @@ class BaseSchemaManager(ABC):
                     null_only_columns.append(column)
             # Logging
             if null_only_columns:
-                self.logger.info(f"Columns containing only null values detected: {null_only_columns}")
-                
+                self.logger.info(
+                    f"Columns containing only null values detected: {null_only_columns}"
+                )
+
         except Exception as e:
             self.logger.error(f"An error occurred while detecting null values: {e}")
             raise
-        
-    
+
     # Méthode de vérification du seuil catégoriel
-    def _check_categorical_threshold(self, values: nw.Series, threshold: Optional[int] = None) -> bool:
+    def _check_categorical_threshold(
+        self, values: nw.Series, threshold: int | None = None
+    ) -> bool:
         """
         Check if values meet categorical threshold criteria.
 
@@ -455,16 +480,16 @@ class BaseSchemaManager(ABC):
             return False
         unique_count = non_null_values.n_unique()
         return unique_count <= threshold
-    
+
     @abstractmethod
     def validate_operation(self, operation_type: str, **kwargs) -> bool:
         """
         Abstract method to validate operations before execution.
-        
+
         Args:
             operation_type: Type of operation to validate
             **kwargs: Operation-specific parameters
-            
+
         Returns:
             True if operation is valid
         """

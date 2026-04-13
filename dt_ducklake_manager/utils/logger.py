@@ -1,8 +1,8 @@
 # Importation des modules
 # Modules de base
-import os
 # Logging
 import logging
+import os
 
 
 # Fonction d'initialisation du logger

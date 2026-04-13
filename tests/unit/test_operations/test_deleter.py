@@ -1,13 +1,12 @@
 # Importation des modules
 # Module de tests
-import pytest
 # Modules du package à tester
 from dt_ducklake_manager.operations import DatabaseDeleter
-
 
 # ---------------------------------------------------------------------------
 # Tests de l'initialisation
 # ---------------------------------------------------------------------------
+
 
 # Test de l'initialisation correcte de DatabaseDeleter
 def test_deleter_initialization(built_ducklake_schema):
@@ -37,6 +36,7 @@ def test_deleter_initialization_without_validation(built_ducklake_schema):
 # Tests de validate_operation()
 # ---------------------------------------------------------------------------
 
+
 # Test que validate_operation retourne un booléen pour une suppression valide
 def test_validate_operation_delete_returns_bool(deleter):
     """Test that validate_operation returns a boolean for a delete operation.
@@ -44,13 +44,14 @@ def test_validate_operation_delete_returns_bool(deleter):
     Args:
         deleter: DatabaseDeleter fixture.
     """
-    result = deleter.validate_operation('delete', filters=[('id', '=', 1)])
+    result = deleter.validate_operation("delete", filters=[("id", "=", 1)])
     assert isinstance(result, bool)
 
 
 # ---------------------------------------------------------------------------
 # Tests de delete_rows()
 # ---------------------------------------------------------------------------
+
 
 # Test de la suppression de lignes avec un filtre simple
 def test_delete_rows_with_filter(deleter, built_ducklake_schema):
@@ -61,12 +62,14 @@ def test_delete_rows_with_filter(deleter, built_ducklake_schema):
         built_ducklake_schema: DuckDB connection.
     """
     # Vérification que la ligne id=1 existe avant suppression
-    before = built_ducklake_schema.execute("SELECT COUNT(*) FROM fact_table WHERE id = 1").fetchone()[0]
+    before = built_ducklake_schema.execute(
+        "SELECT COUNT(*) FROM fact_table WHERE id = 1"
+    ).fetchone()[0]
     assert before >= 1
 
     # Suppression de la ligne avec id=1
     deleted_count = deleter.delete_rows(
-        filters=[('id', '=', 1)],
+        filters=[("id", "=", 1)],
         use_transaction=False,
     )
 
@@ -75,7 +78,9 @@ def test_delete_rows_with_filter(deleter, built_ducklake_schema):
     assert deleted_count >= 1
 
     # Vérification que la ligne est bien absente
-    after = built_ducklake_schema.execute("SELECT COUNT(*) FROM fact_table WHERE id = 1").fetchone()[0]
+    after = built_ducklake_schema.execute(
+        "SELECT COUNT(*) FROM fact_table WHERE id = 1"
+    ).fetchone()[0]
     assert after == 0
 
 
@@ -94,7 +99,7 @@ def test_delete_rows_with_or_filter(deleter, built_ducklake_schema):
     assert before >= 1
 
     deleted_count = deleter.delete_rows(
-        filters=[[('id', '=', 2)], [('id', '=', 3)]],
+        filters=[[("id", "=", 2)], [("id", "=", 3)]],
         use_transaction=False,
     )
     assert deleted_count >= 1
@@ -114,7 +119,9 @@ def test_delete_rows_all(deleter, built_ducklake_schema):
         deleter: DatabaseDeleter fixture.
         built_ducklake_schema: DuckDB connection.
     """
-    before = built_ducklake_schema.execute("SELECT COUNT(*) FROM fact_table").fetchone()[0]
+    before = built_ducklake_schema.execute(
+        "SELECT COUNT(*) FROM fact_table"
+    ).fetchone()[0]
     assert before > 0
 
     # Remarque : DatabaseDeleter n'accepte pas filters=None (validation obligatoire des filtres).
@@ -122,13 +129,16 @@ def test_delete_rows_all(deleter, built_ducklake_schema):
     deleted_count = deleter.delete_rows(filters="1=1", use_transaction=False)
     assert deleted_count == before
 
-    after = built_ducklake_schema.execute("SELECT COUNT(*) FROM fact_table").fetchone()[0]
+    after = built_ducklake_schema.execute("SELECT COUNT(*) FROM fact_table").fetchone()[
+        0
+    ]
     assert after == 0
 
 
 # ---------------------------------------------------------------------------
 # Tests de delete_columns()
 # ---------------------------------------------------------------------------
+
 
 # Test de la suppression d'une colonne non-clé primaire
 def test_delete_columns_single_column(deleter, built_ducklake_schema):
@@ -140,28 +150,33 @@ def test_delete_columns_single_column(deleter, built_ducklake_schema):
     """
     # Vérification que la colonne 'value' existe avant suppression
     columns_before = [
-        row[0] for row in built_ducklake_schema.execute("DESCRIBE fact_table").fetchall()
+        row[0]
+        for row in built_ducklake_schema.execute("DESCRIBE fact_table").fetchall()
     ]
-    assert 'value' in columns_before
+    assert "value" in columns_before
 
-    result = deleter.delete_columns(['value'], use_transaction=False)
+    result = deleter.delete_columns(["value"], use_transaction=False)
 
     # Vérification que le résultat est un dictionnaire de statuts
     assert isinstance(result, dict)
-    assert 'value' in result
+    assert "value" in result
     # Vérification que la colonne est bien supprimée
     columns_after = [
-        row[0] for row in built_ducklake_schema.execute("DESCRIBE fact_table").fetchall()
+        row[0]
+        for row in built_ducklake_schema.execute("DESCRIBE fact_table").fetchall()
     ]
-    assert 'value' not in columns_after
+    assert "value" not in columns_after
 
 
 # ---------------------------------------------------------------------------
 # Tests de changement de statut catégoriel lors d'une suppression
 # ---------------------------------------------------------------------------
 
+
 # Test de conversion non-catégorielle → catégorielle après suppression de lignes
-def test_delete_rows_non_categorical_becomes_categorical(deleter, built_ducklake_schema):
+def test_delete_rows_non_categorical_becomes_categorical(
+    deleter, built_ducklake_schema
+):
     """Test that a non-categorical column becomes categorical when its unique value count
     drops to or below the threshold after rows are deleted.
 
@@ -182,15 +197,17 @@ def test_delete_rows_non_categorical_becomes_categorical(deleter, built_ducklake
     assert is_cat_before is False
 
     # Vérification initiale : la table de dimension dim_high_cardinality n'existe pas encore
-    tables_before = [row[0] for row in built_ducklake_schema.execute("SHOW TABLES").fetchall()]
-    assert 'dim_high_cardinality' not in tables_before
+    tables_before = [
+        row[0] for row in built_ducklake_schema.execute("SHOW TABLES").fetchall()
+    ]
+    assert "dim_high_cardinality" not in tables_before
 
     # Suppression de la ligne id=5 (seul porteur de 'val_104') :
     # après suppression, high_cardinality n'aura plus que 4 valeurs uniques (val_100..val_103)
     # ce qui est ≤ seuil=4 → conversion en variable catégorielle déclenchée par le nettoyage
     # automatique (_detect_new_categorical_after_deletion via _cleanup_orphaned_data_comprehensive).
     deleted_count = deleter.delete_rows(
-        filters=[('id', '=', 5)],
+        filters=[("id", "=", 5)],
         use_transaction=False,
     )
     assert deleted_count == 1
@@ -202,5 +219,7 @@ def test_delete_rows_non_categorical_becomes_categorical(deleter, built_ducklake
     assert is_cat_after is True
 
     # Vérification : la table de dimension dim_high_cardinality a bien été créée
-    tables_after = [row[0] for row in built_ducklake_schema.execute("SHOW TABLES").fetchall()]
-    assert 'dim_high_cardinality' in tables_after
+    tables_after = [
+        row[0] for row in built_ducklake_schema.execute("SHOW TABLES").fetchall()
+    ]
+    assert "dim_high_cardinality" in tables_after

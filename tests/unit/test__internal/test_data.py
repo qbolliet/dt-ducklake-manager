@@ -1,17 +1,19 @@
 # Importation des modules
 # Modules de base
-import polars as pl
-import narwhals as nw
 from datetime import datetime
+
+import polars as pl
+
 # Module de tests
 import pytest
+
 # Module du package à tester
 from dt_ducklake_manager._internal.managers.data import DataManager
-
 
 # ---------------------------------------------------------------------------
 # Fixtures locales
 # ---------------------------------------------------------------------------
+
 
 # Initialisation d'un DataManager pour les tests
 @pytest.fixture
@@ -42,14 +44,18 @@ def new_rows(sample_df):
     Returns:
         pl.DataFrame: two new rows with unique ids.
     """
-    return pl.DataFrame({
-        'id': [50, 51],
-        'category': ['A', 'B'],
-        'value': [5.0, 6.0],
-        'date': pl.date_range(datetime(2024, 6, 1), datetime(2024, 6, 2), '1d', eager=True),
-        'status': ['active', 'inactive'],
-        'high_cardinality': ['val_500', 'val_501'],
-    })
+    return pl.DataFrame(
+        {
+            "id": [50, 51],
+            "category": ["A", "B"],
+            "value": [5.0, 6.0],
+            "date": pl.date_range(
+                datetime(2024, 6, 1), datetime(2024, 6, 2), "1d", eager=True
+            ),
+            "status": ["active", "inactive"],
+            "high_cardinality": ["val_500", "val_501"],
+        }
+    )
 
 
 # Initialisation d'un DataFrame vide
@@ -60,12 +66,13 @@ def empty_df():
     Returns:
         pl.DataFrame: an empty DataFrame with no rows.
     """
-    return pl.DataFrame({'id': [], 'value': []})
+    return pl.DataFrame({"id": [], "value": []})
 
 
 # ---------------------------------------------------------------------------
 # Tests de l'initialisation
 # ---------------------------------------------------------------------------
+
 
 # Test de l'initialisation correcte du gestionnaire de données
 def test_data_manager_initialization(built_ducklake_schema):
@@ -83,6 +90,7 @@ def test_data_manager_initialization(built_ducklake_schema):
 # Tests de validate_operation()
 # ---------------------------------------------------------------------------
 
+
 # Test que validate_operation retourne True pour une insertion valide
 def test_validate_operation_insert_valid(data_manager, new_rows):
     """Test that validate_operation returns True for a valid insert operation.
@@ -91,7 +99,7 @@ def test_validate_operation_insert_valid(data_manager, new_rows):
         data_manager: DataManager fixture.
         new_rows: DataFrame with new rows to insert.
     """
-    result = data_manager.validate_operation('insert', df=new_rows)
+    result = data_manager.validate_operation("insert", df=new_rows)
     assert result is True
 
 
@@ -103,13 +111,14 @@ def test_validate_operation_insert_empty_df(data_manager, empty_df):
         data_manager: DataManager fixture.
         empty_df: An empty DataFrame.
     """
-    result = data_manager.validate_operation('insert', df=empty_df)
+    result = data_manager.validate_operation("insert", df=empty_df)
     assert result is False
 
 
 # ---------------------------------------------------------------------------
 # Tests de insert_data()
 # ---------------------------------------------------------------------------
+
 
 # Test que insert_data insère bien les nouvelles lignes dans fact_table
 def test_insert_data_increases_row_count(data_manager, built_ducklake_schema, new_rows):
@@ -121,7 +130,9 @@ def test_insert_data_increases_row_count(data_manager, built_ducklake_schema, ne
         new_rows: DataFrame with new rows to insert.
     """
     # Comptage initial
-    before = built_ducklake_schema.execute("SELECT COUNT(*) FROM fact_table").fetchone()[0]
+    before = built_ducklake_schema.execute(
+        "SELECT COUNT(*) FROM fact_table"
+    ).fetchone()[0]
 
     # Insertion des nouvelles lignes
     inserted = data_manager.insert_data(new_rows, use_batch=False)
@@ -130,7 +141,9 @@ def test_insert_data_increases_row_count(data_manager, built_ducklake_schema, ne
     assert isinstance(inserted, int)
     assert inserted > 0
 
-    after = built_ducklake_schema.execute("SELECT COUNT(*) FROM fact_table").fetchone()[0]
+    after = built_ducklake_schema.execute("SELECT COUNT(*) FROM fact_table").fetchone()[
+        0
+    ]
     assert after > before
 
 
@@ -143,18 +156,23 @@ def test_insert_data_batch_mode(data_manager, built_ducklake_schema, new_rows):
         built_ducklake_schema: DuckDB connection.
         new_rows: DataFrame with new rows to insert.
     """
-    before = built_ducklake_schema.execute("SELECT COUNT(*) FROM fact_table").fetchone()[0]
+    before = built_ducklake_schema.execute(
+        "SELECT COUNT(*) FROM fact_table"
+    ).fetchone()[0]
 
     # Insertion en mode batch
     inserted = data_manager.insert_data(new_rows, use_batch=True)
 
-    after = built_ducklake_schema.execute("SELECT COUNT(*) FROM fact_table").fetchone()[0]
+    after = built_ducklake_schema.execute("SELECT COUNT(*) FROM fact_table").fetchone()[
+        0
+    ]
     assert after >= before
 
 
 # ---------------------------------------------------------------------------
 # Tests de delete_rows()
 # ---------------------------------------------------------------------------
+
 
 # Test que delete_rows supprime les lignes correspondant au filtre
 def test_delete_rows_with_filter(data_manager, built_ducklake_schema):
@@ -165,17 +183,21 @@ def test_delete_rows_with_filter(data_manager, built_ducklake_schema):
         built_ducklake_schema: DuckDB connection.
     """
     # Vérification que des lignes existent avant suppression
-    before = built_ducklake_schema.execute("SELECT COUNT(*) FROM fact_table WHERE id = 1").fetchone()[0]
+    before = built_ducklake_schema.execute(
+        "SELECT COUNT(*) FROM fact_table WHERE id = 1"
+    ).fetchone()[0]
     assert before >= 1
 
     # Suppression via le gestionnaire
-    deleted = data_manager.delete_rows(filters=[('id', '=', 1)])
+    deleted = data_manager.delete_rows(filters=[("id", "=", 1)])
 
     assert isinstance(deleted, int)
     assert deleted >= 1
 
     # Vérification que les lignes sont bien absentes
-    after = built_ducklake_schema.execute("SELECT COUNT(*) FROM fact_table WHERE id = 1").fetchone()[0]
+    after = built_ducklake_schema.execute(
+        "SELECT COUNT(*) FROM fact_table WHERE id = 1"
+    ).fetchone()[0]
     assert after == 0
 
 
@@ -187,13 +209,17 @@ def test_delete_rows_all(data_manager, built_ducklake_schema):
         data_manager: DataManager fixture.
         built_ducklake_schema: DuckDB connection.
     """
-    before = built_ducklake_schema.execute("SELECT COUNT(*) FROM fact_table").fetchone()[0]
+    before = built_ducklake_schema.execute(
+        "SELECT COUNT(*) FROM fact_table"
+    ).fetchone()[0]
     assert before > 0
 
     # Remarque : DataManager n'accepte pas filters=None (validation obligatoire des filtres).
     # Suppression de toutes les lignes via un filtre SQL universel.
     deleted = data_manager.delete_rows(filters="1=1")
 
-    after = built_ducklake_schema.execute("SELECT COUNT(*) FROM fact_table").fetchone()[0]
+    after = built_ducklake_schema.execute("SELECT COUNT(*) FROM fact_table").fetchone()[
+        0
+    ]
     assert after == 0
     assert deleted == before

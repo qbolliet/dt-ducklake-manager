@@ -1,23 +1,25 @@
 # Importation des modules
 # Modules de base
 import os
-import tempfile
-# Module de tests
-import pytest
+
 # DuckDB
 import duckdb
+
+# Module de tests
+import pytest
+
 # Module à tester
 from dt_ducklake_manager.connection import DuckLakeConnector
-
 
 # ---------------------------------------------------------------------------
 # Fonctions auxiliaires
 # ---------------------------------------------------------------------------
 
+
 def _ducklake_available() -> bool:
     """Vérifie si l'extension DuckLake est disponible dans l'environnement de test."""
     try:
-        conn = duckdb.connect(':memory:')
+        conn = duckdb.connect(":memory:")
         conn.execute("INSTALL ducklake; LOAD ducklake;")
         conn.close()
         return True
@@ -29,13 +31,14 @@ def _ducklake_available() -> bool:
 # l'extension ducklake n'est pas disponible dans l'environnement.
 pytestmark = pytest.mark.skipif(
     not _ducklake_available(),
-    reason="Extension ducklake non disponible dans cet environnement"
+    reason="Extension ducklake non disponible dans cet environnement",
 )
 
 
 # ---------------------------------------------------------------------------
 # Fixture commune
 # ---------------------------------------------------------------------------
+
 
 # Initialisation des chemins de catalogue et de données temporaires
 @pytest.fixture
@@ -48,8 +51,8 @@ def ducklake_paths(tmp_path):
     Returns:
         tuple: (catalog_path, data_path) as strings.
     """
-    catalog = str(tmp_path / 'test.ducklake')
-    data_dir = str(tmp_path / 'data')
+    catalog = str(tmp_path / "test.ducklake")
+    data_dir = str(tmp_path / "data")
     os.makedirs(data_dir)
     return catalog, data_dir
 
@@ -57,6 +60,7 @@ def ducklake_paths(tmp_path):
 # ---------------------------------------------------------------------------
 # Tests de connect()
 # ---------------------------------------------------------------------------
+
 
 # Test que connect() retourne une connexion DuckDB valide
 def test_connect_returns_duckdb_connection(ducklake_paths):
@@ -101,7 +105,7 @@ def test_connect_activates_correct_schema(ducklake_paths):
         ducklake_paths: Fixture providing (catalog_path, data_path).
     """
     catalog, data_dir = ducklake_paths
-    connector = DuckLakeConnector(catalog, data_dir, schema='main')
+    connector = DuckLakeConnector(catalog, data_dir, schema="main")
     conn = connector.connect()
     # La création d'une table sans préfixe doit réussir (schéma activé)
     conn.execute("CREATE TABLE schema_check (id INTEGER)")
@@ -139,7 +143,7 @@ def test_connect_custom_catalog_alias(ducklake_paths):
         ducklake_paths: Fixture providing (catalog_path, data_path).
     """
     catalog, data_dir = ducklake_paths
-    connector = DuckLakeConnector(catalog, data_dir, catalog_alias='my_lake')
+    connector = DuckLakeConnector(catalog, data_dir, catalog_alias="my_lake")
     conn = connector.connect()
     # Vérification que l'alias est accessible (DuckDB expose catalog_name dans information_schema)
     result = conn.execute(
@@ -153,6 +157,7 @@ def test_connect_custom_catalog_alias(ducklake_paths):
 # Tests de attach()
 # ---------------------------------------------------------------------------
 
+
 # Test que attach() fonctionne sur une connexion DuckDB existante
 def test_attach_on_existing_connection(ducklake_paths):
     """Test that attach() works on an already-open DuckDB connection.
@@ -164,7 +169,7 @@ def test_attach_on_existing_connection(ducklake_paths):
     connector = DuckLakeConnector(catalog, data_dir)
 
     # Création d'une connexion existante avec l'extension déjà chargée
-    existing_conn = duckdb.connect(':memory:')
+    existing_conn = duckdb.connect(":memory:")
     existing_conn.execute("INSTALL ducklake; LOAD ducklake;")
 
     # attach() ne doit pas lever d'exception et doit retourner la même connexion
@@ -181,6 +186,7 @@ def test_attach_on_existing_connection(ducklake_paths):
 # ---------------------------------------------------------------------------
 # Tests de _build_attach_sql()
 # ---------------------------------------------------------------------------
+
 
 # Test de la construction de la clause ATTACH sans options spéciales
 def test_build_attach_sql_default(ducklake_paths):
@@ -233,6 +239,8 @@ def test_build_attach_sql_snapshot_time(ducklake_paths):
         ducklake_paths: Fixture providing (catalog_path, data_path).
     """
     catalog, data_dir = ducklake_paths
-    connector = DuckLakeConnector(catalog, data_dir, snapshot_time='2025-01-01 00:00:00')
+    connector = DuckLakeConnector(
+        catalog, data_dir, snapshot_time="2025-01-01 00:00:00"
+    )
     sql = connector._build_attach_sql()
     assert "SNAPSHOT_TIME '2025-01-01 00:00:00'" in sql

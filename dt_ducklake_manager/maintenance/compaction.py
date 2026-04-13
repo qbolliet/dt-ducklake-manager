@@ -3,7 +3,6 @@
 import os
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Optional
 
 # DuckDB
 import duckdb
@@ -46,8 +45,8 @@ class DuckLakeMaintenance:
     def __init__(
         self,
         connection: duckdb.DuckDBPyConnection,
-        catalog_alias: str = 'db',
-        log_filename: Optional[os.PathLike] = os.path.join(
+        catalog_alias: str = "db",
+        log_filename: os.PathLike | None = os.path.join(
             FILE_PATH.parents[2], "logs/ducklake_maintenance.log"
         ),
     ) -> None:
@@ -101,7 +100,9 @@ class DuckLakeMaintenance:
                 f"CALL ducklake_merge_adjacent_files('{self.catalog_alias}', '{table}', schema := '{schema}')"
             )
             # Logging
-            self.logger.info(f"The merge of the Parquet files is finished : {schema}.{table}")
+            self.logger.info(
+                f"The merge of the Parquet files is finished : {schema}.{table}"
+            )
         except Exception as e:
             # Logging
             self.logger.warning(f"merge_files failed for {schema}.{table} : {e}")
@@ -129,7 +130,9 @@ class DuckLakeMaintenance:
                 f"CALL ducklake_rewrite_data_files('{self.catalog_alias}', '{table}', schema := '{schema}')"
             )
             # Logging
-            self.logger.info(f"The rewriting of the file deletion is finished : {schema}.{table}")
+            self.logger.info(
+                f"The rewriting of the file deletion is finished : {schema}.{table}"
+            )
         except Exception as e:
             # Loggin
             self.logger.warning(f"rewrite_data_files failed for {schema}.{table} : {e}")
@@ -155,7 +158,7 @@ class DuckLakeMaintenance:
         """
         # Calcul du timestamp de coupure à partir du nombre de jours
         cutoff: datetime = datetime.now() - timedelta(days=older_than_days)
-        cutoff_str: str = cutoff.strftime('%Y-%m-%d %H:%M:%S')
+        cutoff_str: str = cutoff.strftime("%Y-%m-%d %H:%M:%S")
         try:
             # Exécution de la requête
             self.conn.execute(
@@ -191,7 +194,9 @@ class DuckLakeMaintenance:
                 f"CALL ducklake_cleanup_old_files('{self.catalog_alias}')"
             )
             # Logging
-            self.logger.info(f"the cleaning of the orphaned files is finished : {schema}")
+            self.logger.info(
+                f"the cleaning of the orphaned files is finished : {schema}"
+            )
         except Exception as e:
             # Logging
             self.logger.warning(f"cleanup_files failed for {schema} : {e}")

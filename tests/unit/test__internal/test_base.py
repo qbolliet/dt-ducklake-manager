@@ -2,15 +2,17 @@
 # Modules de base
 import narwhals as nw
 import polars as pl
+
 # Module de tests
 import pytest
+
 # Utilisation de DimensionManager (sous-classe concrète) pour instancier BaseSchemaManager
 from dt_ducklake_manager._internal.managers.dimension import DimensionManager
-
 
 # ---------------------------------------------------------------------------
 # Fixture locale
 # ---------------------------------------------------------------------------
+
 
 # Initialisation d'une instance concrète de BaseSchemaManager pour les tests
 @pytest.fixture
@@ -30,6 +32,7 @@ def manager(built_ducklake_schema):
 # Tests de _load_current_metadata()
 # ===========================================================================
 
+
 # Test que _load_current_metadata retourne un DataFrame narwhals avec les colonnes attendues
 def test_load_current_metadata_returns_dataframe(manager):
     """Test that _load_current_metadata returns a narwhals DataFrame with expected columns.
@@ -41,9 +44,9 @@ def test_load_current_metadata_returns_dataframe(manager):
     # Vérification du type de retour
     assert isinstance(metadata, nw.DataFrame)
     # Vérification de la présence des colonnes de métadonnées
-    assert 'name' in metadata.columns
-    assert 'is_categorical' in metadata.columns
-    assert 'is_primary_key' in metadata.columns
+    assert "name" in metadata.columns
+    assert "is_categorical" in metadata.columns
+    assert "is_primary_key" in metadata.columns
 
 
 # Test que _load_current_metadata retourne un DataFrame non vide pour un schéma construit
@@ -62,6 +65,7 @@ def test_load_current_metadata_non_empty(manager):
 # Tests de _table_exists()
 # ===========================================================================
 
+
 # Test que _table_exists retourne True pour une table existante
 def test_table_exists_fact_table(manager):
     """Test that _table_exists returns True for an existing table.
@@ -69,7 +73,7 @@ def test_table_exists_fact_table(manager):
     Args:
         manager: DimensionManager fixture with a built schema.
     """
-    assert manager._table_exists('fact_table') is True
+    assert manager._table_exists("fact_table") is True
 
 
 # Test que _table_exists retourne True pour la table metadata
@@ -79,7 +83,7 @@ def test_table_exists_metadata(manager):
     Args:
         manager: DimensionManager fixture with a built schema.
     """
-    assert manager._table_exists('metadata') is True
+    assert manager._table_exists("metadata") is True
 
 
 # Test que _table_exists retourne False pour une table inexistante
@@ -89,12 +93,13 @@ def test_table_exists_nonexistent(manager):
     Args:
         manager: DimensionManager fixture with a built schema.
     """
-    assert manager._table_exists('nonexistent_table_xyz') is False
+    assert manager._table_exists("nonexistent_table_xyz") is False
 
 
 # ===========================================================================
 # Tests de _get_primary_key_columns()
 # ===========================================================================
+
 
 # Test que _get_primary_key_columns retourne la liste des clés primaires
 def test_get_primary_key_columns(manager):
@@ -107,12 +112,13 @@ def test_get_primary_key_columns(manager):
     # Vérification du type de retour
     assert isinstance(pks, list)
     # Le schéma est construit avec primary_keys=['id'] dans built_ducklake_schema
-    assert 'id' in pks
+    assert "id" in pks
 
 
 # ===========================================================================
 # Tests de _column_exists()
 # ===========================================================================
+
 
 # Test que _column_exists retourne True pour une colonne existante dans fact_table
 def test_column_exists_true(manager):
@@ -121,7 +127,7 @@ def test_column_exists_true(manager):
     Args:
         manager: DimensionManager fixture with a built schema.
     """
-    assert manager._column_exists('id', 'fact_table') is True
+    assert manager._column_exists("id", "fact_table") is True
 
 
 # Test que _column_exists retourne False pour une colonne inexistante
@@ -131,12 +137,13 @@ def test_column_exists_false(manager):
     Args:
         manager: DimensionManager fixture with a built schema.
     """
-    assert manager._column_exists('nonexistent_col', 'fact_table') is False
+    assert manager._column_exists("nonexistent_col", "fact_table") is False
 
 
 # ===========================================================================
 # Tests de _is_primary_key_column()
 # ===========================================================================
+
 
 # Test que _is_primary_key_column retourne True pour une colonne clé primaire
 def test_is_primary_key_column_true(manager):
@@ -145,7 +152,7 @@ def test_is_primary_key_column_true(manager):
     Args:
         manager: DimensionManager fixture with a built schema.
     """
-    assert manager._is_primary_key_column('id') is True
+    assert manager._is_primary_key_column("id") is True
 
 
 # Test que _is_primary_key_column retourne False pour une colonne non-clé primaire
@@ -155,12 +162,13 @@ def test_is_primary_key_column_false(manager):
     Args:
         manager: DimensionManager fixture with a built schema.
     """
-    assert manager._is_primary_key_column('value') is False
+    assert manager._is_primary_key_column("value") is False
 
 
 # ===========================================================================
 # Tests de _invalidate_metadata_cache()
 # ===========================================================================
+
 
 # Test que _invalidate_metadata_cache vide le cache
 def test_invalidate_metadata_cache(manager):
@@ -182,6 +190,7 @@ def test_invalidate_metadata_cache(manager):
 # Tests de _check_categorical_threshold()
 # ===========================================================================
 
+
 # Test que _check_categorical_threshold retourne True quand le nombre de modalités est inférieur au seuil
 def test_check_categorical_threshold_below(manager):
     """Test that _check_categorical_threshold returns True when unique values <= threshold.
@@ -190,7 +199,7 @@ def test_check_categorical_threshold_below(manager):
         manager: DimensionManager fixture with a built schema.
     """
     # Série avec 3 modalités, seuil = 4
-    series = nw.from_native(pl.Series('col', ['A', 'B', 'C', 'A']), series_only=True)
+    series = nw.from_native(pl.Series("col", ["A", "B", "C", "A"]), series_only=True)
     result = manager._check_categorical_threshold(series, threshold=4)
     assert result is True
 
@@ -203,7 +212,9 @@ def test_check_categorical_threshold_above(manager):
         manager: DimensionManager fixture with a built schema.
     """
     # Série avec 5 modalités, seuil = 4
-    series = nw.from_native(pl.Series('col', ['A', 'B', 'C', 'D', 'E']), series_only=True)
+    series = nw.from_native(
+        pl.Series("col", ["A", "B", "C", "D", "E"]), series_only=True
+    )
     result = manager._check_categorical_threshold(series, threshold=4)
     assert result is False
 
@@ -215,6 +226,8 @@ def test_check_categorical_threshold_all_null(manager):
     Args:
         manager: DimensionManager fixture with a built schema.
     """
-    series = nw.from_native(pl.Series('col', [None, None, None], dtype=pl.Utf8), series_only=True)
+    series = nw.from_native(
+        pl.Series("col", [None, None, None], dtype=pl.Utf8), series_only=True
+    )
     result = manager._check_categorical_threshold(series, threshold=4)
     assert result is False

@@ -1,16 +1,17 @@
 # Importation des modules
 # Modules de base
-import polars as pl
 from datetime import datetime
+
+import polars as pl
+
 # Module de tests
-import pytest
 # Modules du package à tester
 from dt_ducklake_manager.operations import DatabaseUpdater
-
 
 # ---------------------------------------------------------------------------
 # Tests de l'initialisation
 # ---------------------------------------------------------------------------
+
 
 # Test de l'initialisation correcte de DatabaseUpdater
 def test_updater_initialization(built_ducklake_schema):
@@ -40,6 +41,7 @@ def test_updater_initialization_without_validation(built_ducklake_schema):
 # Tests de validate_operation()
 # ---------------------------------------------------------------------------
 
+
 # Test que validate_operation retourne True pour une insertion valide
 def test_validate_operation_insert_returns_bool(updater, update_df):
     """Test that validate_operation returns a boolean for an insert operation.
@@ -48,7 +50,7 @@ def test_validate_operation_insert_returns_bool(updater, update_df):
         updater: DatabaseUpdater fixture.
         update_df: DataFrame with new rows.
     """
-    result = updater.validate_operation('insert', df=update_df)
+    result = updater.validate_operation("insert", df=update_df)
     assert isinstance(result, bool)
 
 
@@ -61,13 +63,14 @@ def test_validate_operation_disabled_returns_true(built_ducklake_schema, update_
         update_df: DataFrame with new rows.
     """
     updater = DatabaseUpdater(connection=built_ducklake_schema, enable_validation=False)
-    result = updater.validate_operation('insert', df=update_df)
+    result = updater.validate_operation("insert", df=update_df)
     assert result is True
 
 
 # ---------------------------------------------------------------------------
 # Tests de update_database()
 # ---------------------------------------------------------------------------
+
 
 # Test d'insertion de nouvelles lignes sans transaction
 def test_update_database_insert_new_rows(updater, built_ducklake_schema, update_df):
@@ -79,13 +82,15 @@ def test_update_database_insert_new_rows(updater, built_ducklake_schema, update_
         update_df: DataFrame with new rows to insert.
     """
     # Comptage initial
-    initial_count = built_ducklake_schema.execute("SELECT COUNT(*) FROM fact_table").fetchone()[0]
+    initial_count = built_ducklake_schema.execute(
+        "SELECT COUNT(*) FROM fact_table"
+    ).fetchone()[0]
 
     # Insertion des nouvelles lignes sans transaction
     # Remarque : keep='first' est requis car narwhals ne supporte pas keep=False (valeur par défaut)
     result = updater.update_database(
         update_df=update_df,
-        keep='first',
+        keep="first",
         use_transaction=False,
     )
 
@@ -94,7 +99,9 @@ def test_update_database_insert_new_rows(updater, built_ducklake_schema, update_
     assert result is True
 
     # Vérification que le nombre de lignes a augmenté
-    final_count = built_ducklake_schema.execute("SELECT COUNT(*) FROM fact_table").fetchone()[0]
+    final_count = built_ducklake_schema.execute(
+        "SELECT COUNT(*) FROM fact_table"
+    ).fetchone()[0]
     assert final_count > initial_count
 
 
@@ -109,20 +116,22 @@ def test_update_database_with_dedup_on_update(updater, built_ducklake_schema):
     # DataFrame avec deux lignes IDENTIQUES sur toutes les colonnes (id=20, même date)
     # La déduplication utilise toutes les colonnes (primary_keys non transmises au niveau du
     # DataFrame d'entrée) : les deux lignes doivent donc être parfaitement identiques.
-    df_with_dup = pl.DataFrame({
-        'id': [20, 20, 21],
-        'category': ['A', 'A', 'B'],
-        'value': [5.0, 5.0, 6.0],
-        'date': [datetime(2024, 3, 1), datetime(2024, 3, 1), datetime(2024, 3, 2)],
-        'status': ['active', 'active', 'inactive'],
-        'high_cardinality': ['val_300', 'val_300', 'val_301'],
-    })
+    df_with_dup = pl.DataFrame(
+        {
+            "id": [20, 20, 21],
+            "category": ["A", "A", "B"],
+            "value": [5.0, 5.0, 6.0],
+            "date": [datetime(2024, 3, 1), datetime(2024, 3, 1), datetime(2024, 3, 2)],
+            "status": ["active", "active", "inactive"],
+            "high_cardinality": ["val_300", "val_300", "val_301"],
+        }
+    )
 
     result = updater.update_database(
         update_df=df_with_dup,
         check_duplicates_update=True,
         check_duplicates_db=False,
-        keep='first',
+        keep="first",
         use_transaction=False,
     )
 
@@ -145,8 +154,11 @@ def test_update_database_with_dedup_on_update(updater, built_ducklake_schema):
 # Tests de changement de statut catégoriel lors d'une mise à jour
 # ---------------------------------------------------------------------------
 
+
 # Test de conversion non-catégorielle → catégorielle après remplacement de lignes
-def test_update_database_non_categorical_becomes_categorical(updater, built_ducklake_schema):
+def test_update_database_non_categorical_becomes_categorical(
+    updater, built_ducklake_schema
+):
     """Test that a non-categorical column becomes categorical when its unique value count
     drops to or below the threshold after an update.
 
@@ -166,24 +178,30 @@ def test_update_database_non_categorical_becomes_categorical(updater, built_duck
     assert is_cat_before is False
 
     # Vérification initiale : la table de dimension dim_high_cardinality n'existe pas encore
-    tables_before = [row[0] for row in built_ducklake_schema.execute("SHOW TABLES").fetchall()]
-    assert 'dim_high_cardinality' not in tables_before
+    tables_before = [
+        row[0] for row in built_ducklake_schema.execute("SHOW TABLES").fetchall()
+    ]
+    assert "dim_high_cardinality" not in tables_before
 
     # Remplacement de toutes les lignes existantes (id=1..5) via upsert :
     # les 5 nouvelles valeurs de high_cardinality n'appartiennent qu'à 3 modalités distinctes
     # (grp_A, grp_B, grp_C), ce qui est ≤ seuil=4 → conversion en variable catégorielle attendue.
-    replacing_df = pl.DataFrame({
-        'id': [1, 2, 3, 4, 5],
-        'category': ['A', 'B', 'A', 'C', 'B'],
-        'value': [0.1, 0.2, 0.3, 0.4, 0.5],
-        'date': pl.date_range(datetime(2024, 1, 1), datetime(2024, 1, 5), '1d', eager=True),
-        'status': ['active', 'inactive', 'active', 'active', 'inactive'],
-        'high_cardinality': ['grp_A', 'grp_B', 'grp_C', 'grp_A', 'grp_B'],
-    })
+    replacing_df = pl.DataFrame(
+        {
+            "id": [1, 2, 3, 4, 5],
+            "category": ["A", "B", "A", "C", "B"],
+            "value": [0.1, 0.2, 0.3, 0.4, 0.5],
+            "date": pl.date_range(
+                datetime(2024, 1, 1), datetime(2024, 1, 5), "1d", eager=True
+            ),
+            "status": ["active", "inactive", "active", "active", "inactive"],
+            "high_cardinality": ["grp_A", "grp_B", "grp_C", "grp_A", "grp_B"],
+        }
+    )
 
     result = updater.update_database(
         update_df=replacing_df,
-        keep='first',
+        keep="first",
         use_transaction=False,
     )
 
@@ -196,12 +214,16 @@ def test_update_database_non_categorical_becomes_categorical(updater, built_duck
     assert is_cat_after is True
 
     # Vérification : la table de dimension dim_high_cardinality a bien été créée
-    tables_after = [row[0] for row in built_ducklake_schema.execute("SHOW TABLES").fetchall()]
-    assert 'dim_high_cardinality' in tables_after
+    tables_after = [
+        row[0] for row in built_ducklake_schema.execute("SHOW TABLES").fetchall()
+    ]
+    assert "dim_high_cardinality" in tables_after
 
 
 # Test de conversion catégorielle → non-catégorielle après ajout de nouvelles modalités
-def test_update_database_categorical_becomes_non_categorical(updater, built_ducklake_schema):
+def test_update_database_categorical_becomes_non_categorical(
+    updater, built_ducklake_schema
+):
     """Test that a categorical column loses its categorical status when the number of
     distinct values exceeds the threshold after inserting new rows.
 
@@ -220,24 +242,28 @@ def test_update_database_categorical_becomes_non_categorical(updater, built_duck
     ).fetchone()[0]
     assert is_cat_before is True
 
-    tables_before = [row[0] for row in built_ducklake_schema.execute("SHOW TABLES").fetchall()]
-    assert 'dim_category' in tables_before
+    tables_before = [
+        row[0] for row in built_ducklake_schema.execute("SHOW TABLES").fetchall()
+    ]
+    assert "dim_category" in tables_before
 
     # Insertion de nouvelles lignes portant 2 modalités inédites pour category (D et E) :
     # après insertion, la table de dimension contiendra [A, B, C, D, E] = 5 entrées > seuil=4
     # → conversion vers non-catégorielle et suppression de dim_category attendues.
-    expansion_df = pl.DataFrame({
-        'id': [10, 11, 12],
-        'category': ['D', 'E', 'D'],
-        'value': [1.0, 2.0, 3.0],
-        'date': [datetime(2024, 3, 1), datetime(2024, 3, 2), datetime(2024, 3, 3)],
-        'status': ['active', 'inactive', 'active'],
-        'high_cardinality': ['val_200', 'val_201', 'val_202'],
-    })
+    expansion_df = pl.DataFrame(
+        {
+            "id": [10, 11, 12],
+            "category": ["D", "E", "D"],
+            "value": [1.0, 2.0, 3.0],
+            "date": [datetime(2024, 3, 1), datetime(2024, 3, 2), datetime(2024, 3, 3)],
+            "status": ["active", "inactive", "active"],
+            "high_cardinality": ["val_200", "val_201", "val_202"],
+        }
+    )
 
     result = updater.update_database(
         update_df=expansion_df,
-        keep='first',
+        keep="first",
         use_transaction=False,
     )
 
@@ -250,5 +276,7 @@ def test_update_database_categorical_becomes_non_categorical(updater, built_duck
     assert is_cat_after is False
 
     # Vérification : la table de dimension dim_category a bien été supprimée
-    tables_after = [row[0] for row in built_ducklake_schema.execute("SHOW TABLES").fetchall()]
-    assert 'dim_category' not in tables_after
+    tables_after = [
+        row[0] for row in built_ducklake_schema.execute("SHOW TABLES").fetchall()
+    ]
+    assert "dim_category" not in tables_after

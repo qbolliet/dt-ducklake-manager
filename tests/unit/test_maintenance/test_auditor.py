@@ -1,21 +1,21 @@
 # Importation des modules
 # Modules de base
-import time
 # Module de tests
 import pytest
+
 # Modules du package à tester
 from dt_ducklake_manager.maintenance import (
     DatabaseAuditor,
+    ValidationIssue,
     ValidationLevel,
     ValidationReport,
-    ValidationIssue,
 )
-from dt_ducklake_manager.maintenance.auditor import IssueType, IssueSeverity
-
+from dt_ducklake_manager.maintenance.auditor import IssueSeverity, IssueType
 
 # ===========================================================================
 # Tests de ValidationIssue
 # ===========================================================================
+
 
 # Test de l'initialisation d'un ValidationIssue
 def test_validation_issue_initialization():
@@ -29,15 +29,15 @@ def test_validation_issue_initialization():
     issue = ValidationIssue(
         issue_type=IssueType.DATA_INTEGRITY,
         severity=IssueSeverity.HIGH,
-        table_name='fact_table',
-        column_name='id',
-        description='Duplicate primary keys',
-        suggested_fix='Remove duplicates',
+        table_name="fact_table",
+        column_name="id",
+        description="Duplicate primary keys",
+        suggested_fix="Remove duplicates",
     )
     assert issue.issue_type == IssueType.DATA_INTEGRITY
     assert issue.severity == IssueSeverity.HIGH
-    assert issue.table_name == 'fact_table'
-    assert issue.column_name == 'id'
+    assert issue.table_name == "fact_table"
+    assert issue.column_name == "id"
     # Vérification que detected_at est initialisé automatiquement
     assert issue.detected_at > 0
 
@@ -45,6 +45,7 @@ def test_validation_issue_initialization():
 # ===========================================================================
 # Tests de ValidationReport
 # ===========================================================================
+
 
 # Initialisation d'un rapport d'audit utilisé dans les tests de ValidationReport
 @pytest.fixture
@@ -70,7 +71,7 @@ def test_validation_report_add_issue(empty_report):
     issue = ValidationIssue(
         issue_type=IssueType.SCHEMA_INCONSISTENCY,
         severity=IssueSeverity.MEDIUM,
-        table_name='metadata',
+        table_name="metadata",
     )
     empty_report.add_issue(issue)
 
@@ -86,9 +87,17 @@ def test_validation_report_get_issues_by_severity(empty_report):
         empty_report: Empty ValidationReport fixture.
     """
     # Ajout de problèmes de sévérités différentes
-    empty_report.add_issue(ValidationIssue(IssueType.DATA_INTEGRITY, IssueSeverity.CRITICAL, 'fact_table'))
-    empty_report.add_issue(ValidationIssue(IssueType.SCHEMA_INCONSISTENCY, IssueSeverity.HIGH, 'metadata'))
-    empty_report.add_issue(ValidationIssue(IssueType.ORPHANED_REFERENCE, IssueSeverity.CRITICAL, 'dim_category'))
+    empty_report.add_issue(
+        ValidationIssue(IssueType.DATA_INTEGRITY, IssueSeverity.CRITICAL, "fact_table")
+    )
+    empty_report.add_issue(
+        ValidationIssue(IssueType.SCHEMA_INCONSISTENCY, IssueSeverity.HIGH, "metadata")
+    )
+    empty_report.add_issue(
+        ValidationIssue(
+            IssueType.ORPHANED_REFERENCE, IssueSeverity.CRITICAL, "dim_category"
+        )
+    )
 
     # Vérification du filtrage par sévérité CRITICAL
     critical = empty_report.get_issues_by_severity(IssueSeverity.CRITICAL)
@@ -105,9 +114,17 @@ def test_validation_report_get_issues_by_type(empty_report):
     Args:
         empty_report: Empty ValidationReport fixture.
     """
-    empty_report.add_issue(ValidationIssue(IssueType.DATA_INTEGRITY, IssueSeverity.HIGH, 'fact_table'))
-    empty_report.add_issue(ValidationIssue(IssueType.DATA_INTEGRITY, IssueSeverity.LOW, 'metadata'))
-    empty_report.add_issue(ValidationIssue(IssueType.ORPHANED_REFERENCE, IssueSeverity.MEDIUM, 'dim_status'))
+    empty_report.add_issue(
+        ValidationIssue(IssueType.DATA_INTEGRITY, IssueSeverity.HIGH, "fact_table")
+    )
+    empty_report.add_issue(
+        ValidationIssue(IssueType.DATA_INTEGRITY, IssueSeverity.LOW, "metadata")
+    )
+    empty_report.add_issue(
+        ValidationIssue(
+            IssueType.ORPHANED_REFERENCE, IssueSeverity.MEDIUM, "dim_status"
+        )
+    )
 
     # Vérification du filtrage par type DATA_INTEGRITY
     data_issues = empty_report.get_issues_by_type(IssueType.DATA_INTEGRITY)
@@ -124,8 +141,12 @@ def test_validation_report_get_critical_issues_count(empty_report):
         empty_report: Empty ValidationReport fixture.
     """
     # Ajout de problèmes de sévérités variées
-    empty_report.add_issue(ValidationIssue(IssueType.DATA_INTEGRITY, IssueSeverity.CRITICAL, 'fact_table'))
-    empty_report.add_issue(ValidationIssue(IssueType.DATA_INTEGRITY, IssueSeverity.HIGH, 'fact_table'))
+    empty_report.add_issue(
+        ValidationIssue(IssueType.DATA_INTEGRITY, IssueSeverity.CRITICAL, "fact_table")
+    )
+    empty_report.add_issue(
+        ValidationIssue(IssueType.DATA_INTEGRITY, IssueSeverity.HIGH, "fact_table")
+    )
 
     # Vérification que seul le CRITICAL est compté
     assert empty_report.get_critical_issues_count() == 1
@@ -139,7 +160,9 @@ def test_validation_report_finalize(empty_report):
         empty_report: Empty ValidationReport fixture.
     """
     # Ajout d'un problème avant la finalisation
-    empty_report.add_issue(ValidationIssue(IssueType.DATA_INTEGRITY, IssueSeverity.CRITICAL, 'fact_table'))
+    empty_report.add_issue(
+        ValidationIssue(IssueType.DATA_INTEGRITY, IssueSeverity.CRITICAL, "fact_table")
+    )
 
     empty_report.finalize()
 
@@ -147,15 +170,17 @@ def test_validation_report_finalize(empty_report):
     assert empty_report.end_time is not None
     assert empty_report.end_time >= empty_report.start_time
     # Vérification de la présence des statistiques clés
-    assert 'total_issues' in empty_report.validation_summary
-    assert empty_report.validation_summary['total_issues'] == 1
-    assert empty_report.validation_summary['critical_issues'] == 1
+    assert "total_issues" in empty_report.validation_summary
+    assert empty_report.validation_summary["total_issues"] == 1
+    assert empty_report.validation_summary["critical_issues"] == 1
     # Vérification que des recommandations ont été générées pour les issues critiques
     assert len(empty_report.recommendations) > 0
 
 
 # Test que finalize génère la bonne recommandation de performance pour Ducklake (pas d'index)
-def test_validation_report_finalize_generates_ducklake_performance_recommendation(empty_report):
+def test_validation_report_finalize_generates_ducklake_performance_recommendation(
+    empty_report,
+):
     """Test that finalize generates a Ducklake-specific performance recommendation.
 
     The recommendation must not reference 'indexes' and must instead reference
@@ -164,19 +189,26 @@ def test_validation_report_finalize_generates_ducklake_performance_recommendatio
     Args:
         empty_report: Empty ValidationReport fixture.
     """
-    empty_report.add_issue(ValidationIssue(IssueType.PERFORMANCE_ISSUE, IssueSeverity.LOW, 'fact_table'))
+    empty_report.add_issue(
+        ValidationIssue(IssueType.PERFORMANCE_ISSUE, IssueSeverity.LOW, "fact_table")
+    )
     empty_report.finalize()
 
     # Vérification qu'une recommandation de performance a été générée
     assert len(empty_report.recommendations) > 0
     perf_recommendation = next(
-        (r for r in empty_report.recommendations
-         if 'performance' in r.lower() or 'ducklake' in r.lower() or 'partition' in r.lower()),
-        None
+        (
+            r
+            for r in empty_report.recommendations
+            if "performance" in r.lower()
+            or "ducklake" in r.lower()
+            or "partition" in r.lower()
+        ),
+        None,
     )
     assert perf_recommendation is not None
     # Vérification que la recommandation ne mentionne plus les index DuckDB
-    assert 'index' not in perf_recommendation.lower()
+    assert "index" not in perf_recommendation.lower()
 
 
 # Test que finalize génère des recommandations pour les issues d'intégrité de schéma
@@ -186,16 +218,21 @@ def test_validation_report_finalize_generates_schema_recommendation(empty_report
     Args:
         empty_report: Empty ValidationReport fixture.
     """
-    empty_report.add_issue(ValidationIssue(IssueType.SCHEMA_INCONSISTENCY, IssueSeverity.HIGH, 'metadata'))
+    empty_report.add_issue(
+        ValidationIssue(IssueType.SCHEMA_INCONSISTENCY, IssueSeverity.HIGH, "metadata")
+    )
     empty_report.finalize()
 
     # Vérification qu'une recommandation de schéma a été générée
-    assert any('schema' in r.lower() or 'Schema' in r for r in empty_report.recommendations)
+    assert any(
+        "schema" in r.lower() or "Schema" in r for r in empty_report.recommendations
+    )
 
 
 # ===========================================================================
 # Tests de DatabaseAuditor
 # ===========================================================================
+
 
 # Test de l'initialisation de DatabaseAuditor sans connexion
 def test_database_auditor_initialization_without_connection():
@@ -218,7 +255,9 @@ def test_database_auditor_initialization_with_connection(built_ducklake_schema):
     Args:
         built_ducklake_schema: Fixture providing a DuckDB connection with a built schema.
     """
-    auditor = DatabaseAuditor(connection=built_ducklake_schema, categorical_threshold=10)
+    auditor = DatabaseAuditor(
+        connection=built_ducklake_schema, categorical_threshold=10
+    )
     assert auditor is not None
 
 
@@ -289,9 +328,9 @@ def test_get_quick_health_check(built_ducklake_schema):
     # Vérification que le résultat est un dictionnaire
     assert isinstance(health, dict)
     # Vérification de la présence des clés retournées par get_quick_health_check
-    assert 'fact_table_rows' in health
-    assert 'metadata_entries' in health
-    assert 'status' in health
+    assert "fact_table_rows" in health
+    assert "metadata_entries" in health
+    assert "status" in health
 
 
 # Test de validate_operation_preconditions pour une opération d'insertion
@@ -303,11 +342,19 @@ def test_validate_operation_preconditions_insert(built_ducklake_schema, sample_d
         sample_df: Sample polars DataFrame.
     """
     import polars as pl
+
     auditor = DatabaseAuditor(connection=built_ducklake_schema)
-    new_row = pl.DataFrame({'id': [99], 'category': ['A'], 'value': [9.9],
-                             'date': sample_df['date'][:1],
-                             'status': ['active'], 'high_cardinality': ['val_999']})
-    report = auditor.validate_operation_preconditions('insert', df=new_row)
+    new_row = pl.DataFrame(
+        {
+            "id": [99],
+            "category": ["A"],
+            "value": [9.9],
+            "date": sample_df["date"][:1],
+            "status": ["active"],
+            "high_cardinality": ["val_999"],
+        }
+    )
+    report = auditor.validate_operation_preconditions("insert", df=new_row)
 
     assert isinstance(report, ValidationReport)
 
@@ -320,7 +367,9 @@ def test_validate_operation_preconditions_delete(built_ducklake_schema):
         built_ducklake_schema: Fixture providing a DuckDB connection with a built schema.
     """
     auditor = DatabaseAuditor(connection=built_ducklake_schema)
-    report = auditor.validate_operation_preconditions('delete', filters=[('id', '=', 1)])
+    report = auditor.validate_operation_preconditions(
+        "delete", filters=[("id", "=", 1)]
+    )
 
     assert isinstance(report, ValidationReport)
 
@@ -329,8 +378,11 @@ def test_validate_operation_preconditions_delete(built_ducklake_schema):
 # Tests des nouvelles vérifications Ducklake
 # ===========================================================================
 
+
 # Test de _validate_partition_configuration sur connexion in-memory
-def test_validate_partition_configuration_reports_missing_partition(built_ducklake_schema):
+def test_validate_partition_configuration_reports_missing_partition(
+    built_ducklake_schema,
+):
     """Test that _validate_partition_configuration reports a LOW PERFORMANCE_ISSUE
     when no partition key is configured (case for all in-memory connections).
 
@@ -349,7 +401,7 @@ def test_validate_partition_configuration_reports_missing_partition(built_duckla
     # Vérification de la sévérité LOW
     assert all(issue.severity == IssueSeverity.LOW for issue in perf_issues)
     # Vérification que le problème concerne la table des faits
-    assert any(issue.table_name == 'fact_table' for issue in perf_issues)
+    assert any(issue.table_name == "fact_table" for issue in perf_issues)
 
 
 # Test de _validate_ducklake_maintenance silencieux sur connexion in-memory
@@ -374,7 +426,9 @@ def test_validate_ducklake_maintenance_silent_on_in_memory(built_ducklake_schema
 
 
 # Test de la correction du filtre python_type dans _validate_categorical_thresholds
-def test_validate_categorical_thresholds_detects_string_columns_with_low_cardinality(built_ducklake_schema):
+def test_validate_categorical_thresholds_detects_string_columns_with_low_cardinality(
+    built_ducklake_schema,
+):
     """Test that _validate_categorical_thresholds correctly identifies non-categorical
     String columns using the Narwhals type name 'String' (not pandas 'object').
 
@@ -385,7 +439,9 @@ def test_validate_categorical_thresholds_detects_string_columns_with_low_cardina
         built_ducklake_schema: Fixture providing a DuckDB connection with a built schema.
     """
     # Utilisation d'un seuil supérieur aux 5 valeurs uniques de high_cardinality pour déclencher la détection
-    auditor = DatabaseAuditor(connection=built_ducklake_schema, categorical_threshold=10)
+    auditor = DatabaseAuditor(
+        connection=built_ducklake_schema, categorical_threshold=10
+    )
     report = ValidationReport(validation_level=ValidationLevel.COMPREHENSIVE)
 
     auditor._validate_categorical_thresholds(report)
@@ -393,4 +449,4 @@ def test_validate_categorical_thresholds_detects_string_columns_with_low_cardina
     # Vérification que la colonne 'high_cardinality' est détectée comme potentiellement catégorielle
     perf_issues = report.get_issues_by_type(IssueType.PERFORMANCE_ISSUE)
     column_names = [issue.column_name for issue in perf_issues]
-    assert 'high_cardinality' in column_names
+    assert "high_cardinality" in column_names
