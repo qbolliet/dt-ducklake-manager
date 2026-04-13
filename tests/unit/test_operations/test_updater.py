@@ -18,7 +18,8 @@ def test_updater_initialization(built_ducklake_schema):
     """Test that DatabaseUpdater initializes without errors.
 
     Args:
-        built_ducklake_schema: Fixture providing a DuckDB connection with a built schema.
+        built_ducklake_schema: Fixture providing a DuckDB connection with a built
+        schema.
     """
     updater = DatabaseUpdater(connection=built_ducklake_schema, categorical_threshold=4)
     assert updater is not None
@@ -31,7 +32,8 @@ def test_updater_initialization_without_validation(built_ducklake_schema):
     """Test that DatabaseUpdater can be initialized with validation disabled.
 
     Args:
-        built_ducklake_schema: Fixture providing a DuckDB connection with a built schema.
+        built_ducklake_schema: Fixture providing a DuckDB connection with a built
+        schema.
     """
     updater = DatabaseUpdater(connection=built_ducklake_schema, enable_validation=False)
     assert updater.auditor is None
@@ -59,7 +61,8 @@ def test_validate_operation_disabled_returns_true(built_ducklake_schema, update_
     """Test that validate_operation always returns True when validation is disabled.
 
     Args:
-        built_ducklake_schema: Fixture providing a DuckDB connection with a built schema.
+        built_ducklake_schema: Fixture providing a DuckDB connection with a built
+        schema.
         update_df: DataFrame with new rows.
     """
     updater = DatabaseUpdater(connection=built_ducklake_schema, enable_validation=False)
@@ -87,7 +90,8 @@ def test_update_database_insert_new_rows(updater, built_ducklake_schema, update_
     ).fetchone()[0]
 
     # Insertion des nouvelles lignes sans transaction
-    # Remarque : keep='first' est requis car narwhals ne supporte pas keep=False (valeur par défaut)
+    # Remarque : keep='first' est requis car narwhals ne supporte pas keep=False (valeur
+    # par défaut)
     result = updater.update_database(
         update_df=update_df,
         keep="first",
@@ -107,14 +111,16 @@ def test_update_database_insert_new_rows(updater, built_ducklake_schema, update_
 
 # Test d'insertion avec déduplication sur les doublons du DataFrame d'entrée
 def test_update_database_with_dedup_on_update(updater, built_ducklake_schema):
-    """Test that update_database removes duplicates from the update DataFrame when requested.
+    """Test that update_database removes duplicates from the update
+    DataFrame when requested.
 
     Args:
         updater: DatabaseUpdater fixture.
         built_ducklake_schema: DuckDB connection.
     """
     # DataFrame avec deux lignes IDENTIQUES sur toutes les colonnes (id=20, même date)
-    # La déduplication utilise toutes les colonnes (primary_keys non transmises au niveau du
+    # La déduplication utilise toutes les colonnes (primary_keys non transmises au
+    # niveau du
     # DataFrame d'entrée) : les deux lignes doivent donc être parfaitement identiques.
     df_with_dup = pl.DataFrame(
         {
@@ -137,7 +143,8 @@ def test_update_database_with_dedup_on_update(updater, built_ducklake_schema):
 
     assert result is True
 
-    # Vérification que la déduplication a fonctionné : id=20 ne doit apparaître qu'une seule fois
+    # Vérification que la déduplication a fonctionné : id=20 ne doit apparaître qu'une
+    # seule fois
     count_20 = built_ducklake_schema.execute(
         "SELECT COUNT(*) FROM fact_table WHERE id = 20"
     ).fetchone()[0]
@@ -159,33 +166,39 @@ def test_update_database_with_dedup_on_update(updater, built_ducklake_schema):
 def test_update_database_non_categorical_becomes_categorical(
     updater, built_ducklake_schema
 ):
-    """Test that a non-categorical column becomes categorical when its unique value count
-    drops to or below the threshold after an update.
+    """Test that a non-categorical column becomes categorical when its
+    unique value count drops to or below the threshold after an update.
 
-    The sample schema is built with categorical_threshold=4. The column 'high_cardinality'
+    The sample schema is built with categorical_threshold=4.
+    The column 'high_cardinality'
     initially has 5 unique values (val_100..val_104) and is therefore NOT categorical.
     After replacing all existing rows (id=1..5) with values from a set of only 3 unique
-    labels, the column should be converted to categorical and its dimension table created.
+    labels, the column should be converted to categorical and its dimension table
+    created.
 
     Args:
         updater: DatabaseUpdater fixture.
         built_ducklake_schema: DuckDB connection with the built schema.
     """
-    # Vérification initiale : high_cardinality n'est pas catégorielle (5 valeurs > seuil=4)
+    # Vérification initiale :
+    # high_cardinality n'est pas catégorielle (5 valeurs > seuil=4)
     is_cat_before = built_ducklake_schema.execute(
         "SELECT is_categorical FROM metadata WHERE name = 'high_cardinality'"
     ).fetchone()[0]
     assert is_cat_before is False
 
-    # Vérification initiale : la table de dimension dim_high_cardinality n'existe pas encore
+    # Vérification initiale :
+    # la table de dimension dim_high_cardinality n'existe pas encore
     tables_before = [
         row[0] for row in built_ducklake_schema.execute("SHOW TABLES").fetchall()
     ]
     assert "dim_high_cardinality" not in tables_before
 
     # Remplacement de toutes les lignes existantes (id=1..5) via upsert :
-    # les 5 nouvelles valeurs de high_cardinality n'appartiennent qu'à 3 modalités distinctes
-    # (grp_A, grp_B, grp_C), ce qui est ≤ seuil=4 → conversion en variable catégorielle attendue.
+    # les 5 nouvelles valeurs de high_cardinality
+    # n'appartiennent qu'à 3 modalités distinctes :
+    # (grp_A, grp_B, grp_C), ce qui est ≤ seuil=4
+    # → conversion en variable catégorielle attendue.
     replacing_df = pl.DataFrame(
         {
             "id": [1, 2, 3, 4, 5],
@@ -247,8 +260,9 @@ def test_update_database_categorical_becomes_non_categorical(
     ]
     assert "dim_category" in tables_before
 
-    # Insertion de nouvelles lignes portant 2 modalités inédites pour category (D et E) :
-    # après insertion, la table de dimension contiendra [A, B, C, D, E] = 5 entrées > seuil=4
+    # Insertion de nouvelles lignes portant 2 modalités inédites pour category (D et E):
+    # après insertion, la table de dimension contiendra
+    # [A, B, C, D, E] = 5 entrées > seuil=4
     # → conversion vers non-catégorielle et suppression de dim_category attendues.
     expansion_df = pl.DataFrame(
         {

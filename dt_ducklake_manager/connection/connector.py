@@ -39,9 +39,11 @@ class DuckLakeConnector:
         >>> # Read-write connection
         >>> conn = DuckLakeConnector('catalog.ducklake', 'data/').connect()
         >>> # Read-only connection (GraphQL API, dashboard)
-        >>> conn = DuckLakeConnector('catalog.ducklake', 'data/', read_only=True).connect()
+        >>> conn = DuckLakeConnector('catalog.ducklake', 'data/',
+        read_only=True).connect()
         >>> # Time-travel to a specific snapshot (ML run audit)
-        >>> conn = DuckLakeConnector('catalog.ducklake', 'data/', snapshot_version=3).connect()
+        >>> conn = DuckLakeConnector('catalog.ducklake', 'data/',
+        snapshot_version=3).connect()
     """
 
     # Initialisation
@@ -164,7 +166,8 @@ class DuckLakeConnector:
     # Génération d'une clause SQL AT pour requête time-travel sur connexion existante
     def at_clause(self) -> str:
         """
-        Return the ``AT (...)`` SQL clause for time-travel queries on an existing connection.
+        Return the ``AT (...)`` SQL clause for time-travel queries on an existing
+        connection.
 
         DuckLake prevents the same catalog file from being attached more than once
         per process (even under different aliases), so ``snapshot_version`` /
@@ -187,7 +190,8 @@ class DuckLakeConnector:
             >>> c = DuckLakeConnector('cat.ducklake', 'data/', snapshot_version=3)
             >>> c.at_clause()
             'AT (VERSION => 3)'
-            >>> c2 = DuckLakeConnector('cat.ducklake', 'data/', snapshot_time='2025-01-01')
+            >>> c2 = DuckLakeConnector('cat.ducklake', 'data/',
+            snapshot_time='2025-01-01')
             >>> c2.at_clause()
             "AT (TIMESTAMP => '2025-01-01')"
             >>> DuckLakeConnector('cat.ducklake', 'data/').at_clause()
@@ -223,12 +227,14 @@ class DuckLakeConnector:
             >>> connector = DuckLakeConnector('catalog.ducklake', 'data/')
             >>> connector.attach(conn)
         """
-        # Attachement du catalogue sur une connexion existante (sans réinstaller l'extension)
+        # Attachement du catalogue sur une connexion existante (sans réinstaller
+        # l'extension)
         attach_sql = self._build_attach_sql()
         conn.execute(attach_sql)
         conn.execute(f"USE {self.catalog_alias}.{self.schema}")
         self.logger.info(
-            f"DuckLake catalog attached to the existing connection: '{self.catalog_path}'"
+            f"DuckLake catalog attached to the existing connection:"
+            f"'{self.catalog_path}'"
         )
         return conn
 
@@ -265,4 +271,7 @@ class DuckLakeConnector:
 
         # Assemblage de la requête ATTACH finale
         options_str = ", ".join(options)
-        return f"ATTACH 'ducklake:{self.catalog_path}' AS {self.catalog_alias} ({options_str})"
+        return (
+            f"ATTACH 'ducklake:{self.catalog_path}' AS {self.catalog_alias}"
+            f" ({options_str})"
+        )

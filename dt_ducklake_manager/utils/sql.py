@@ -134,11 +134,14 @@ def _build_conjonction_filter(filters: list[tuple[str, str, Any]]) -> str:
     """Constructs a SQL 'AND' filter condition from a list of filter tuples.
 
     Args:
-        filters (List[Tuple[str, str, Any]]): A list of filter conditions, where each filter is represented as a tuple (column, operator, value).
-        The operator can be comparison operators like '=', '!=', '<', '>', or set operators like 'in', 'not in'.
+        filters (List[Tuple[str, str, Any]]): A list of filter conditions, where each
+        filter is represented as a tuple (column, operator, value).
+        The operator can be comparison operators like '=', '!=', '<', '>', or set
+        operators like 'in', 'not in'.
 
     Returns:
-        str: A string representing the conjunction of all the filter conditions, joined with 'AND'.
+        str: A string representing the conjunction of all the filter conditions, joined
+        with 'AND'.
     """
     # Initialisation de la condition
     conditions = []
@@ -161,19 +164,25 @@ def _build_conjonction_filter(filters: list[tuple[str, str, Any]]) -> str:
 def _build_sql_filter(
     filters: list[tuple[str, str, Any]] | list[list[tuple[str, str, Any]]],
 ) -> str:
-    """Constructs a SQL filter condition from a list of filter tuples or a list of lists of filter tuples.
+    """Constructs a SQL filter condition from a list of filter tuples
+    or a list of lists of filter tuples.
 
     Args:
-        filters (Union[List[Tuple[str, str, Any]], List[List[Tuple[str, str, Any]]]]): Filter syntax: [[(column, op, val), …],…] where op is [==, =, >, >=, <, <=, !=, in, not in].
-        The innermost tuples are transposed into a set of filters applied through an AND operation.
+        filters (Union[List[Tuple[str, str, Any]], List[List[Tuple[str, str, Any]]]]):
+        Filter syntax: [[(column, op, val), …],…] where op is [==, =, >, >=, <, <=, !=,
+        in, not in].
+        The innermost tuples are transposed into a set of filters applied through an AND
+        operation.
         The outer list combines these sets of filters through an OR operation.
-        A single list of tuples can also be used, meaning that no OR operation between set of filters is to be conducted.
+        A single list of tuples can also be used, meaning that no OR operation between
+        set of filters is to be conducted.
 
     Raises:
         TypeError: If the filters are not provided in the expected format.
 
     Returns:
-        str: A string representing the complete filter condition for the SQL query, either as a conjunction (AND) or
+        str: A string representing the complete filter condition for the SQL query,
+        either as a conjunction (AND) or
         a disjunction (OR) of filter conditions.
     """
 
@@ -194,7 +203,8 @@ def _build_sql_filter(
     # Cas d'erreur de typage
     else:
         raise TypeError(
-            f"Invalid type for 'filters' : {filters}. Shoud be in [List[Tuple], List[List[Tuple]]]"
+            f"Invalid type for 'filters' : {filters}. Shoud be in [List[Tuple],"
+            f"List[List[Tuple]]]"
         )
 
 
@@ -209,10 +219,14 @@ def _build_where_clause(
     """Constructs a SQL SELECT WHERE clause based on the given filters.
 
     Args:
-        filters (Optional[ Union[List[Tuple[str, str, Any]], List[List[Tuple[str, str, Any]]], str, None] ], optional): A filter condition for the rows. Filter syntax: [[(column, op, val), …],…] where op is [=, >, >=, <, <=, !=, in, not in].
-        The innermost tuples are transposed into a set of filters applied through an AND operation.
+        filters (Optional[ Union[List[Tuple[str, str, Any]], List[List[Tuple[str, str,
+        Any]]], str, None] ], optional): A filter condition for the rows. Filter syntax:
+        [[(column, op, val), …],…] where op is [=, >, >=, <, <=, !=, in, not in].
+        The innermost tuples are transposed into a set of filters applied through an AND
+        operation.
         The outer list combines these sets of filters through an OR operation.
-        A single list of tuples can also be used, meaning that no OR operation between set of filters is to be conducted. Defaults to None.
+        A single list of tuples can also be used, meaning that no OR operation between
+        set of filters is to be conducted. Defaults to None.
 
     Raises:
         TypeError: If the filters are not provided in the expected format.

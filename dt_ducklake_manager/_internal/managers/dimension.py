@@ -161,7 +161,8 @@ class DimensionManager(BaseSchemaManager):
                 table_name = f"dim_{dimension_name}"
 
                 # Création de la table
-                # L'unicité de 'value' est garantie applicativement par l'utilisation de enumerate() qui produit des indices strictement croissants.
+                # L'unicité de 'value' est garantie applicativement par l'utilisation de
+                # enumerate() qui produit des indices strictement croissants.
                 self.conn.execute(f"""
                     CREATE TABLE IF NOT EXISTS {table_name} (
                         value VARCHAR,
@@ -173,7 +174,8 @@ class DimensionManager(BaseSchemaManager):
                 unique_values = values.drop_nulls().unique().to_list()
 
                 # Insertion des valeurs avec index automatique.
-                # enumerate() garantit que chaque 'value' est unique → pas de conflit possible.
+                # enumerate() garantit que chaque 'value' est unique → pas de conflit
+                # possible.
                 for idx, label in enumerate(unique_values):
                     self.conn.execute(
                         f"INSERT INTO {table_name} (value, label) VALUES (?, ?)",
@@ -182,7 +184,8 @@ class DimensionManager(BaseSchemaManager):
 
                 # Logging
                 self.logger.info(
-                    f"Created dimension table {table_name} with {len(unique_values)} unique values"
+                    f"Created dimension table {table_name} with {len(unique_values)}"
+                    f" unique values"
                 )
                 return True
 
@@ -469,7 +472,8 @@ class DimensionManager(BaseSchemaManager):
         return results
 
     # Méthodes de nettoyage et maintenance
-    # méthode de suppression des tables de dimension qui ne sont plus référencées dans la table des faits
+    # méthode de suppression des tables de dimension qui ne sont plus référencées dans
+    # la table des faits
     def cleanup_orphaned_dimension_entries(
         self, dimension_name: str | None = None
     ) -> dict[str, int]:
@@ -519,7 +523,8 @@ class DimensionManager(BaseSchemaManager):
                 ).fetchone()[0]
 
                 # Suppression des entrées orphelines.
-                # Cast explicite en VARCHAR pour garantir la compatibilité de types entre
+                # Cast explicite en VARCHAR pour garantir la compatibilité de types
+                # entre
                 # dim_*.value (VARCHAR) et fact_table.{dim_col} (type quelconque)
                 cleanup_query = f"""
                     DELETE FROM {table_name}
@@ -599,7 +604,8 @@ class DimensionManager(BaseSchemaManager):
 
         Args:
             col_name: Column name
-            values_to_labels: If True, converts values→labels; if False, converts labels→values
+            values_to_labels: If True, converts values→labels; if False, converts
+            labels→values
 
         Returns:
             True if conversion was successful
@@ -614,7 +620,8 @@ class DimensionManager(BaseSchemaManager):
                 self.logger.error(f"Column {col_name} does not exist in fact table")
                 return False
 
-            # Récupération du mapping de la table de dimension (polars natif pour DuckDB)
+            # Récupération du mapping de la table de dimension (polars natif pour
+            # DuckDB)
             dim_result_pl = self.conn.execute(
                 f"SELECT value, label FROM {table_name}"
             ).pl()

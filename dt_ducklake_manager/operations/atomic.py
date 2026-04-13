@@ -381,7 +381,8 @@ class AtomicDatabaseOperations:
 
         try:
             self.logger.info(
-                f"Starting atomic schema migration with {len(migration_operations)} operations"
+                f"Starting atomic schema migration with {len(migration_operations)}"
+                f" operations"
             )
 
             # Pré-validation
@@ -645,7 +646,8 @@ class AtomicDatabaseOperations:
 
         try:
             self.logger.info(
-                f"Starting atomic validation and repair at level: {validation_level.value}"
+                f"Starting atomic validation and repair at level:"
+                f"{validation_level.value}"
             )
 
             # Validation initiale
@@ -680,7 +682,8 @@ class AtomicDatabaseOperations:
 
             operations_performed = []
             operations_performed.append(
-                f"Initial validation found {initial_issues} issues ({critical_issues} critical)"
+                f"Initial validation found {initial_issues} issues ({critical_issues}"
+                f" critical)"
             )
 
             if recovery_result.success:
@@ -692,7 +695,8 @@ class AtomicDatabaseOperations:
                 final_critical = final_validation.get_critical_issues_count()
 
                 operations_performed.append(
-                    f"Final validation: {final_issues} issues ({final_critical} critical)"
+                    f"Final validation: {final_issues} issues ({final_critical}"
+                    f" critical)"
                 )
 
                 execution_time = time.time() - start_time
@@ -1067,7 +1071,8 @@ class AtomicDatabaseOperations:
                 )
 
                 self.logger.info(
-                    f"Emergency recovery completed successfully in {execution_time:.2f}s"
+                    f"Emergency recovery completed successfully in {execution_time:.2f}"
+                    f" s"
                 )
                 return result
             else:
@@ -1075,7 +1080,8 @@ class AtomicDatabaseOperations:
                     success=False,
                     operation_type=AtomicOperationType.VALIDATION_AND_REPAIR,
                     execution_time=execution_time,
-                    error_message=f"Emergency recovery failed: {recovery_result.error_message}",
+                    error_message=f"Emergency recovery failed:"
+                                  f"{recovery_result.error_message}",
                 )
 
         except Exception as e:

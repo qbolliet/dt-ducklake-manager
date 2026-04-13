@@ -19,7 +19,8 @@ from ...utils.types import map_python_to_sql_type
 FILE_PATH = Path(os.path.abspath(__file__))
 
 
-# Classe contennat des opérations utilitaires de base sur la base de données au schéma métadonnées - table des faits - tables de dimensions
+# Classe contennat des opérations utilitaires de base sur la base de données au schéma
+# métadonnées - table des faits - tables de dimensions
 class BaseSchemaManager(ABC):
     """
     Base class for database schema management operations.
@@ -86,13 +87,15 @@ class BaseSchemaManager(ABC):
             # Chargement de la table si elle n'est pas en cache
             if self._metadata_cache is None:
                 try:
-                    # Chargement via polars (backend interne) puis encapsulation narwhals
+                    # Chargement via polars (backend interne) puis encapsulation
+                    # narwhals
                     self._metadata_cache = nw.from_native(
                         self.conn.execute("SELECT * FROM metadata").pl(),
                         eager_only=True,
                     )
                 except:
-                    # Si la table n'existe pas encore, initialisation d'un DataFrame vide
+                    # Si la table n'existe pas encore, initialisation d'un DataFrame
+                    # vide
                     self._metadata_cache = nw.from_dict(
                         {
                             "name": [],
@@ -177,7 +180,8 @@ class BaseSchemaManager(ABC):
         columns = [row[0] for row in self.conn.execute(f"DESCRIBE {table}").fetchall()]
         return column in columns
 
-    # Méthode de vérification si une colonne a une table de dimension (équivalent à vérifier si elle est catégorielle)
+    # Méthode de vérification si une colonne a une table de dimension (équivalent à
+    # vérifier si elle est catégorielle)
     def _is_dimension_column(self, column: str) -> bool:
         """
         Check if a column is a dimension (categorical).
@@ -244,7 +248,8 @@ class BaseSchemaManager(ABC):
         Args:
             column: Column name
             df: DataFrame containing the column (any narwhals-compatible backend)
-            label: Custom label for the column. If None, defaults to formatted column name.
+            label: Custom label for the column. If None, defaults to formatted column
+            name.
         """
         # Conversion vers narwhals pour un accès uniforme au schéma
         df_nw = nw.from_native(df, eager_only=True)
@@ -284,7 +289,8 @@ class BaseSchemaManager(ABC):
             # Colonne absente : insertion
             self.conn.execute(
                 """
-                INSERT INTO metadata (name, label, python_type, sql_type, is_categorical, is_primary_key)
+                INSERT INTO metadata (name, label, python_type, sql_type,
+                is_categorical, is_primary_key)
                 VALUES (?, ?, ?, ?, ?, FALSE)
                 """,
                 [column, label, dtype_str, sql_type, is_categorical],
@@ -371,7 +377,8 @@ class BaseSchemaManager(ABC):
         if len(matching) == 0:
             return None
         current_type = matching[0]
-        # Identification du nouveau type (chaîne narwhals, ex. 'String', 'Int64', 'Float64')
+        # Identification du nouveau type (chaîne narwhals, ex. 'String', 'Int64',
+        # 'Float64')
         new_type = str(df.schema[column])
         # Ne fait rien si inchangé
         if current_type == new_type:
@@ -421,7 +428,8 @@ class BaseSchemaManager(ABC):
             self._invalidate_metadata_cache()
             # Logging
             self.logger.info(
-                f"Type conflict resolution for {column}: {current_type} -> {resolved_type}"
+                f"Type conflict resolution for {column}: {current_type} ->"
+                f" {resolved_type}"
             )
         # Si current_level >= new_level, le type existant est conservé sans modification
 
@@ -475,7 +483,8 @@ class BaseSchemaManager(ABC):
         # Suppression des valeurs nulles avant le comptage
         non_null_values = values.drop_nulls()
         # Une série entièrement nulle ne peut pas être considérée catégorielle :
-        # l'absence de modalités observées ne constitue pas une information de cardinalité.
+        # l'absence de modalités observées ne constitue pas une information de
+        # cardinalité.
         if len(non_null_values) == 0:
             return False
         unique_count = non_null_values.n_unique()

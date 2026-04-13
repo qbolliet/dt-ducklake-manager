@@ -173,7 +173,8 @@ class ValidationReport:
         performance_issues = self.get_issues_by_type(IssueType.PERFORMANCE_ISSUE)
         if performance_issues:
             self.recommendations.append(
-                "Run Ducklake maintenance (compaction, snapshot expiration) and review partition configuration to improve performance"
+                "Run Ducklake maintenance (compaction, snapshot expiration) and review"
+                " partition configuration to improve performance"
             )
 
 
@@ -321,7 +322,8 @@ class DatabaseAuditor:
         Validate preconditions before executing specific operations.
 
         Args:
-            operation_type: Type of operation ('insert', 'update', 'delete', 'schema_change')
+            operation_type: Type of operation ('insert', 'update', 'delete',
+            'schema_change')
             **kwargs: Operation-specific parameters
 
         Returns:
@@ -400,7 +402,8 @@ class DatabaseAuditor:
                         severity=IssueSeverity.CRITICAL,
                         table_name=table,
                         description=f"Essential table '{table}' is missing",
-                        suggested_fix=f"Create the '{table}' table with proper structure",
+                        suggested_fix=f"Create the '{table}' table with proper"
+                                      f" structure",
                     )
                     report.add_issue(issue)
                 else:
@@ -413,7 +416,8 @@ class DatabaseAuditor:
                     severity=IssueSeverity.HIGH,
                     table_name="fact_table",
                     description="Fact table is missing",
-                    suggested_fix="Create the fact table or check if database is properly initialized",
+                    suggested_fix="Create the fact table or check if database is"
+                                  " properly initialized",
                 )
                 report.add_issue(issue)
             else:
@@ -466,7 +470,8 @@ class DatabaseAuditor:
                     issue_type=IssueType.SCHEMA_INCONSISTENCY,
                     severity=IssueSeverity.HIGH,
                     table_name="metadata",
-                    description=f"Missing required columns in metadata: {missing_columns}",
+                    description=f"Missing required columns in metadata:"
+                                f"{missing_columns}",
                     suggested_fix="Add missing columns to metadata table",
                 )
                 report.add_issue(issue)
@@ -481,13 +486,15 @@ class DatabaseAuditor:
                             severity=IssueSeverity.MEDIUM,
                             table_name="metadata",
                             column_name=col,
-                            description=f"Found {null_count} null values in critical metadata column '{col}'",
+                            description=f"Found {null_count} null values in critical"
+                                        f" metadata column '{col}'",
                             suggested_fix=f"Update null values in metadata.{col}",
                             affected_rows=null_count,
                         )
                         report.add_issue(issue)
 
-            # Vérification des doublons dans les noms de colonnes (il s'agit d ela clé primaire de la base de données)
+            # Vérification des doublons dans les noms de colonnes (il s'agit d ela clé
+            # primaire de la base de données)
             if "name" in metadata_df.columns:
                 duplicate_names = metadata_df.filter(pl.col("name").is_duplicated())[
                     "name"
@@ -498,7 +505,8 @@ class DatabaseAuditor:
                         severity=IssueSeverity.HIGH,
                         table_name="metadata",
                         column_name="name",
-                        description=f"Duplicate column names in metadata: {duplicate_names}",
+                        description=f"Duplicate column names in metadata:"
+                                    f"{duplicate_names}",
                         suggested_fix="Remove or rename duplicate entries in metadata",
                         affected_rows=len(duplicate_names),
                     )
@@ -515,7 +523,8 @@ class DatabaseAuditor:
             )
             report.add_issue(issue)
 
-    # Méthode de validation de la cohérence entre la table de faits et les tables de dimension
+    # Méthode de validation de la cohérence entre la table de faits et les tables de
+    # dimension
     def _validate_fact_dimension_consistency(self, report: ValidationReport) -> None:
         """Validate consistency between fact table and dimension tables."""
         try:
@@ -548,8 +557,10 @@ class DatabaseAuditor:
                         severity=IssueSeverity.HIGH,
                         table_name=dim_table_name,
                         column_name=col_name,
-                        description=f"Dimension table '{dim_table_name}' missing for categorical column '{col_name}'",
-                        suggested_fix=f"Create dimension table for '{col_name}' or update metadata",
+                        description=f"Dimension table '{dim_table_name}' missing for"
+                                    f" categorical column '{col_name}'",
+                        suggested_fix=f"Create dimension table for '{col_name}' or"
+                                      f" update metadata",
                     )
                     report.add_issue(issue)
                     continue
@@ -566,12 +577,14 @@ class DatabaseAuditor:
                         issue_type=IssueType.SCHEMA_INCONSISTENCY,
                         severity=IssueSeverity.HIGH,
                         table_name=dim_table_name,
-                        description=f"Missing required columns in dimension table: {missing_dim_columns}",
+                        description=f"Missing required columns in dimension table:"
+                                    f"{missing_dim_columns}",
                         suggested_fix=f"Add missing columns to {dim_table_name}",
                     )
                     report.add_issue(issue)
 
-                # Vérification de la cohérence référentielle si la colonne existe dans fact_table
+                # Vérification de la cohérence référentielle si la colonne existe dans
+                # fact_table
                 if col_name in fact_columns:
                     self._validate_referential_integrity(
                         report, col_name, dim_table_name
@@ -586,12 +599,14 @@ class DatabaseAuditor:
                     issue_type=IssueType.MISSING_METADATA,
                     severity=IssueSeverity.MEDIUM,
                     table_name="fact_table",
-                    description=f"Columns in fact_table missing from metadata: {list(missing_metadata)}",
+                    description=f"Columns in fact_table missing from metadata:"
+                                f"{list(missing_metadata)}",
                     suggested_fix="Add missing columns to metadata table",
                 )
                 report.add_issue(issue)
 
-            # Vérification des colonnes dans metadata qui ne sont pas dans fact_table (métadonnées orphelines)
+            # Vérification des colonnes dans metadata qui ne sont pas dans fact_table
+            # (métadonnées orphelines)
             orphaned_metadata = metadata_columns - fact_columns
 
             if orphaned_metadata:
@@ -599,8 +614,10 @@ class DatabaseAuditor:
                     issue_type=IssueType.MISSING_METADATA,
                     severity=IssueSeverity.MEDIUM,
                     table_name="metadata",
-                    description=f"Columns in metadata not found in fact_table: {list(orphaned_metadata)}",
-                    suggested_fix="Remove orphaned metadata entries or add missing columns to fact_table",
+                    description=f"Columns in metadata not found in fact_table:"
+                                f"{list(orphaned_metadata)}",
+                    suggested_fix="Remove orphaned metadata entries or add missing"
+                                  " columns to fact_table",
                 )
                 report.add_issue(issue)
 
@@ -615,13 +632,15 @@ class DatabaseAuditor:
             )
             report.add_issue(issue)
 
-    # Méthode de validation de l'intégrité référentielle entre la table des faits et la table de dimension
+    # Méthode de validation de l'intégrité référentielle entre la table des faits et la
+    # table de dimension
     def _validate_referential_integrity(
         self, report: ValidationReport, col_name: str, dim_table_name: str
     ) -> None:
         """Validate referential integrity between fact table and dimension."""
         try:
-            # Vérification des valeurs orphelines dans fact_table (ie qui ne sont pas référencées dans la table de dimension)
+            # Vérification des valeurs orphelines dans fact_table (ie qui ne sont pas
+            # référencées dans la table de dimension)
             orphaned_query = f"""
                 SELECT COUNT(DISTINCT f.{col_name}) as orphaned_count
                 FROM fact_table f
@@ -638,8 +657,10 @@ class DatabaseAuditor:
                     severity=IssueSeverity.MEDIUM,
                     table_name="fact_table",
                     column_name=col_name,
-                    description=f"Found {orphaned_count} orphaned references in fact_table.{col_name}",
-                    suggested_fix=f"Update dimension table {dim_table_name} or clean orphaned references",
+                    description=f"Found {orphaned_count} orphaned references in"
+                                f" fact_table.{col_name}",
+                    suggested_fix=f"Update dimension table {dim_table_name} or clean"
+                                  f" orphaned references",
                     affected_rows=orphaned_count,
                 )
                 report.add_issue(issue)
@@ -660,7 +681,8 @@ class DatabaseAuditor:
                     issue_type=IssueType.ORPHANED_REFERENCE,
                     severity=IssueSeverity.LOW,
                     table_name=dim_table_name,
-                    description=f"Found {unused_count} unused dimension values in {dim_table_name}",
+                    description=f"Found {unused_count} unused dimension values in"
+                                f" {dim_table_name}",
                     suggested_fix=f"Clean unused values from {dim_table_name}",
                     affected_rows=unused_count,
                 )
@@ -673,12 +695,14 @@ class DatabaseAuditor:
                 severity=IssueSeverity.MEDIUM,
                 table_name=dim_table_name,
                 column_name=col_name,
-                description=f"Error validating referential integrity for {col_name}: {str(e)}",
+                description=f"Error validating referential integrity for {col_name}:"
+                            f"{str(e)}",
                 suggested_fix="Check column and table structure",
             )
             report.add_issue(issue)
 
-    # Méthode de validation de la cohérence des types de données entre la table des méta-données et la table des faits
+    # Méthode de validation de la cohérence des types de données entre la table des
+    # méta-données et la table des faits
     def _validate_data_types_consistency(self, report: ValidationReport) -> None:
         """Validate data type consistency."""
         try:
@@ -703,7 +727,8 @@ class DatabaseAuditor:
                         break
 
                 if actual_sql_type is None:
-                    # Colonne manquante dans fact_table (déjà signalé dans _validate_fact_dimension_consistency)
+                    # Colonne manquante dans fact_table (déjà signalé dans
+                    # _validate_fact_dimension_consistency)
                     continue
 
                 # Comparaison des types (normalisation pour éviter les faux positifs)
@@ -713,8 +738,10 @@ class DatabaseAuditor:
                         severity=IssueSeverity.MEDIUM,
                         table_name="fact_table",
                         column_name=col_name,
-                        description=f"Type mismatch for column '{col_name}': expected {expected_sql_type}, got {actual_sql_type}",
-                        suggested_fix="Update metadata or alter column type in fact_table",
+                        description=f"Type mismatch for column '{col_name}': expected"
+                                    f" {expected_sql_type}, got {actual_sql_type}",
+                        suggested_fix="Update metadata or alter column type in"
+                                      " fact_table",
                         additional_info={
                             "expected_type": expected_sql_type,
                             "actual_type": actual_sql_type,
@@ -733,7 +760,8 @@ class DatabaseAuditor:
             )
             report.add_issue(issue)
 
-    # Méthode de validation des variables catégorielles par rapport au seuil et à leur nombre de modalités
+    # Méthode de validation des variables catégorielles par rapport au seuil et à leur
+    # nombre de modalités
     def _validate_categorical_thresholds(self, report: ValidationReport) -> None:
         """Validate categorical thresholds."""
         try:
@@ -748,10 +776,15 @@ class DatabaseAuditor:
             # Parcours des colonnes
             for col_name in categorical_columns:
                 if not self._column_exists_in_fact_table(col_name):
-                    continue  # Colonne manquante dans fact_table (déjà signalé dans _validate_fact_dimension_consistency)
+                    # Colonne manquante dans fact_table (déjà signalée dans
+                    # _validate_fact_dimension_consistency)
+                    continue
 
                 # Comptage des valeurs uniques
-                unique_count_query = f"SELECT COUNT(DISTINCT {col_name}) FROM fact_table WHERE {col_name} IS NOT NULL"
+                unique_count_query = (
+                    f"SELECT COUNT(DISTINCT {col_name}) FROM"
+                    f" fact_table WHERE {col_name} IS NOT NULL"
+                )
                 result = self.conn.execute(unique_count_query).fetchone()
                 unique_count = result[0] if result else 0
 
@@ -762,8 +795,15 @@ class DatabaseAuditor:
                         severity=IssueSeverity.MEDIUM,
                         table_name="fact_table",
                         column_name=col_name,
-                        description=f"Column '{col_name}' marked as categorical but has {unique_count} unique values (threshold: {self.categorical_threshold})",
-                        suggested_fix=f"Consider converting '{col_name}' to non-categorical or increase threshold",
+                        description=(
+                            f"Column '{col_name}' marked as categorical but has"
+                            f" {unique_count} unique values (threshold:"
+                            f" {self.categorical_threshold})"
+                        ),
+                        suggested_fix=(
+                            f"Consider converting '{col_name}' to"
+                            f" non-categorical or increase threshold"
+                        ),
                         additional_info={
                             "unique_count": unique_count,
                             "threshold": self.categorical_threshold,
@@ -771,7 +811,8 @@ class DatabaseAuditor:
                     )
                     report.add_issue(issue)
 
-            # Vérification des colonnes non-catégorielles de type String qui pourraient être catégorielles
+            # Vérification des colonnes non-catégorielles de type String qui pourraient
+            # être catégorielles
             non_categorical_columns = metadata_df.filter(
                 (~pl.col("is_categorical")) & (pl.col("python_type") == "String")
             )["name"].to_list()
@@ -782,7 +823,10 @@ class DatabaseAuditor:
                     continue
 
                 # Comptage des valeurs uniques
-                unique_count_query = f"SELECT COUNT(DISTINCT {col_name}) FROM fact_table WHERE {col_name} IS NOT NULL"
+                unique_count_query = (
+                    f"SELECT COUNT(DISTINCT {col_name}) FROM"
+                    f" fact_table WHERE {col_name} IS NOT NULL"
+                )
                 result = self.conn.execute(unique_count_query).fetchone()
                 unique_count = result[0] if result else 0
 
@@ -792,8 +836,14 @@ class DatabaseAuditor:
                         severity=IssueSeverity.LOW,
                         table_name="fact_table",
                         column_name=col_name,
-                        description=f"Column '{col_name}' could be categorical (only {unique_count} unique values)",
-                        suggested_fix=f"Consider converting '{col_name}' to categorical for better performance",
+                        description=(
+                            f"Column '{col_name}' could be categorical (only"
+                            f" {unique_count} unique values)"
+                        ),
+                        suggested_fix=(
+                            f"Consider converting '{col_name}' to"
+                            f" categorical for better performance"
+                        ),
                         additional_info={
                             "unique_count": unique_count,
                             "threshold": self.categorical_threshold,
@@ -840,7 +890,8 @@ class DatabaseAuditor:
                     severity=IssueSeverity.MEDIUM,
                     table_name=table_name,
                     description=f"Orphaned dimension table '{table_name}' found",
-                    suggested_fix=f"Remove '{table_name}' or add corresponding metadata entry",
+                    suggested_fix=f"Remove '{table_name}' or add corresponding"
+                                  f" metadata entry",
                 )
                 report.add_issue(issue)
 
@@ -850,8 +901,11 @@ class DatabaseAuditor:
                     # Nom de la table de dimension
                     col_name = metadata_row["name"]
                     dim_table_name = f"dim_{col_name}"
-                    # On vérifie les entrées si la table de dimension existe et que la colonne existe dans la table des faits
-                    # (On vérifie plus haut que toutes les variables catégroeilles dans les métadonnées ont une table de dimension et que chaque colonne des métadonnées existe dans la table des faits)
+                    # On vérifie les entrées si la table de dimension existe et que la
+                    # colonne existe dans la table des faits
+                    # (On vérifie plus haut que toutes les variables catégroeilles dans
+                    # les métadonnées ont une table de dimension et que chaque colonne
+                    # des métadonnées existe dans la table des faits)
                     if self._table_exists(
                         dim_table_name
                     ) and self._column_exists_in_fact_table(col_name):
@@ -895,15 +949,18 @@ class DatabaseAuditor:
             partition_key: str | None = None
             try:
                 result = self.conn.execute(
-                    "SELECT partition_key FROM duckdb_tables() WHERE table_name = 'fact_table'"
+                    "SELECT partition_key FROM duckdb_tables() WHERE table_name ="
+                    "'fact_table'"
                 ).fetchone()
                 if result is not None:
                     partition_key = result[0]
             except Exception:
-                # Indisponibilité de duckdb_tables() sur cette connexion — utilisation du fallback
+                # Indisponibilité de duckdb_tables() sur cette connexion — utilisation
+                # du fallback
                 partition_key = None
 
-            # Tentative de détection via SHOW CREATE TABLE en cas d'échec de la méthode principale
+            # Tentative de détection via SHOW CREATE TABLE en cas d'échec de la méthode
+            # principale
             if not partition_key:
                 try:
                     ddl_result = self.conn.execute(
@@ -911,11 +968,13 @@ class DatabaseAuditor:
                     ).fetchone()
                     ddl_text: str = ddl_result[0] if ddl_result else ""
                     if "PARTITION BY" in ddl_text.upper():
-                        return  # Partitionnement détecté dans le DDL — pas de problème à signaler
+                        # Partitionnement détecté dans le DDL — aucun problème
+                        return
                 except Exception:
                     pass
 
-            # Signalement de l'absence de partitionnement comme problème de performance mineur
+            # Signalement de l'absence de partitionnement comme problème de performance
+            # mineur
             if not partition_key:
                 issue = ValidationIssue(
                     issue_type=IssueType.PERFORMANCE_ISSUE,
@@ -923,10 +982,12 @@ class DatabaseAuditor:
                     table_name="fact_table",
                     description=(
                         "No Ducklake partition key configured on fact_table. "
-                        "Hive-style partitioning is the primary optimisation mechanism in Ducklake."
+                        "Hive-style partitioning is the primary optimisation mechanism"
+                        " in Ducklake."
                     ),
                     suggested_fix=(
-                        "Recreate fact_table with PARTITION BY on the most frequently filtered column "
+                        "Recreate fact_table with PARTITION BY on the most frequently"
+                        " filtered column "
                         "(e.g. a date or category column) to improve query performance."
                     ),
                 )
@@ -939,7 +1000,8 @@ class DatabaseAuditor:
                 severity=IssueSeverity.LOW,
                 table_name="fact_table",
                 description=f"Error validating partition configuration: {str(e)}",
-                suggested_fix="Check fact_table definition and DuckDB version compatibility",
+                suggested_fix="Check fact_table definition and DuckDB version"
+                              " compatibility",
             )
             report.add_issue(issue)
 
@@ -974,7 +1036,8 @@ class DatabaseAuditor:
                     severity=IssueSeverity.LOW,
                     table_name="fact_table",
                     description=(
-                        f"Ducklake snapshot history is large ({snapshot_count} snapshots). "
+                        f"Ducklake snapshot history is large ({snapshot_count}"
+                        f" snapshots). "
                         f"Threshold: {SNAPSHOT_THRESHOLD}."
                     ),
                     suggested_fix=(
@@ -988,7 +1051,8 @@ class DatabaseAuditor:
                 )
                 report.add_issue(issue)
         except Exception:
-            # Indisponibilité de ducklake_snapshots() sur connexion in-memory ou non-Ducklake — ignoré silencieusement
+            # Indisponibilité de ducklake_snapshots() sur connexion in-memory ou
+            # non-Ducklake — ignoré silencieusement
             pass
 
         # Vérification de la fragmentation des fichiers de données Ducklake
@@ -1004,10 +1068,12 @@ class DatabaseAuditor:
                     table_name="fact_table",
                     description=(
                         f"Ducklake data file count is high ({data_file_count} files). "
-                        f"Excessive small files degrade scan performance. Threshold: {DATA_FILES_THRESHOLD}."
+                        f"Excessive small files degrade scan performance. Threshold:"
+                        f"{DATA_FILES_THRESHOLD}."
                     ),
                     suggested_fix=(
-                        "Run ducklake_merge_adjacent_files() or ducklake_rewrite_data_files() "
+                        "Run ducklake_merge_adjacent_files() or"
+                        " ducklake_rewrite_data_files() "
                         "to compact fragmented Parquet files."
                     ),
                     additional_info={
@@ -1017,7 +1083,8 @@ class DatabaseAuditor:
                 )
                 report.add_issue(issue)
         except Exception:
-            # Indisponibilité de ducklake_data_files() sur connexion in-memory ou non-Ducklake — ignoré silencieusement
+            # Indisponibilité de ducklake_data_files() sur connexion in-memory ou
+            # non-Ducklake — ignoré silencieusement
             pass
 
     # Méthode de validation de la qualité des données
@@ -1049,7 +1116,8 @@ class DatabaseAuditor:
             fact_columns = self._get_fact_table_columns()
             # Parcours des colonnes
             for col_name in fact_columns:
-                # Création de la requête de comptage du nombre de valeurs nulles dans la colonne
+                # Création de la requête de comptage du nombre de valeurs nulles dans la
+                # colonne
                 null_count_query = (
                     f"SELECT COUNT(*) FROM fact_table WHERE {col_name} IS NULL"
                 )
@@ -1065,8 +1133,10 @@ class DatabaseAuditor:
                         severity=IssueSeverity.MEDIUM,
                         table_name="fact_table",
                         column_name=col_name,
-                        description=f"Column '{col_name}' has {null_percentage:.1f}% null values",
-                        suggested_fix=f"Review data quality for column '{col_name}' or consider dropping it",
+                        description=f"Column '{col_name}' has {null_percentage:.1f}%"
+                                    f"null values",
+                        suggested_fix=f"Review data quality for column '{col_name}' or"
+                                      f" consider dropping it",
                         affected_rows=null_count,
                         additional_info={"null_percentage": null_percentage},
                     )
@@ -1078,7 +1148,8 @@ class DatabaseAuditor:
                         table_name="fact_table",
                         column_name=col_name,
                         description=f"Column '{col_name}' contains only null values",
-                        suggested_fix=f"Consider dropping column '{col_name}' or investigate data loading",
+                        suggested_fix=f"Consider dropping column '{col_name}' or"
+                                      f" investigate data loading",
                         affected_rows=null_count,
                     )
                     report.add_issue(issue)
@@ -1094,7 +1165,8 @@ class DatabaseAuditor:
             )
             report.add_issue(issue)
 
-    # Méthode de vérification de l'unicité des clés primaires dans les tables de dimension
+    # Méthode de vérification de l'unicité des clés primaires dans les tables de
+    # dimension
     def _validate_constraint_violations(self, report: ValidationReport) -> None:
         """Validate constraint violations."""
         try:
@@ -1125,7 +1197,11 @@ class DatabaseAuditor:
                         severity=IssueSeverity.HIGH,
                         table_name=dim_table,
                         column_name="value",
-                        description=f"Applicative uniqueness violation: {duplicate_count} duplicate values found in {dim_table}.value (no DDL constraint enforced in Ducklake)",
+                        description=(
+                            f"Applicative uniqueness violation: {duplicate_count}"
+                            f" duplicate values found in {dim_table}.value (no DDL"
+                            f" constraint enforced in Ducklake)"
+                        ),
                         suggested_fix=f"Remove duplicate values from {dim_table}",
                         affected_rows=duplicate_count,
                         additional_info={
@@ -1188,11 +1264,13 @@ class DatabaseAuditor:
                 severity=IssueSeverity.HIGH,
                 table_name="fact_table",
                 description=f"Invalid column names detected: {invalid_columns}",
-                suggested_fix="Use valid column names (alphanumeric and underscores only)",
+                suggested_fix="Use valid column names (alphanumeric and underscores"
+                              " only)",
             )
             report.add_issue(issue)
 
-    # Méthode de validation des conditions préalables à une mise à jour de la base de données
+    # Méthode de validation des conditions préalables à une mise à jour de la base de
+    # données
     def _validate_update_preconditions(
         self, report: ValidationReport, df=None, **kwargs
     ) -> None:
@@ -1222,12 +1300,14 @@ class DatabaseAuditor:
                     severity=IssueSeverity.CRITICAL,
                     table_name="fact_table",
                     description=f"Primary keys not found in DataFrame: {missing_keys}",
-                    suggested_fix="Ensure all primary keys are present in the DataFrame",
+                    suggested_fix="Ensure all primary keys are present in the"
+                                  " DataFrame",
                 )
                 report.add_issue(issue)
                 return
 
-            # Vérification des doublons parmi les valeurs de clés primaires dans le DataFrame.
+            # Vérification des doublons parmi les valeurs de clés primaires dans le
+            # DataFrame.
             duplicate_count = (
                 nw.from_native(df, eager_only=True)
                 .select(primary_keys)
@@ -1240,8 +1320,10 @@ class DatabaseAuditor:
                     issue_type=IssueType.DATA_INTEGRITY,
                     severity=IssueSeverity.HIGH,
                     table_name="fact_table",
-                    description=f"Found {duplicate_count} duplicate primary key values in DataFrame",
-                    suggested_fix="Remove duplicate entries based on primary key columns",
+                    description=f"Found {duplicate_count} duplicate primary key values"
+                                f" in DataFrame",
+                    suggested_fix="Remove duplicate entries based on primary key"
+                                  " columns",
                     affected_rows=duplicate_count,
                 )
                 report.add_issue(issue)
@@ -1258,11 +1340,13 @@ class DatabaseAuditor:
                 severity=IssueSeverity.CRITICAL,
                 table_name="fact_table",
                 description="No filters provided for delete operation",
-                suggested_fix="Provide valid filters for delete operation to avoid deleting all data",
+                suggested_fix="Provide valid filters for delete operation to avoid"
+                              " deleting all data",
             )
             report.add_issue(issue)
 
-    # méthode de validation des conditions préalable à un changement de schéma dans la base de données
+    # méthode de validation des conditions préalable à un changement de schéma dans la
+    # base de données
     def _validate_schema_change_preconditions(
         self, report: ValidationReport, **kwargs
     ) -> None:
@@ -1333,7 +1417,8 @@ class DatabaseAuditor:
         except:
             return False
 
-    # Méthode auxiliaire de vérification de l'existence d'une colonne dans la table des faits
+    # Méthode auxiliaire de vérification de l'existence d'une colonne dans la table des
+    # faits
     def _column_exists_in_fact_table(self, column_name: str) -> bool:
         """Check if a column exists in fact_table."""
         fact_columns = self._get_fact_table_columns()

@@ -21,10 +21,12 @@ def updater(built_ducklake_schema):
     """Create a DatabaseUpdater instance for testing.
 
     Args:
-        built_ducklake_schema: Fixture providing a DuckDB connection with a built schema.
+        built_ducklake_schema: Fixture providing a DuckDB connection with a built
+        schema.
 
     Returns:
-        DatabaseUpdater: initialized with the test connection and categorical_threshold=4.
+        DatabaseUpdater: initialized with the test connection and
+        categorical_threshold=4.
     """
     return DatabaseUpdater(
         connection=built_ducklake_schema,
@@ -39,7 +41,8 @@ def deleter(built_ducklake_schema):
     """Create a DatabaseDeleter instance for testing.
 
     Args:
-        built_ducklake_schema: Fixture providing a DuckDB connection with a built schema.
+        built_ducklake_schema: Fixture providing a DuckDB connection with a built
+        schema.
 
     Returns:
         DatabaseDeleter: initialized with the test connection, categorical_threshold=4

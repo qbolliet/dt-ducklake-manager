@@ -22,7 +22,8 @@ def test_validation_issue_initialization():
     """Test that ValidationIssue is correctly initialized with all fields.
 
     Examples:
-        >>> issue = ValidationIssue(IssueType.DATA_INTEGRITY, IssueSeverity.HIGH, 'fact_table')
+        >>> issue = ValidationIssue(IssueType.DATA_INTEGRITY, IssueSeverity.HIGH,
+        'fact_table')
         >>> issue.severity
         <IssueSeverity.HIGH: 'high'>
     """
@@ -177,7 +178,8 @@ def test_validation_report_finalize(empty_report):
     assert len(empty_report.recommendations) > 0
 
 
-# Test que finalize génère la bonne recommandation de performance pour Ducklake (pas d'index)
+# Test que finalize génère la bonne recommandation de performance pour Ducklake (pas
+# d'index)
 def test_validation_report_finalize_generates_ducklake_performance_recommendation(
     empty_report,
 ):
@@ -253,7 +255,8 @@ def test_database_auditor_initialization_with_connection(built_ducklake_schema):
     """Test that DatabaseAuditor stores the provided connection.
 
     Args:
-        built_ducklake_schema: Fixture providing a DuckDB connection with a built schema.
+        built_ducklake_schema: Fixture providing a DuckDB connection with a built
+        schema.
     """
     auditor = DatabaseAuditor(
         connection=built_ducklake_schema, categorical_threshold=10
@@ -266,7 +269,8 @@ def test_validate_database_basic_level(built_ducklake_schema):
     """Test that validate_database with BASIC level returns a ValidationReport.
 
     Args:
-        built_ducklake_schema: Fixture providing a DuckDB connection with a built schema.
+        built_ducklake_schema: Fixture providing a DuckDB connection with a built
+        schema.
     """
     auditor = DatabaseAuditor(connection=built_ducklake_schema)
     report = auditor.validate_database(ValidationLevel.BASIC)
@@ -283,7 +287,8 @@ def test_validate_database_standard_level(built_ducklake_schema):
     """Test that validate_database with STANDARD level returns a ValidationReport.
 
     Args:
-        built_ducklake_schema: Fixture providing a DuckDB connection with a built schema.
+        built_ducklake_schema: Fixture providing a DuckDB connection with a built
+        schema.
     """
     auditor = DatabaseAuditor(connection=built_ducklake_schema)
     report = auditor.validate_database(ValidationLevel.STANDARD)
@@ -303,7 +308,8 @@ def test_validate_database_comprehensive_level(built_ducklake_schema):
     unhandled exceptions on an in-memory connection.
 
     Args:
-        built_ducklake_schema: Fixture providing a DuckDB connection with a built schema.
+        built_ducklake_schema: Fixture providing a DuckDB connection with a built
+        schema.
     """
     auditor = DatabaseAuditor(connection=built_ducklake_schema)
     report = auditor.validate_database(ValidationLevel.COMPREHENSIVE)
@@ -320,7 +326,8 @@ def test_get_quick_health_check(built_ducklake_schema):
     """Test that get_quick_health_check returns a dict with expected keys.
 
     Args:
-        built_ducklake_schema: Fixture providing a DuckDB connection with a built schema.
+        built_ducklake_schema: Fixture providing a DuckDB connection with a built
+        schema.
     """
     auditor = DatabaseAuditor(connection=built_ducklake_schema)
     health = auditor.get_quick_health_check()
@@ -335,10 +342,12 @@ def test_get_quick_health_check(built_ducklake_schema):
 
 # Test de validate_operation_preconditions pour une opération d'insertion
 def test_validate_operation_preconditions_insert(built_ducklake_schema, sample_df):
-    """Test that validate_operation_preconditions for 'insert' returns a ValidationReport.
+    """Test that validate_operation_preconditions for 'insert' returns
+    a ValidationReport.
 
     Args:
-        built_ducklake_schema: Fixture providing a DuckDB connection with a built schema.
+        built_ducklake_schema: Fixture providing a DuckDB connection with a built
+        schema.
         sample_df: Sample polars DataFrame.
     """
     import polars as pl
@@ -361,10 +370,12 @@ def test_validate_operation_preconditions_insert(built_ducklake_schema, sample_d
 
 # Test de validate_operation_preconditions pour une opération de suppression
 def test_validate_operation_preconditions_delete(built_ducklake_schema):
-    """Test that validate_operation_preconditions for 'delete' returns a ValidationReport.
+    """Test that validate_operation_preconditions for 'delete' returns
+    a ValidationReport.
 
     Args:
-        built_ducklake_schema: Fixture providing a DuckDB connection with a built schema.
+        built_ducklake_schema: Fixture providing a DuckDB connection with a built
+        schema.
     """
     auditor = DatabaseAuditor(connection=built_ducklake_schema)
     report = auditor.validate_operation_preconditions(
@@ -387,7 +398,8 @@ def test_validate_partition_configuration_reports_missing_partition(
     when no partition key is configured (case for all in-memory connections).
 
     Args:
-        built_ducklake_schema: Fixture providing a DuckDB connection with a built schema.
+        built_ducklake_schema: Fixture providing a DuckDB connection with a built
+        schema.
     """
     auditor = DatabaseAuditor(connection=built_ducklake_schema)
     report = ValidationReport(validation_level=ValidationLevel.COMPREHENSIVE)
@@ -413,7 +425,8 @@ def test_validate_ducklake_maintenance_silent_on_in_memory(built_ducklake_schema
     not add any issues or raise exceptions.
 
     Args:
-        built_ducklake_schema: Fixture providing a DuckDB connection with a built schema.
+        built_ducklake_schema: Fixture providing a DuckDB connection with a built
+        schema.
     """
     auditor = DatabaseAuditor(connection=built_ducklake_schema)
     report = ValidationReport(validation_level=ValidationLevel.COMPREHENSIVE)
@@ -436,9 +449,11 @@ def test_validate_categorical_thresholds_detects_string_columns_with_low_cardina
     categorical) should be flagged as a potential categorical column.
 
     Args:
-        built_ducklake_schema: Fixture providing a DuckDB connection with a built schema.
+        built_ducklake_schema: Fixture providing a DuckDB connection with a built
+        schema.
     """
-    # Utilisation d'un seuil supérieur aux 5 valeurs uniques de high_cardinality pour déclencher la détection
+    # Utilisation d'un seuil supérieur aux 5 valeurs uniques de high_cardinality pour
+    # déclencher la détection
     auditor = DatabaseAuditor(
         connection=built_ducklake_schema, categorical_threshold=10
     )
@@ -446,7 +461,8 @@ def test_validate_categorical_thresholds_detects_string_columns_with_low_cardina
 
     auditor._validate_categorical_thresholds(report)
 
-    # Vérification que la colonne 'high_cardinality' est détectée comme potentiellement catégorielle
+    # Vérification que la colonne 'high_cardinality' est détectée comme potentiellement
+    # catégorielle
     perf_issues = report.get_issues_by_type(IssueType.PERFORMANCE_ISSUE)
     column_names = [issue.column_name for issue in perf_issues]
     assert "high_cardinality" in column_names

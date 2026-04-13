@@ -36,7 +36,8 @@ def _ducklake_available() -> bool:
 # ---------------------------------------------------------------------------
 
 
-# Initialisation d'une instance de DuckLakeTablesBuilder utilisée dans l'ensemble des tests
+# Initialisation d'une instance de DuckLakeTablesBuilder utilisée dans l'ensemble des
+# tests
 @pytest.fixture
 def ducklake_builder(sample_df):
     """Initialize a DuckLakeTablesBuilder instance with a sample DataFrame.
@@ -155,7 +156,8 @@ def test_create_duckdb_fact_table(ducklake_builder, sample_df):
     assert "category" in result.columns
     assert "status" in result.columns
 
-    # Vérification que les valeurs de la fact table sont des indices entiers de la dim table
+    # Vérification que les valeurs de la fact table
+    # sont des indices entiers de la dim table
     dim_category = ducklake_builder.conn.execute("SELECT * FROM dim_category").pl()
     dim_status = ducklake_builder.conn.execute("SELECT * FROM dim_status").pl()
     assert set(result["category"].to_list()) <= set(
@@ -228,7 +230,6 @@ def test_build_schema_remove_all_duplicates(sample_df_with_duplicates):
     initial_count = len(builder.schema_builder.df)
 
     # Construction du schéma avec suppression de tous les doublons
-    # Remarque : narwhals utilise keep='none' (et non False) pour supprimer toutes les occurrences
     builder.build_schema(check_duplicates=True, keep="none")
 
     # Vérification que les doublons ont bien été supprimés
@@ -302,7 +303,7 @@ def test_duplicate_removal_logging(sample_df_with_duplicates, caplog):
         warnings.simplefilter("ignore", UserWarning)
         builder = DuckLakeTablesBuilder(sample_df_with_duplicates)
 
-    # Remarque : narwhals utilise keep='none' (et non False) pour supprimer toutes les occurrences
+    # Suppression des duplicats
     builder.build_schema(check_duplicates=True, keep="none")
 
     # Vérification que le message de log correspond au message réel de la fonction

@@ -20,7 +20,8 @@ def dim_manager(built_ducklake_schema):
     """Create a DimensionManager instance for testing.
 
     Args:
-        built_ducklake_schema: Fixture providing a DuckDB connection with a built schema.
+        built_ducklake_schema: Fixture providing a DuckDB connection with a built
+        schema.
 
     Returns:
         DimensionManager: initialized with the test connection.
@@ -38,7 +39,8 @@ def test_dimension_manager_initialization(built_ducklake_schema):
     """Test that DimensionManager initializes correctly.
 
     Args:
-        built_ducklake_schema: Fixture providing a DuckDB connection with a built schema.
+        built_ducklake_schema: Fixture providing a DuckDB connection with a built
+        schema.
     """
     mgr = DimensionManager(
         connection=built_ducklake_schema, categorical_threshold=10, max_workers=2
@@ -82,7 +84,8 @@ def test_create_dimension_table(dim_manager, built_ducklake_schema):
     """
     # Ajout d'abord d'une entrée de métadonnées pour la nouvelle dimension
     built_ducklake_schema.execute(
-        "INSERT INTO metadata VALUES ('new_dim', 'New Dim', 'String', 'VARCHAR', true, false)"
+        "INSERT INTO metadata VALUES ('new_dim', 'New Dim', 'String', 'VARCHAR', true,"
+        "false)"
     )
 
     # Création de la table de dimension
@@ -111,7 +114,8 @@ def test_get_dimension_mapping_existing(dim_manager):
     Args:
         dim_manager: DimensionManager fixture.
     """
-    # La table dim_category est créée par built_ducklake_schema (category est catégorielle)
+    # La table dim_category est créée par built_ducklake_schema (category est
+    # catégorielle)
     mapping = dim_manager.get_dimension_mapping("category")
     # Vérification que le mapping est retourné (peut être None si la table n'existe pas)
     if mapping is not None:

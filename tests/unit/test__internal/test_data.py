@@ -21,7 +21,8 @@ def data_manager(built_ducklake_schema):
     """Create a DataManager instance for testing.
 
     Args:
-        built_ducklake_schema: Fixture providing a DuckDB connection with a built schema.
+        built_ducklake_schema: Fixture providing a DuckDB connection with a built
+        schema.
 
     Returns:
         DataManager: initialized with the test connection.
@@ -79,7 +80,8 @@ def test_data_manager_initialization(built_ducklake_schema):
     """Test that DataManager initializes correctly with the given parameters.
 
     Args:
-        built_ducklake_schema: Fixture providing a DuckDB connection with a built schema.
+        built_ducklake_schema: Fixture providing a DuckDB connection with a built
+        schema.
     """
     mgr = DataManager(connection=built_ducklake_schema, batch_size=500)
     assert mgr is not None
@@ -214,7 +216,8 @@ def test_delete_rows_all(data_manager, built_ducklake_schema):
     ).fetchone()[0]
     assert before > 0
 
-    # Remarque : DataManager n'accepte pas filters=None (validation obligatoire des filtres).
+    # Remarque : DataManager n'accepte pas filters=None (validation obligatoire des
+    # filtres).
     # Suppression de toutes les lignes via un filtre SQL universel.
     deleted = data_manager.delete_rows(filters="1=1")
 

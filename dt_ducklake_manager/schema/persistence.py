@@ -43,7 +43,8 @@ class DuckLakeTablesBuilder:
 
     Examples:
         >>> conn = DuckLakeConnector('catalog.ducklake', 'data/').connect()
-        >>> builder = DuckLakeTablesBuilder(df, categorical_threshold=10, connection=conn)
+        >>> builder = DuckLakeTablesBuilder(df, categorical_threshold=10,
+        connection=conn)
         >>> builder.build_schema()
     """
 
@@ -62,7 +63,8 @@ class DuckLakeTablesBuilder:
         Initialize the DuckLakeTablesBuilder.
 
         Args:
-            df: Input dataset (pandas, polars, or narwhals-compatible) used to infer the schema.
+            df: Input dataset (pandas, polars, or narwhals-compatible) used to infer the
+            schema.
             categorical_threshold (Optional[int]): Maximum number of distinct values
                 for a column to be treated as categorical. Defaults to None (uses
                 ``SchemaBuilder`` default).
@@ -107,8 +109,10 @@ class DuckLakeTablesBuilder:
         Create a metadata table in DuckDB.
 
         Args:
-            table_name (Optional[str]): Name of the metadata table in DuckDB. Defaults to 'metadata'.
-            column_labels (Optional[Dict[str, str]]): Optional mapping of column names to labels.
+            table_name (Optional[str]): Name of the metadata table in DuckDB. Defaults
+            to 'metadata'.
+            column_labels (Optional[Dict[str, str]]): Optional mapping of column names
+            to labels.
 
         """
         # Création de la table des méta-données si elle n'existe pas déjà
@@ -117,10 +121,14 @@ class DuckLakeTablesBuilder:
 
         # Création de la table avec schéma explicite
         # L'unicité de 'name' est garantie applicativement par DuckdbTablesBuilder.
-        # Conversion vers Arrow pour garantir la compatibilité DuckDB quel que soit le backend narwhals.
-        # Note : .select() est nécessaire car narwhals/pandas inclut l'index comme colonne
-        # supplémentaire dans pa.Table.from_pandas() lorsque l'index n'est pas séquentiel
-        # (ex. après un .sort()). On filtre explicitement sur les colonnes nommées du DataFrame.
+        # Conversion vers Arrow pour garantir la compatibilité DuckDB quel que soit le
+        # backend narwhals.
+        # Note : .select() est nécessaire car narwhals/pandas inclut l'index comme
+        # colonne
+        # supplémentaire dans pa.Table.from_pandas() lorsque l'index n'est pas
+        # séquentiel
+        # (ex. après un .sort()). On filtre explicitement sur les colonnes nommées du
+        # DataFrame.
         df_meta = self.schema_builder.df_metadata
         self.conn.register(
             "temp_metadata", df_meta.to_arrow().select(list(df_meta.columns))
@@ -156,8 +164,10 @@ class DuckLakeTablesBuilder:
         Create dimension tables in DuckDB for categorical variables.
 
         Args:
-            table_prefix (Optional[str]): Prefix for dimension table names. Defaults to 'dim_'.
-            column_labels (Optional[Dict[str, str]]): Optional mapping of column names to labels.
+            table_prefix (Optional[str]): Prefix for dimension table names. Defaults to
+            'dim_'.
+            column_labels (Optional[Dict[str, str]]): Optional mapping of column names
+            to labels.
 
         """
         # Création du dictionnaire des tables de dimensions si elles n'existent pas déjà
@@ -168,14 +178,17 @@ class DuckLakeTablesBuilder:
         for dim_name, dim_df in self.schema_builder.dimension_tables.items():
             # Initialisation du nom de la table
             table_name = f"{table_prefix}{dim_name}"
-            # Conversion vers Arrow pour garantir la compatibilité DuckDB quel que soit le backend narwhals.
-            # Note : .select() filtre l'index pandas éventuel (cf. create_duckdb_metadata_table).
+            # Conversion vers Arrow pour garantir la compatibilité DuckDB quel que soit
+            # le backend narwhals.
+            # Note : .select() filtre l'index pandas éventuel (cf.
+            # create_duckdb_metadata_table).
             self.conn.register(
                 "temp_dim", dim_df.to_arrow().select(list(dim_df.columns))
             )
 
             # Création d'une table avec schéma explicite.
-            # Pas de contrainte PRIMARY KEY : DuckLake ne supporte pas les contraintes DDL.
+            # Pas de contrainte PRIMARY KEY : DuckLake ne supporte pas les contraintes
+            # DDL.
             # L'unicité de 'value' est garantie applicativement par DimensionManager.
             self.conn.execute(f"""
                 CREATE TABLE {table_name} (
@@ -210,10 +223,14 @@ class DuckLakeTablesBuilder:
         Create a fact table in DuckDB with optional Hive partitioning.
 
         Args:
-            table_name (Optional[str]): Name of the fact table in DuckDB. Defaults to 'fact_table'.
-            table_prefix (Optional[str]): Prefix for dimension table names. Defaults to 'dim_'.
-            column_labels (Optional[Dict[str, str]]): Optional mapping of column names to labels.
-            partition_by (Optional[List[str]]): Column names to partition the table by using
+            table_name (Optional[str]): Name of the fact table in DuckDB. Defaults to
+            'fact_table'.
+            table_prefix (Optional[str]): Prefix for dimension table names. Defaults to
+            'dim_'.
+            column_labels (Optional[Dict[str, str]]): Optional mapping of column names
+            to labels.
+            partition_by (Optional[List[str]]): Column names to partition the table by
+            using
                 DuckLake's Hive-style partitioning. Defaults to None (no partitioning).
 
         Examples:
@@ -228,18 +245,22 @@ class DuckLakeTablesBuilder:
         df_metadata = self.schema_builder.df_metadata
         primary_keys = self.schema_builder.primary_keys
 
-        # Conversion vers Arrow pour garantir la compatibilité DuckDB quel que soit le backend narwhals.
-        # Note : .select() filtre l'index pandas éventuel (cf. create_duckdb_metadata_table).
+        # Conversion vers Arrow pour garantir la compatibilité DuckDB quel que soit le
+        # backend narwhals.
+        # Note : .select() filtre l'index pandas éventuel (cf.
+        # create_duckdb_metadata_table).
         self.conn.register(
             "temp_fact", df_fact.to_arrow().select(list(df_fact.columns))
         )
 
         # Inférence du schéma de colonnes depuis la table de métadonnées.
-        # Utilisée dans les deux chemins DDL explicites (avec primary_keys ou avec partition_by).
+        # Utilisée dans les deux chemins DDL explicites (avec primary_keys ou avec
+        # partition_by).
         needs_explicit_ddl = (primary_keys and len(primary_keys) > 0) or partition_by
 
         if needs_explicit_ddl:
-            # Récupération des types SQL pour chaque colonne depuis la table de métadonnées
+            # Récupération des types SQL pour chaque colonne depuis la table de
+            # métadonnées
             column_definitions = []
             for col in df_fact.columns:
                 # Filtrage de la ligne de métadonnée correspondant à la colonne
@@ -249,7 +270,8 @@ class DuckLakeTablesBuilder:
                     sql_type = matching_rows.get_column("sql_type")[0]
                     column_definitions.append(f"{col} {sql_type}")
 
-            # Construction de la clause PARTITION BY si des colonnes de partition sont spécifiées.
+            # Construction de la clause PARTITION BY si des colonnes de partition sont
+            # spécifiées.
             # Pas de clause PRIMARY KEY : DuckLake ne supporte pas les contraintes DDL.
             partition_clause = (
                 f" PARTITION BY ({', '.join(partition_by)})" if partition_by else ""
@@ -274,10 +296,12 @@ class DuckLakeTablesBuilder:
             if primary_keys and len(primary_keys) > 0:
                 pk_columns = ", ".join(primary_keys)
                 self.logger.info(
-                    f"Logical primary keys registered in the metadata table for the fact_table : ({pk_columns})"
+                    f"Logical primary keys registered in the metadata table for the"
+                    f" fact_table : ({pk_columns})"
                 )
         else:
-            # Chemin CTAS (sans partition ni clés primaires) : plus performant, pas de DDL intermédiaire
+            # Chemin CTAS (sans partition ni clés primaires) : plus performant, pas de
+            # DDL intermédiaire
             query = f"""
                 CREATE TABLE {table_name} AS
                 SELECT {", ".join(df_fact.columns)}
@@ -291,7 +315,8 @@ class DuckLakeTablesBuilder:
         # Logging des clés étrangères créées (pour information)
         for dim_name in self.schema_builder.dimension_tables.keys():
             self.logger.info(
-                f"Foreign key created for dimension '{dim_name}' - can be joined on {table_name}.{dim_name} = {table_prefix}{dim_name}.value"
+                f"Foreign key created for dimension '{dim_name}' - can be joined on"
+                f" {table_name}.{dim_name} = {table_prefix}{dim_name}.value"
             )
 
         # Logging
@@ -309,16 +334,24 @@ class DuckLakeTablesBuilder:
         partition_by: list[str] | None = None,
     ) -> None:
         """
-        Build the entire schema in DuckDB, including metadata, dimension, and fact tables.
+        Build the entire schema in DuckDB, including metadata, dimension, and fact
+        tables.
 
         Args:
-            metadata_table (Optional[str]): Name of the metadata table. Defaults to 'metadata'.
-            fact_table (Optional[str]): Name of the fact table. Defaults to 'fact_table'.
-            dim_table_prefix (Optional[str]): Prefix for dimension tables. Defaults to 'dim_'.
-            column_labels (Optional[Dict[str, str]]): Optional mapping of column names to labels.
-            check_duplicates (bool): Whether to check and remove duplicates. Defaults to True.
-            keep (Literal['any', 'none', 'first', 'last']): Which duplicates to keep. Defaults to 'none'.
-            partition_by (Optional[List[str]]): Column names to partition the fact table by.
+            metadata_table (Optional[str]): Name of the metadata table. Defaults to
+            'metadata'.
+            fact_table (Optional[str]): Name of the fact table. Defaults to
+            'fact_table'.
+            dim_table_prefix (Optional[str]): Prefix for dimension tables. Defaults to
+            'dim_'.
+            column_labels (Optional[Dict[str, str]]): Optional mapping of column names
+            to labels.
+            check_duplicates (bool): Whether to check and remove duplicates. Defaults to
+            True.
+            keep (Literal['any', 'none', 'first', 'last']): Which duplicates to keep.
+            Defaults to 'none'.
+            partition_by (Optional[List[str]]): Column names to partition the fact table
+            by.
                 Passed through to ``create_duckdb_fact_table()``. Defaults to None.
 
         Examples:
@@ -348,7 +381,8 @@ class DuckLakeTablesBuilder:
             n_duplicates = duplicates_mask.sum()
             if n_duplicates > 0:
                 raise ValueError(
-                    f"Found {n_duplicates} duplicated rows based on the primary key columns {primary_keys}. "
+                    f"Found {n_duplicates} duplicated rows based on the primary key"
+                    f" columns {primary_keys}. "
                     f"Primary keys must be unique."
                 )
 

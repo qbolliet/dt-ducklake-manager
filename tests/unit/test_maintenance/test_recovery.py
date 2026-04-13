@@ -63,7 +63,8 @@ def test_recovery_result_initialization():
 
     Examples:
         >>> from dt_ducklake_manager.maintenance.recovery import RecoveryResult
-        >>> result = RecoveryResult(success=True, strategy_used=RecoveryStrategy.VALIDATE_AND_FIX)
+        >>> result = RecoveryResult(success=True,
+        strategy_used=RecoveryStrategy.VALIDATE_AND_FIX)
         >>> result.success
         True
     """
@@ -88,7 +89,8 @@ def recovery_manager(built_ducklake_schema, tmp_path):
     """Create a DatabaseRecoveryManager for testing.
 
     Args:
-        built_ducklake_schema: Fixture providing a DuckDB connection with a built schema.
+        built_ducklake_schema: Fixture providing a DuckDB connection with a built
+        schema.
         tmp_path: pytest temporary directory for backup storage.
 
     Returns:

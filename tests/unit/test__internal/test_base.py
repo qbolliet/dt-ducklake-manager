@@ -6,7 +6,8 @@ import polars as pl
 # Module de tests
 import pytest
 
-# Utilisation de DimensionManager (sous-classe concrète) pour instancier BaseSchemaManager
+# Utilisation de DimensionManager (sous-classe concrète) pour instancier
+# BaseSchemaManager
 from dt_ducklake_manager._internal.managers.dimension import DimensionManager
 
 # ---------------------------------------------------------------------------
@@ -20,7 +21,8 @@ def manager(built_ducklake_schema):
     """Create a DimensionManager (concrete subclass) to test BaseSchemaManager methods.
 
     Args:
-        built_ducklake_schema: Fixture providing a DuckDB connection with a built schema.
+        built_ducklake_schema: Fixture providing a DuckDB connection with a built
+        schema.
 
     Returns:
         DimensionManager: initialized with the test connection.
@@ -33,9 +35,11 @@ def manager(built_ducklake_schema):
 # ===========================================================================
 
 
-# Test que _load_current_metadata retourne un DataFrame narwhals avec les colonnes attendues
+# Test que _load_current_metadata retourne un DataFrame narwhals avec les colonnes
+# attendues
 def test_load_current_metadata_returns_dataframe(manager):
-    """Test that _load_current_metadata returns a narwhals DataFrame with expected columns.
+    """Test that _load_current_metadata returns a narwhals DataFrame
+    with expected columns.
 
     Args:
         manager: DimensionManager fixture with a built schema.
@@ -49,9 +53,11 @@ def test_load_current_metadata_returns_dataframe(manager):
     assert "is_primary_key" in metadata.columns
 
 
-# Test que _load_current_metadata retourne un DataFrame non vide pour un schéma construit
+# Test que _load_current_metadata retourne un DataFrame non vide pour un schéma
+# construit
 def test_load_current_metadata_non_empty(manager):
-    """Test that _load_current_metadata returns a non-empty DataFrame for a built schema.
+    """Test that _load_current_metadata returns a non-empty DataFrame
+    for a built schema.
 
     Args:
         manager: DimensionManager fixture with a built schema.
@@ -191,9 +197,11 @@ def test_invalidate_metadata_cache(manager):
 # ===========================================================================
 
 
-# Test que _check_categorical_threshold retourne True quand le nombre de modalités est inférieur au seuil
+# Test que _check_categorical_threshold retourne True quand le nombre de modalités est
+# inférieur au seuil
 def test_check_categorical_threshold_below(manager):
-    """Test that _check_categorical_threshold returns True when unique values <= threshold.
+    """Test that _check_categorical_threshold returns True when
+    unique values <= threshold.
 
     Args:
         manager: DimensionManager fixture with a built schema.
@@ -204,9 +212,11 @@ def test_check_categorical_threshold_below(manager):
     assert result is True
 
 
-# Test que _check_categorical_threshold retourne False quand le nombre de modalités est supérieur au seuil
+# Test que _check_categorical_threshold retourne False quand le nombre de modalités est
+# supérieur au seuil
 def test_check_categorical_threshold_above(manager):
-    """Test that _check_categorical_threshold returns False when unique values > threshold.
+    """Test that _check_categorical_threshold returns False when
+    unique values > threshold.
 
     Args:
         manager: DimensionManager fixture with a built schema.

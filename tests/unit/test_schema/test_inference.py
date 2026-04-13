@@ -92,7 +92,8 @@ def test_create_metadata_table(schema_builder):
     assert high_card_filter is False
 
 
-# Test de l'ajout de labels personnalisés lors de la création de la table des méta-données
+# Test de l'ajout de labels personnalisés
+# lors de la création de la table des méta-données
 def test_create_metadata_table_with_labels(schema_builder, column_labels):
     """Test the build of the metadata table with custom column labels.
 
@@ -278,7 +279,8 @@ def test_no_warning_when_primary_keys_provided(sample_df):
     Args:
         sample_df: Sample polars DataFrame.
     """
-    # Traitement des warnings comme des erreurs pour détecter toute émission non attendue
+    # Traitement des warnings comme des erreurs
+    # pour détecter toute émission non attendue
     with warnings.catch_warnings():
         warnings.simplefilter("error", UserWarning)
         # Ne doit pas lever d'exception

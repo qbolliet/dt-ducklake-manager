@@ -1,6 +1,7 @@
 # Importation des modules
 # Modules de base
 import os
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Literal
 
@@ -138,7 +139,8 @@ class DatabaseUpdater(BaseSchemaManager):
         Returns:
             True if operation is valid
         """
-        # Absence de validation si un auditeur n'est pas spécifié ou si elle n'est pas permise
+        # Absence de validation si un auditeur n'est pas spécifié ou si elle n'est pas
+        # permise
         if not self.enable_validation or not self.auditor:
             return True
 
@@ -203,7 +205,8 @@ class DatabaseUpdater(BaseSchemaManager):
 
         Examples:
             >>> success = updater.update_database(new_data_df)
-            >>> success = updater.update_database(new_data_df, compact_after_update=True)
+            >>> success = updater.update_database(new_data_df,
+            compact_after_update=True)
         """
         # Conversion vers narwhals dès le point d'entrée public
         update_df = nw.from_native(update_df, eager_only=True)
@@ -227,7 +230,8 @@ class DatabaseUpdater(BaseSchemaManager):
 
         # Logging
         self.logger.info(
-            f"Starting database update with {len(update_df)} rows (transaction: {use_transaction})"
+            f"Starting database update with {len(update_df)} rows (transaction:"
+            f"{use_transaction})"
         )
 
         # Utilisation de la transaction pour la mise à jour de la base de données
@@ -269,7 +273,8 @@ class DatabaseUpdater(BaseSchemaManager):
         Args:
             update_df: DataFrame containing the update data.
             check_duplicates_db: Whether to check and remove duplicates in database.
-            check_duplicates_update: Whether to check and remove duplicates in update data.
+            check_duplicates_update: Whether to check and remove duplicates in update
+            data.
             keep: Duplicate handling strategy ('first', 'last', or False).
             use_batch_processing: Whether to use batch processing for large datasets.
             compact_after_update: Whether to run DuckLake compaction after commit.
@@ -351,7 +356,8 @@ class DatabaseUpdater(BaseSchemaManager):
                 self.transaction_mgr.rollback_transaction(tx_id)
                 return False
 
-            # Étape 4: Mise à jour de la table de faits (avant les dimensions pour refléter l'état actuel)
+            # Étape 4: Mise à jour de la table de faits (avant les dimensions pour
+            # refléter l'état actuel)
             # Mise à jour en batch si spécifié
             if use_batch_processing and len(update_df) > self.batch_size:
                 # Initialisation de l'opération de transaction
@@ -382,7 +388,8 @@ class DatabaseUpdater(BaseSchemaManager):
                 self.transaction_mgr.rollback_transaction(tx_id)
                 return False
 
-            # Étape 5: Mise à jour des tables de dimensions (après fact table pour refléter les données actuelles)
+            # Étape 5: Mise à jour des tables de dimensions (après fact table pour
+            # refléter les données actuelles)
             # Initialisation de l'opération de transaction
             operation = TransactionOperation(
                 operation_type="dimension_update",
@@ -443,7 +450,8 @@ class DatabaseUpdater(BaseSchemaManager):
                 self.logger.info("Database update completed successfully")
                 # Invalidation du cache
                 self._invalidate_metadata_cache()
-                # Compaction DuckLake optionnelle après commit (fusion des petits fichiers delta)
+                # Compaction DuckLake optionnelle après commit (fusion des petits
+                # fichiers delta)
                 if compact_after_update:
                     self._run_ducklake_compaction()
                 return True
@@ -477,7 +485,8 @@ class DatabaseUpdater(BaseSchemaManager):
         Args:
             update_df: DataFrame containing the update data.
             check_duplicates_db: Whether to check and remove duplicates in database.
-            check_duplicates_update: Whether to check and remove duplicates in update data.
+            check_duplicates_update: Whether to check and remove duplicates in update
+            data.
             keep: Duplicate handling strategy ('first', 'last', or False).
             index_config: Optional index configuration dictionary.
             use_batch_processing: Whether to use batch processing for large datasets.
@@ -500,7 +509,8 @@ class DatabaseUpdater(BaseSchemaManager):
             if not self._update_metadata_safe(update_df):
                 return False
 
-            # Mise à jour de la table de faits (avant les dimensions pour refléter l'état actuel)
+            # Mise à jour de la table de faits (avant les dimensions pour refléter
+            # l'état actuel)
             # Mise à jour par batch si spécifié
             if use_batch_processing and len(update_df) > self.batch_size:
                 if not self._update_fact_table_batch(update_df):
@@ -509,7 +519,8 @@ class DatabaseUpdater(BaseSchemaManager):
                 if not self._update_fact_table_direct(update_df):
                     return False
 
-            # Mise à jour des tables de dimensions (après fact table pour refléter les données actuelles)
+            # Mise à jour des tables de dimensions (après fact table pour refléter les
+            # données actuelles)
             if not self._update_dimensions_safe(update_df):
                 return False
 
@@ -583,10 +594,11 @@ class DatabaseUpdater(BaseSchemaManager):
             current_metadata = self._load_current_metadata()
 
             # Classification des colonnes par statut catégoriel via filtrage narwhals
-            cat_names = current_metadata.filter(nw.col("is_categorical") == True)[
+            cat_names = current_metadata.filter(nw.col("is_categorical"))[
                 "name"
             ].to_list()
-            # Colonnes non-catégorielles de type String (ex-'object' pandas) : candidates à conversion
+            # Colonnes non-catégorielles de type String (ex-'object' pandas) :
+            # candidates à conversion
             non_cat_string_names = current_metadata.filter(
                 (nw.col("is_categorical") == False)
                 & (nw.col("python_type") == "String")
@@ -617,21 +629,26 @@ class DatabaseUpdater(BaseSchemaManager):
                         self.logger.error(f"Failed to update dimension for {col_name}")
                         return False
 
-            # Vérification des conversions vers catégoriel pour les colonnes non-catégorielles
-            # La vérification porte sur l'état GLOBAL de fact_table après l'upsert, et non
-            # sur le seul update_df : un petit update_df pourrait avoir < seuil valeurs uniques
+            # Vérification des conversions vers catégoriel pour les colonnes
+            # non-catégorielles
+            # La vérification porte sur l'état GLOBAL de fact_table après l'upsert, et
+            # non
+            # sur le seul update_df : un petit update_df pourrait avoir < seuil valeurs
+            # uniques
             # pour une colonne qui en compte > seuil dans la base entière.
             for col_name in non_categorical_columns.keys():
                 # Récupération des valeurs distinctes dans fact_table (état post-upsert)
                 db_values_series = nw.from_native(
                     self.conn.execute(
-                        f"SELECT DISTINCT {col_name} FROM fact_table WHERE {col_name} IS NOT NULL"
+                        f"SELECT DISTINCT {col_name} FROM fact_table WHERE {col_name}"
+                        f" IS NOT NULL"
                     ).pl()[col_name],
                     series_only=True,
                 )
                 # Vérification du seuil sur l'ensemble complet des valeurs
                 if self._check_categorical_threshold(db_values_series):
-                    # Conversion en catégoriel (les valeurs DB sont passées pour créer la dim table)
+                    # Conversion en catégoriel (les valeurs DB sont passées pour créer
+                    # la dim table)
                     if not self.dimension_mgr.convert_to_categorical(
                         col_name, db_values_series
                     ):
@@ -640,11 +657,14 @@ class DatabaseUpdater(BaseSchemaManager):
                             f"Failed to convert {col_name} to categorical"
                         )
 
-            # Vérification des conversions vers non-catégoriel pour les colonnes catégorielles
-            # La vérification porte sur le nombre d'entrées dans la table de dimension (état
+            # Vérification des conversions vers non-catégoriel pour les colonnes
+            # catégorielles
+            # La vérification porte sur le nombre d'entrées dans la table de dimension
+            # (état
             # post-batch_update_dimensions), et non sur les seules valeurs de update_df.
             for col_name in categorical_columns.keys():
-                # Comptage des entrées dans la table de dimension après batch_update_dimensions
+                # Comptage des entrées dans la table de dimension après
+                # batch_update_dimensions
                 n_dim_entries = self.conn.execute(
                     f"SELECT COUNT(*) FROM dim_{col_name}"
                 ).fetchone()[0]
@@ -694,7 +714,8 @@ class DatabaseUpdater(BaseSchemaManager):
                 self.logger.error(f"Primary keys missing in DataFrame: {missing_keys}")
                 return False
 
-            # Séparation ligne par ligne : nouvelles observations (INSERT) vs observations
+            # Séparation ligne par ligne : nouvelles observations (INSERT) vs
+            # observations
             # existantes dont les valeurs doivent être mises à jour (UPSERT).
             rows_to_insert, rows_to_update = self._split_dataframe_by_pk_existence(
                 prepared_df, primary_keys
@@ -717,7 +738,8 @@ class DatabaseUpdater(BaseSchemaManager):
 
             # Logging
             self.logger.info(
-                f"Fact table (direct): {total_inserted} inserted, {total_updated} updated"
+                f"Fact table (direct): {total_inserted} inserted, {total_updated}"
+                f" updated"
             )
             return True
 
@@ -756,7 +778,8 @@ class DatabaseUpdater(BaseSchemaManager):
                 self.logger.error(f"Primary keys missing in DataFrame: {missing_keys}")
                 return False
 
-            # Séparation ligne par ligne : nouvelles observations (INSERT) vs observations
+            # Séparation ligne par ligne : nouvelles observations (INSERT) vs
+            # observations
             # existantes dont les valeurs doivent être mises à jour (UPSERT).
             rows_to_insert, rows_to_update = self._split_dataframe_by_pk_existence(
                 prepared_df, primary_keys
@@ -779,7 +802,8 @@ class DatabaseUpdater(BaseSchemaManager):
 
             # Logging
             self.logger.info(
-                f"Fact table (batch): {total_inserted} inserted, {total_updated} updated"
+                f"Fact table (batch): {total_inserted} inserted, {total_updated}"
+                f" updated"
             )
             return True
 
@@ -792,10 +816,13 @@ class DatabaseUpdater(BaseSchemaManager):
     def _split_dataframe_by_pk_existence(
         self, df: nw.DataFrame, primary_keys: list[str]
     ) -> tuple[nw.DataFrame, nw.DataFrame]:
-        """Split a DataFrame into rows to INSERT and rows to UPDATE based on primary key existence.
+        """Split a DataFrame into rows to INSERT and rows to UPDATE
+        based on primary key existence.
 
-        For each row in the DataFrame, checks whether its primary key combination already
-        exists in the fact_table. Rows whose PKs are absent from the fact_table should be
+        For each row in the DataFrame, checks whether its primary key combination
+        already
+        exists in the fact_table. Rows whose PKs are absent from the fact_table should
+        be
         INSERTed; rows whose PKs are already present should be UPSERTed (updated).
 
         Args:
@@ -809,7 +836,8 @@ class DatabaseUpdater(BaseSchemaManager):
 
         Example:
             >>> df = pd.DataFrame({'id': [1, 2, 3], 'value': ['a', 'b', 'c']})
-            >>> to_insert, to_update = updater._split_dataframe_by_pk_existence(df, ['id'])
+            >>> to_insert, to_update = updater._split_dataframe_by_pk_existence(df,
+            ['id'])
             >>> # to_update contient les lignes dont l'id existe déjà en base
         """
         # DataFrame vide : aucune ligne à traiter
@@ -827,8 +855,10 @@ class DatabaseUpdater(BaseSchemaManager):
             if count == 0:
                 return df.clone(), df.head(0)
 
-            # Construction de la condition de jointure corrélée sur les clés primaires composites :
-            # chaque colonne du DataFrame (alias upd) est comparée à la fact_table (alias f).
+            # Construction de la condition de jointure corrélée sur les clés primaires
+            # composites :
+            # chaque colonne du DataFrame (alias upd) est comparée à la fact_table
+            # (alias f).
             conditions = " AND ".join([f"f.{key} = upd.{key}" for key in primary_keys])
 
             # Enregistrement dans DuckDB
@@ -893,18 +923,23 @@ class DatabaseUpdater(BaseSchemaManager):
         schema = self.ducklake_schema
         try:
             # Fusion des petits fichiers delta adjacents
-            # Note : les table functions DuckLake sont enregistrées dans le catalogue mémoire
+            # Note : les table functions DuckLake sont enregistrées dans le catalogue
+            # mémoire
             # (où l'extension est chargée), pas dans le catalogue attaché.
             self.conn.execute(
-                f"CALL ducklake_merge_adjacent_files('{alias}', '{fact_table}', schema := '{schema}')"
+                f"CALL ducklake_merge_adjacent_files('{alias}', '{fact_table}', schema"
+                f":= '{schema}')"
             )
-            # Réécriture des fichiers de suppression (delete files) pour optimiser les lectures
+            # Réécriture des fichiers de suppression (delete files) pour optimiser les
+            # lectures
             self.conn.execute(
-                f"CALL ducklake_rewrite_data_files('{alias}', '{fact_table}', schema := '{schema}')"
+                f"CALL ducklake_rewrite_data_files('{alias}', '{fact_table}', schema"
+                f":= '{schema}')"
             )
             self.logger.info(f"Compaction DuckLake is finished for '{fact_table}'")
         except Exception as e:
-            # Erreur non bloquante : la compaction est une optimisation, pas une étape critique
+            # Erreur non bloquante : la compaction est une optimisation, pas une étape
+            # critique
             self.logger.warning(f"Compaction DuckLake failed : {e}")
 
     # Méthodes de rollback
@@ -998,16 +1033,18 @@ class DatabaseUpdater(BaseSchemaManager):
             current_metadata = self._load_current_metadata()
 
             # Extraction des colonnes catégorielles via filtrage narwhals
-            cat_names = current_metadata.filter(nw.col("is_categorical") == True)[
+            cat_names = current_metadata.filter(nw.col("is_categorical"))[
                 "name"
             ].to_list()
 
-            # Conversion des colonnes catégorielles : label → valeur entière de dimension
+            # Conversion des colonnes catégorielles : label → valeur entière de
+            # dimension
             for col_name in cat_names:
                 if col_name not in prepared_df.columns:
                     continue
 
-                # Mise à jour préalable de la table de dimension avec les nouvelles valeurs
+                # Mise à jour préalable de la table de dimension avec les nouvelles
+                # valeurs
                 self.dimension_mgr.update_dimension_values(
                     col_name, prepared_df[col_name]
                 )
@@ -1024,7 +1061,8 @@ class DatabaseUpdater(BaseSchemaManager):
                     # Sauvegarde de l'ordre des colonnes
                     original_columns = prepared_df.columns
                     # Jointure narwhals pour remplacer les labels par leurs IDs
-                    # Création du DataFrame de mapping avec le même backend que prepared_df
+                    # Création du DataFrame de mapping avec le même backend que
+                    # prepared_df
                     # pour éviter une incompatibilité lors du join narwhals.
                     dim_nw = nw.from_dict(
                         {
@@ -1201,7 +1239,7 @@ class DatabaseUpdater(BaseSchemaManager):
         """
         try:
             status = {
-                "timestamp": pd.Timestamp.now(),
+                "timestamp": datetime.now(),
                 "health_status": "unknown",
                 "active_transactions": 0,
                 "validation_enabled": self.enable_validation,
@@ -1229,7 +1267,7 @@ class DatabaseUpdater(BaseSchemaManager):
         except Exception as e:
             # Logging
             self.logger.error(f"Error getting update status: {e}")
-            return {"error": str(e), "timestamp": pd.Timestamp.now()}
+            return {"error": str(e), "timestamp": datetime.now()}
 
     # Méthode de validation de l'état de la base de données
     def validate_database_state(

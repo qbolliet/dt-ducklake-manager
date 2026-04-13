@@ -438,7 +438,8 @@ class TransactionManager(BaseSchemaManager):
 
             # Logging
             self.logger.info(
-                f"Executed operation {operation_index} in {transaction_id}: {operation.description}"
+                f"Executed operation {operation_index} in {transaction_id}:"
+                f"{operation.description}"
             )
             return True
 
@@ -491,7 +492,8 @@ class TransactionManager(BaseSchemaManager):
 
             # Logging
             self.logger.info(
-                f"Committed transaction {transaction_id} with {len(context.operations)} operations"
+                f"Committed transaction {transaction_id} with {len(context.operations)}"
+                f" operations"
             )
 
             # Nettoyage
@@ -540,7 +542,8 @@ class TransactionManager(BaseSchemaManager):
                         )
                         # Logging
                         self.logger.info(
-                            f"Rolled back operation {operation_index}: {operation.description}"
+                            f"Rolled back operation {operation_index}:"
+                            f"{operation.description}"
                         )
                     except Exception as e:
                         # Ajout aux erreurs
@@ -554,7 +557,8 @@ class TransactionManager(BaseSchemaManager):
             # DML crée un snapshot irrévocable. Le rollback applicatif via rollback_func
             # (ci-dessus) est le seul mécanisme disponible à ce niveau.
             # En cas d'échec des rollback_func, utiliser le time-travel :
-            #   DuckLakeConnector(..., snapshot_version=context.pre_transaction_snapshot)
+            #   DuckLakeConnector(...,
+            # snapshot_version=context.pre_transaction_snapshot)
             if context.pre_transaction_snapshot is not None:
                 self.logger.info(
                     f"Snapshot de référence pour time-travel : "
@@ -567,7 +571,8 @@ class TransactionManager(BaseSchemaManager):
             # Logging
             if rollback_errors:
                 self.logger.warning(
-                    f"Transaction {transaction_id} rolled back with {len(rollback_errors)} rollback errors"
+                    f"Transaction {transaction_id} rolled back with"
+                    f" {len(rollback_errors)} rollback errors"
                 )
                 context.error_message = f"Rollback errors: {'; '.join(rollback_errors)}"
             else:
@@ -614,7 +619,8 @@ class TransactionManager(BaseSchemaManager):
 
         context = self._active_transactions[transaction_id]
 
-        # Enregistrement applicatif du savepoint : index de la dernière opération exécutée.
+        # Enregistrement applicatif du savepoint : index de la dernière opération
+        # exécutée.
         # DuckLake ne supporte pas les SAVEPOINTs SQL ; le rollback partiel repose
         # exclusivement sur les rollback_func enregistrées par opération.
         context.savepoints[savepoint_name] = len(context.executed_operations)
@@ -690,7 +696,8 @@ class TransactionManager(BaseSchemaManager):
 
             # Logging
             self.logger.info(
-                f"Rolled back to savepoint '{savepoint_name}' in transaction {transaction_id}"
+                f"Rolled back to savepoint '{savepoint_name}' in transaction"
+                f" {transaction_id}"
             )
             return True
 
@@ -714,7 +721,8 @@ class TransactionManager(BaseSchemaManager):
 
         Example:
             >>> status = tx_mgr.get_transaction_status(tx_id)
-            >>> print(f"State: {status['state']}, Operations: {status['total_operations']}")
+            >>> print(f"State: {status['state']}, Operations:
+            {status['total_operations']}")
         """
         # Vérification que la transaction n'est pas active
         if transaction_id not in self._active_transactions:

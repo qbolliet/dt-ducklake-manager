@@ -35,7 +35,8 @@ def test_transaction_operation_initialization():
     """Test that TransactionOperation can be initialized with all fields.
 
     Examples:
-        >>> op = TransactionOperation(operation_type='insert', operation_func=lambda: True)
+        >>> op = TransactionOperation(operation_type='insert', operation_func=lambda:
+        True)
         >>> op.operation_type
         'insert'
     """
@@ -80,7 +81,8 @@ def tx_manager(built_ducklake_schema):
     """Create a TransactionManager instance for testing.
 
     Args:
-        built_ducklake_schema: Fixture providing a DuckDB connection with a built schema.
+        built_ducklake_schema: Fixture providing a DuckDB connection with a built
+        schema.
 
     Returns:
         TransactionManager: initialized with the test connection.
@@ -102,7 +104,8 @@ def test_transaction_manager_initialization(built_ducklake_schema):
     """Test that TransactionManager initializes without errors.
 
     Args:
-        built_ducklake_schema: Fixture providing a DuckDB connection with a built schema.
+        built_ducklake_schema: Fixture providing a DuckDB connection with a built
+        schema.
     """
     mgr = TransactionManager(connection=built_ducklake_schema, transaction_timeout=120)
     assert mgr is not None

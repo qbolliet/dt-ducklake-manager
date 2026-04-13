@@ -199,7 +199,6 @@ def test_full_maintenance_continues_on_step_failure(maint, ducklake_conn):
     # Compteur d'appels pour vérifier que les étapes suivantes ont bien été exécutées
     call_log: list = []
 
-    original_merge = maint.merge_files
     original_rewrite = maint.rewrite_data_files
     original_expire = maint.expire_snapshots
     original_cleanup = maint.cleanup_files

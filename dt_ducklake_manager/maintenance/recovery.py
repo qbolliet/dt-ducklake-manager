@@ -76,7 +76,8 @@ class RecoveryPoint:
         backup_type (BackupType): Type of backup
         backup_path (str): Path to the backup files
         metadata (dict): Metadata about the database state
-        validation_report (Optional[ValidationReport]): Validation report at the time of backup
+        validation_report (Optional[ValidationReport]): Validation report at the time of
+        backup
         description (str): Description of the recovery point
     """
 
@@ -140,7 +141,8 @@ class DatabaseRecoveryManager:
     """
     Manages database recovery operations and backup/restore functionality.
 
-    Provides comprehensive error recovery mechanisms including automatic backup creation,
+    Provides comprehensive error recovery mechanisms including automatic backup
+    creation,
     validation-driven repair, schema consistency restoration, and transaction rollback.
 
     Attributes:
@@ -186,7 +188,8 @@ class DatabaseRecoveryManager:
 
         Example:
             >>> conn = DuckLakeConnector('catalog.ducklake', 'data/').connect()
-            >>> recovery_mgr = DatabaseRecoveryManager(conn, backup_dir='/path/to/backups')
+            >>> recovery_mgr = DatabaseRecoveryManager(conn,
+            backup_dir='/path/to/backups')
         """
         # Initialisation de la connexion DuckLake.
         self.conn = connection if connection is not None else duckdb.connect(":memory:")
@@ -265,7 +268,8 @@ class DatabaseRecoveryManager:
                 if validation_report.get_critical_issues_count() > 0:
                     self.logger.warning(
                         f"Creating recovery point with "
-                        f"{validation_report.get_critical_issues_count()} critical issues"
+                        f"{validation_report.get_critical_issues_count()} critical"
+                        f" issues"
                     )
 
             # Création du répertoire de sauvegarde
@@ -398,7 +402,8 @@ class DatabaseRecoveryManager:
 
         Args:
             operation: Recovery operation to perform
-            confirm_destructive: Confirm destructive operations (required for some strategies)
+            confirm_destructive: Confirm destructive operations (required for some
+            strategies)
 
         Returns:
             RecoveryResult with operation details
@@ -427,7 +432,8 @@ class DatabaseRecoveryManager:
                     error_message="Recovery operation validation failed",
                 )
 
-            # Sauvegarde automatique des métadonnées avant les opérations in-place destructrices.
+            # Sauvegarde automatique des métadonnées avant les opérations in-place
+            # destructrices.
             # Les opérations sur les données sont couvertes par l'historique DuckLake.
             pre_recovery_point = None
             if operation.strategy == RecoveryStrategy.REPAIR_SCHEMA:
@@ -469,7 +475,9 @@ class DatabaseRecoveryManager:
                 # Vérification des issues critiques persistantes
                 if validation_report.get_critical_issues_count() > 0:
                     result.recommendations.append(
-                        f"Recovery completed but {validation_report.get_critical_issues_count()} critical issues remain"
+                        f"Recovery completed but"
+                        f" {validation_report.get_critical_issues_count()} critical"
+                        f" issues remain"
                     )
 
             # Logging du résultat
@@ -495,7 +503,8 @@ class DatabaseRecoveryManager:
                 error_message=str(e),
             )
 
-    # Méthode de récupération automatique de la base de données sur la base d'un rapport de validation
+    # Méthode de récupération automatique de la base de données sur la base d'un rapport
+    # de validation
     def auto_recover_from_validation(
         self,
         validation_report: Any,
@@ -672,7 +681,8 @@ class DatabaseRecoveryManager:
                     success=False,
                     strategy_used=operation.strategy,
                     recovery_time=0,
-                    error_message=f"Impossible d'interroger les snapshots DuckLake : {e}",
+                    error_message=f"Impossible d'interroger les snapshots DuckLake :"
+                                  f"{e}",
                 )
 
             snapshot_count = len(snapshots_df)
@@ -684,7 +694,8 @@ class DatabaseRecoveryManager:
             # Présentation structurée de chaque snapshot avec horodatage lisible
             for row in snapshots_df.iter_rows(named=True):
                 snap_id = row.get("snapshot_id", "N/A")
-                # Récupération de l'horodatage selon le nom de colonne retourné par DuckLake
+                # Récupération de l'horodatage selon le nom de colonne retourné par
+                # DuckLake
                 snap_time = row.get("snapshot_time", row.get("timestamp", None))
                 if snap_time is not None and hasattr(snap_time, "strftime"):
                     snap_time_str = snap_time.strftime("%Y-%m-%d %H:%M:%S")
@@ -712,7 +723,8 @@ class DatabaseRecoveryManager:
                     suggested_id = target_snapshot
                 else:
                     operations_performed.append(
-                        f"ATTENTION : snapshot {target_snapshot} introuvable dans l'historique — "
+                        f"ATTENTION : snapshot {target_snapshot} introuvable dans"
+                        f" l'historique — "
                         f"vérifier la valeur de snapshot_id"
                     )
             elif snapshot_count > 1:
@@ -724,15 +736,18 @@ class DatabaseRecoveryManager:
             elif snapshot_count == 1:
                 suggested_id = str(snapshots_df["snapshot_id"][0])
                 operations_performed.append(
-                    "Un seul snapshot disponible — restauration vers l'état initial uniquement"
+                    "Un seul snapshot disponible — restauration vers l'état initial"
+                    " uniquement"
                 )
 
             # Instructions de restauration étape par étape (format prêt à copier-coller)
             recommendations = [
                 "─── Procédure de restauration par time-travel DuckLake ───",
                 "",
-                "Étape 1 — Ouvrir une connexion en lecture seule sur le snapshot cible :",
-                f"  conn_old = DuckLakeConnector(catalog_path, data_path, snapshot_version={suggested_id}).connect()",
+                "Étape 1 — Ouvrir une connexion en lecture seule sur le snapshot cible"
+                ":",
+                f"  conn_old = DuckLakeConnector(catalog_path, data_path,"
+                f"snapshot_version={suggested_id}).connect()",
                 "",
                 "Étape 2 — Lire les tables depuis cette connexion :",
                 "  fact_df = conn_old.execute('SELECT * FROM fact_table').pl()",
@@ -740,7 +755,8 @@ class DatabaseRecoveryManager:
                 "  # Répéter pour chaque table de dimension :",
                 "  #   dim_df = conn_old.execute('SELECT * FROM dim_<col>').pl()",
                 "",
-                "Étape 3 — Vider les tables du catalogue courant et réinsérer les données :",
+                "Étape 3 — Vider les tables du catalogue courant et réinsérer les"
+                " données :",
                 "  conn.execute('DELETE FROM fact_table')",
                 "  conn.register('_restore_fact', fact_df)",
                 "  conn.execute('INSERT INTO fact_table SELECT * FROM _restore_fact')",
@@ -902,7 +918,8 @@ class DatabaseRecoveryManager:
                     dim_mgr.create_dimension_table(col_name)
                     # Récupération des valeurs distinctes de la fact_table
                     values = self.conn.execute(
-                        f"SELECT DISTINCT {col_name} FROM fact_table WHERE {col_name} IS NOT NULL"
+                        f"SELECT DISTINCT {col_name} FROM fact_table WHERE {col_name}"
+                        f" IS NOT NULL"
                     ).pl()[col_name]
                     dim_mgr.update_dimension_values(col_name, values)
                     self.logger.info(f"Created missing dimension table for {col_name}")
@@ -1009,7 +1026,8 @@ class DatabaseRecoveryManager:
                         # Recréation de la table de dimension à partir de la fact_table
                         dim_mgr.create_dimension_table(col_name)
                         values = self.conn.execute(
-                            f"SELECT DISTINCT {col_name} FROM fact_table WHERE {col_name} IS NOT NULL"
+                            f"SELECT DISTINCT {col_name} FROM fact_table WHERE"
+                            f" {col_name} IS NOT NULL"
                         ).pl()[col_name]
                         added = dim_mgr.update_dimension_values(col_name, values)
                         operations_performed.append(
@@ -1025,7 +1043,8 @@ class DatabaseRecoveryManager:
                     if self._table_exists(dim_table):
                         # Ajout des valeurs de fact_table manquantes dans dimension
                         fact_values = self.conn.execute(
-                            f"SELECT DISTINCT {col_name} FROM fact_table WHERE {col_name} IS NOT NULL"
+                            f"SELECT DISTINCT {col_name} FROM fact_table WHERE"
+                            f" {col_name} IS NOT NULL"
                         ).pl()[col_name]
                         added = dim_mgr.update_dimension_values(col_name, fact_values)
                         if added > 0:
@@ -1097,7 +1116,8 @@ class DatabaseRecoveryManager:
                 error_message=str(e),
             )
 
-    # Méthode de récupération en validant la base de données et appliquant des corrections automatiques
+    # Méthode de récupération en validant la base de données et appliquant des
+    # corrections automatiques
     def _recover_validate_and_fix(self, operation: RecoveryOperation) -> RecoveryResult:
         """Recover by validating database and applying automatic fixes.
 
@@ -1182,7 +1202,8 @@ class DatabaseRecoveryManager:
                             fixed_count += 1
 
                     elif issue.issue_type.value == "performance_issue":
-                        # Pas de fix automatique pour les problèmes de performance, juste une recommandation
+                        # Pas de fix automatique pour les problèmes de performance,
+                        # juste une recommandation
                         operations_performed.append(
                             f"Performance recommendation: {issue.suggested_fix}"
                         )
@@ -1193,7 +1214,8 @@ class DatabaseRecoveryManager:
                     )
 
             operations_performed.append(
-                f"Successfully fixed {fixed_count}/{len(validation_report.issues)} issues"
+                f"Successfully fixed {fixed_count}/{len(validation_report.issues)}"
+                f" issues"
             )
 
             return RecoveryResult(
@@ -1229,13 +1251,15 @@ class DatabaseRecoveryManager:
             True if operation is valid and can proceed, False otherwise.
         """
         try:
-            # Vérification des opérations destructrices (modifications in-place du catalogue)
+            # Vérification des opérations destructrices (modifications in-place du
+            # catalogue)
             destructive_strategies = [RecoveryStrategy.REPAIR_SCHEMA]
             # Vérification de la confirmation d'une opération destructive de données
             if operation.strategy in destructive_strategies and not confirm_destructive:
                 # Logging
                 self.logger.error(
-                    f"Destructive operation {operation.strategy.value} requires confirmation"
+                    f"Destructive operation {operation.strategy.value} requires"
+                    f" confirmation"
                 )
                 return False
 
@@ -1244,7 +1268,8 @@ class DatabaseRecoveryManager:
                 if operation.target_recovery_point not in self._recovery_points:
                     # Logging
                     self.logger.error(
-                        f"Target recovery point {operation.target_recovery_point} not found"
+                        f"Target recovery point {operation.target_recovery_point} not"
+                        f" found"
                     )
                     return False
 
@@ -1317,7 +1342,8 @@ class DatabaseRecoveryManager:
                 "constraint_violation": RecoveryStrategy.VALIDATE_AND_FIX,
             }
 
-            # Si le score dominant est élevé (>= 8), considérer une stratégie plus agressive
+            # Si le score dominant est élevé (>= 8), considérer une stratégie plus
+            # agressive
             if dominant_score >= 8 and allow_destructive:
                 if dominant_issue == "schema_inconsistency":
                     return RecoveryStrategy.REPAIR_SCHEMA
@@ -1374,7 +1400,8 @@ class DatabaseRecoveryManager:
         except:
             return []
 
-    # Méthode auxiliaire de vérification de l'existence d'une table dans la base de données
+    # Méthode auxiliaire de vérification de l'existence d'une table dans la base de
+    # données
     def _table_exists(self, table_name: str) -> bool:
         """Check if a table exists in the database.
 
@@ -1414,7 +1441,9 @@ class DatabaseRecoveryManager:
                     "total_issues": len(recovery_point.validation_report.issues)
                     if recovery_point.validation_report
                     else 0,
-                    "critical_issues": recovery_point.validation_report.get_critical_issues_count()
+                    "critical_issues": (
+                        recovery_point.validation_report.get_critical_issues_count()
+                    )
                     if recovery_point.validation_report
                     else 0,
                 }
@@ -1529,7 +1558,8 @@ class DatabaseRecoveryManager:
                 # Entrées orphelines dans dimension → supprimer
                 self.conn.execute(f"""
                     DELETE FROM {dim_table}
-                    WHERE value NOT IN (SELECT DISTINCT {col_name} FROM fact_table WHERE {col_name} IS NOT NULL)
+                    WHERE value NOT IN (SELECT DISTINCT {col_name} FROM fact_table WHERE
+                    {col_name} IS NOT NULL)
                 """)
 
             return True
@@ -1590,7 +1620,8 @@ class DatabaseRecoveryManager:
             True if fix was applied successfully
         """
         try:
-            # Cas 1: Colonne dans fact_table mais pas dans metadata → ajout aux métadonnées
+            # Cas 1: Colonne dans fact_table mais pas dans metadata → ajout aux
+            # métadonnées
             if issue.table_name == "fact_table" and issue.column_name:
                 col_name = issue.column_name
                 # Inférence du type depuis la colonne
@@ -1600,7 +1631,8 @@ class DatabaseRecoveryManager:
                     sql_type = col_info[1]
                     self.conn.execute(
                         """
-                        INSERT INTO metadata (name, label, python_type, sql_type, is_categorical, is_primary_key)
+                        INSERT INTO metadata (name, label, python_type, sql_type,
+                        is_categorical, is_primary_key)
                         VALUES (?, ?, ?, ?, FALSE, FALSE)
                     """,
                         [
@@ -1613,7 +1645,8 @@ class DatabaseRecoveryManager:
                     self.logger.info(f"Added missing metadata for column {col_name}")
                     return True
 
-            # Cas 2: Colonne dans metadata mais pas dans fact_table → suppression des métadonnées
+            # Cas 2: Colonne dans metadata mais pas dans fact_table → suppression des
+            # métadonnées
             if issue.table_name == "metadata" and issue.column_name:
                 self.conn.execute(
                     "DELETE FROM metadata WHERE name = ?", [issue.column_name]
@@ -1651,7 +1684,8 @@ class DatabaseRecoveryManager:
             if "missing" in issue.description.lower():
                 dim_mgr.create_dimension_table(col_name)
                 values = self.conn.execute(
-                    f"SELECT DISTINCT {col_name} FROM fact_table WHERE {col_name} IS NOT NULL"
+                    f"SELECT DISTINCT {col_name} FROM fact_table WHERE {col_name} IS"
+                    f" NOT NULL"
                 ).pl()[col_name]
                 dim_mgr.update_dimension_values(col_name, values)
                 self.logger.info(f"Created missing dimension table {dim_table}")
@@ -1662,7 +1696,8 @@ class DatabaseRecoveryManager:
                 self.conn.execute(f"DROP TABLE {dim_table}")
                 dim_mgr.create_dimension_table(col_name)
                 values = self.conn.execute(
-                    f"SELECT DISTINCT {col_name} FROM fact_table WHERE {col_name} IS NOT NULL"
+                    f"SELECT DISTINCT {col_name} FROM fact_table WHERE {col_name} IS"
+                    f" NOT NULL"
                 ).pl()[col_name]
                 dim_mgr.update_dimension_values(col_name, values)
                 self.logger.info(f"Rebuilt corrupted dimension table {dim_table}")
@@ -1689,8 +1724,10 @@ class DatabaseRecoveryManager:
             if not col_name:
                 return False
 
-            # Élargissement du type vers le type le moins restrictif (généralement VARCHAR)
-            # Note: DuckDB ne supporte pas ALTER COLUMN TYPE directement, donc recréation nécessaire
+            # Élargissement du type vers le type le moins restrictif (généralement
+            # VARCHAR)
+            # Note: DuckDB ne supporte pas ALTER COLUMN TYPE directement, donc
+            # recréation nécessaire
             self.conn.execute(
                 """
                 UPDATE metadata SET sql_type = 'VARCHAR', python_type = 'object'
@@ -1717,7 +1754,8 @@ class DatabaseRecoveryManager:
             True if fix was applied successfully
         """
         try:
-            # Traitement des violations de contraintes (doublons, valeurs invalides, etc.)
+            # Traitement des violations de contraintes (doublons, valeurs invalides,
+            # etc.)
             if "duplicate" in issue.description.lower():
                 # Suppression des doublons en gardant la première occurrence
                 self.conn.execute("""

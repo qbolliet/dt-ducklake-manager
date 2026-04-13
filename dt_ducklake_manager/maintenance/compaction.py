@@ -97,7 +97,8 @@ class DuckLakeMaintenance:
             # Exécution de la fusion des fichiers
             # Note : les table functions DuckLake vivent dans le catalogue mémoire.
             self.conn.execute(
-                f"CALL ducklake_merge_adjacent_files('{self.catalog_alias}', '{table}', schema := '{schema}')"
+                f"CALL ducklake_merge_adjacent_files('{self.catalog_alias}', '{table}"
+                f" ', schema := '{schema}')"
             )
             # Logging
             self.logger.info(
@@ -127,7 +128,8 @@ class DuckLakeMaintenance:
         try:
             # Exécution de la réécriture des fichiers
             self.conn.execute(
-                f"CALL ducklake_rewrite_data_files('{self.catalog_alias}', '{table}', schema := '{schema}')"
+                f"CALL ducklake_rewrite_data_files('{self.catalog_alias}', '{table}',"
+                f"schema := '{schema}')"
             )
             # Logging
             self.logger.info(
@@ -167,7 +169,8 @@ class DuckLakeMaintenance:
             )
             # Logging
             self.logger.info(
-                f"Snapshots before the cutoff date {cutoff_str} expiration is finished : {schema}"
+                f"Snapshots before the cutoff date {cutoff_str} expiration is finished"
+                f": {schema}"
             )
         except Exception as e:
             # Logging

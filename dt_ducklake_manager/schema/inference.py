@@ -20,15 +20,18 @@ FILE_PATH = Path(os.path.abspath(__file__))
 # Classe de création d'une base de données DuckDB avec :
 # - Une "Fact table" : Contenant les données
 # - Une "Label table" : Contenant les labels associés à chaque indicateur
-# - Une "Metadata table" : Contenant les caractéristiques des variables de la factable (type, modalités etc ...)
+# - Une "Metadata table" : Contenant les caractéristiques des variables de la factable
+# (type, modalités etc ...)
 class SchemaBuilder:
     """
     A class to automate the creation of metadata, dimension tables, and fact tables
-    from a given DataFrame (pandas, polars, or narwhals-compatible), primarily for use in data warehousing.
+    from a given DataFrame (pandas, polars, or narwhals-compatible), primarily for use
+    in data warehousing.
 
     Attributes:
         df (nw.DataFrame): The input dataset (converted to narwhals).
-        categorical_threshold (int): Threshold for determining if a column is categorical
+        categorical_threshold (int): Threshold for determining if a column is
+        categorical
                                      based on the number of unique modalities.
         logger (logging.Logger): Logger instance for tracking processing steps.
     """
@@ -51,9 +54,12 @@ class SchemaBuilder:
                 dimension tables are created and all object columns are marked as
                 non-categorical. Pass an integer (e.g. 50) to restore the previous
                 behaviour.
-            primary_keys (List[str], optional): List of column names to use as primary key.
-                Can be a single column or composite key. Defaults to None (no primary key).
-                When None, deduplication will use all columns and a UserWarning is raised.
+            primary_keys (List[str], optional): List of column names to use as primary
+            key.
+                Can be a single column or composite key. Defaults to None (no primary
+                key).
+                When None, deduplication will use all columns and a UserWarning is
+                raised.
             log_filename (os.PathLike, optional): Path to the log file. Defaults to
                 a file named `schema_builder.log` in a logs directory.
 
@@ -64,20 +70,24 @@ class SchemaBuilder:
             >>> builder = SchemaBuilder(df, primary_keys=['id'])
 
             >>> # Composite primary key
-            >>> builder = SchemaBuilder(df, primary_keys=['date', 'country', 'indicator'])
+            >>> builder = SchemaBuilder(df, primary_keys=['date', 'country',
+            'indicator'])
 
             >>> # No primary key — raises UserWarning
             >>> builder = SchemaBuilder(df)
 
             >>> # Threshold disabled — no dimension tables are created
-            >>> builder = SchemaBuilder(df, categorical_threshold=None, primary_keys=['id'])
+            >>> builder = SchemaBuilder(df, categorical_threshold=None,
+            primary_keys=['id'])
 
             >>> # Threshold enabled — behaves like the original default
-            >>> builder = SchemaBuilder(df, categorical_threshold=50, primary_keys=['id'])
+            >>> builder = SchemaBuilder(df, categorical_threshold=50,
+            primary_keys=['id'])
         """
         # Conversion vers narwhals
         self.df = nw.from_native(df, eager_only=True)
-        # Initialisation du seuil au deçà duquel les modalités d'une variable catégorielle ne sont plus exportées dans
+        # Initialisation du seuil au deçà duquel les modalités d'une variable
+        # catégorielle ne sont plus exportées dans
         self.categorical_threshold = categorical_threshold
 
         # Validation des clés primaires si spécifiées
@@ -86,7 +96,8 @@ class SchemaBuilder:
             missing_cols = set(primary_keys) - set(self.df.columns)
             if missing_cols:
                 raise ValueError(
-                    f"The following primary key columns do not exist in the DataFrame: {missing_cols}"
+                    f"The following primary key columns do not exist in the DataFrame:"
+                    f"{missing_cols}"
                 )
 
             self.primary_keys = primary_keys
@@ -122,7 +133,8 @@ class SchemaBuilder:
         self, column_labels: dict[str, str] | None | None = None
     ) -> nw.DataFrame:
         """
-        Automatically infer metadata for the DataFrame's columns, including types, labels,
+        Automatically infer metadata for the DataFrame's columns, including types,
+        labels,
         and categorical attributes.
 
         Args:
@@ -130,7 +142,8 @@ class SchemaBuilder:
                                             Defaults to None.
 
         Returns:
-            nw.DataFrame: A DataFrame containing metadata for each column in the input dataset.
+            nw.DataFrame: A DataFrame containing metadata for each column in the input
+            dataset.
         """
         # Initialisation de la liste des méta-données
         list_metadata = []
@@ -166,32 +179,41 @@ class SchemaBuilder:
             # Logging
             self.logger.info(f"Successfully extracted meta-data from column '{col}'")
 
-            # Vérification si la colonne est de type String (équivalent narwhals de 'object')
+            # Vérification si la colonne est de type String (équivalent narwhals de
+            # 'object')
             if isinstance(dtype_obj, nw.String):
                 # Calcul du nombre de modalités
                 n_modalities = self.df[col].n_unique()
-                # Vérification du seuil : si categorical_threshold vaut None, aucune colonne
-                # n'est traitée comme catégorielle, quel que soit son nombre de modalités.
+                # Vérification du seuil : si categorical_threshold vaut None, aucune
+                # colonne
+                # n'est traitée comme catégorielle, quel que soit son nombre de
+                # modalités.
                 if self.categorical_threshold is not None:
                     if n_modalities <= self.categorical_threshold:
                         # Mise à jour du type de la variable
                         metadata["is_categorical"] = True
                         # Logging
                         self.logger.info(
-                            f"The column '{col}' is of type 'String' and the number of modalities {n_modalities} satisfies the categorical threshold criteria {self.categorical_threshold}"
+                            f"The column '{col}' is of type 'String' and the number of"
+                            f" modalities {n_modalities} satisfies the categorical"
+                            f" threshold criteria {self.categorical_threshold}"
                         )
                         # Mise à jour des modalités
-                        # metadata['modalities'] = str(self.df[col].dropna().unique().tolist())
+                        # metadata['modalities'] =
+                        # str(self.df[col].dropna().unique().tolist())
                     else:
                         # Logging
                         self.logger.warning(
-                            f"The column '{col}' is of type 'String' but the number of modalities {n_modalities} exceeds the categorical threshold criteria {self.categorical_threshold}"
+                            f"The column '{col}' is of type 'String' but the number of"
+                            f" modalities {n_modalities} exceeds the categorical"
+                            f" threshold criteria {self.categorical_threshold}"
                         )
 
             # Ajout au dictionnaire
             list_metadata.append(metadata)
 
-        # Transformation de la liste de dicts en dict de listes (format attendu par nw.from_dict)
+        # Transformation de la liste de dicts en dict de listes (format attendu par
+        # nw.from_dict)
         keys = list(list_metadata[0].keys())
         col_oriented = {k: [d[k] for d in list_metadata] for k in keys}
         # Création du DataFrame de métadonnées via narwhals (même backend que self.df)
@@ -276,7 +298,8 @@ class SchemaBuilder:
             dim_df = self.dimension_tables[column]
             # Sauvegarde de l'ordre des colonnes pour le restaurer après le join
             original_columns = self.df_fact.columns
-            # Renommage de la table de dimension : 'label' → nom de la colonne, 'value' → colonne temporaire
+            # Renommage de la table de dimension : 'label' → nom de la colonne, 'value'
+            # → colonne temporaire
             dim_renamed = dim_df.rename({"label": column, "value": f"__{column}_id"})
             # Jointure à gauche : chaque modalité est associée à son ID entier
             self.df_fact = (
@@ -300,7 +323,8 @@ class SchemaBuilder:
         self, column_labels: dict[str, str] | None | None = None
     ) -> tuple[nw.DataFrame, dict[str, nw.DataFrame], nw.DataFrame]:
         """
-        Execute the full pipeline to create metadata, dimension tables, and a fact table.
+        Execute the full pipeline to create metadata, dimension tables, and a fact
+        table.
 
         Args:
             column_labels (dict, optional): A dictionary mapping column names to labels.

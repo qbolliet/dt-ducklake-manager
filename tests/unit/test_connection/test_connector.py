@@ -145,9 +145,11 @@ def test_connect_custom_catalog_alias(ducklake_paths):
     catalog, data_dir = ducklake_paths
     connector = DuckLakeConnector(catalog, data_dir, catalog_alias="my_lake")
     conn = connector.connect()
-    # Vérification que l'alias est accessible (DuckDB expose catalog_name dans information_schema)
+    # Vérification que l'alias est accessible (DuckDB expose catalog_name dans
+    # information_schema)
     result = conn.execute(
-        "SELECT catalog_name FROM information_schema.schemata WHERE catalog_name = 'my_lake'"
+        "SELECT catalog_name FROM information_schema.schemata WHERE catalog_name ="
+        "'my_lake'"
     ).fetchall()
     assert len(result) > 0
     conn.close()

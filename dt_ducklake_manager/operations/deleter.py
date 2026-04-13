@@ -75,7 +75,8 @@ class DatabaseDeleter(BaseSchemaManager):
 
         Example:
             >>> conn = DuckLakeConnector('catalog.ducklake', 'data/').connect()
-            >>> deleter = DatabaseDeleter(conn, enable_validation=True, auto_cleanup=True)
+            >>> deleter = DatabaseDeleter(conn, enable_validation=True,
+            auto_cleanup=True)
         """
         # Initialisation du parent
         super().__init__(
@@ -184,7 +185,8 @@ class DatabaseDeleter(BaseSchemaManager):
         Args:
             filters: Filter conditions (string SQL condition or structured filters)
             use_transaction: Whether to use database transactions
-            perform_cleanup: Whether to cleanup orphaned data (None = use auto_cleanup setting)
+            perform_cleanup: Whether to cleanup orphaned data (None = use auto_cleanup
+            setting)
             compact_after_update: Whether to run DuckLake compaction (merge small delta
                 files and rewrite delete files) immediately after a successful deletion.
                 Adds write latency but keeps read performance optimal. Defaults to True.
@@ -198,7 +200,8 @@ class DatabaseDeleter(BaseSchemaManager):
             >>>
             >>> # Using structured filter
             >>> filters = [('status', '=', 'inactive'), ('date', '<', '2023-01-01')]
-            >>> deleted = deleter.delete_rows(filters, use_transaction=True, compact_after_update=False)
+            >>> deleted = deleter.delete_rows(filters, use_transaction=True,
+            compact_after_update=False)
         """
         # Validation préalable
         if not self.validate_operation("delete", filters=filters):
@@ -211,7 +214,8 @@ class DatabaseDeleter(BaseSchemaManager):
 
         # Logging
         self.logger.info(
-            f"Starting row deletion (transaction: {use_transaction}, cleanup: {perform_cleanup})"
+            f"Starting row deletion (transaction: {use_transaction}, cleanup:"
+            f"{perform_cleanup})"
         )
 
         # Suppression des lignes
@@ -322,7 +326,8 @@ class DatabaseDeleter(BaseSchemaManager):
                 self.logger.info(
                     f"Row deletion completed successfully: {rows_deleted} rows deleted"
                 )
-                # Compaction DuckLake optionnelle après commit (réécriture des delete files)
+                # Compaction DuckLake optionnelle après commit (réécriture des delete
+                # files)
                 if compact_after_update:
                     self._run_ducklake_compaction()
                 return rows_deleted
@@ -388,19 +393,25 @@ class DatabaseDeleter(BaseSchemaManager):
         schema = self.ducklake_schema
         try:
             # Fusion des petits fichiers delta adjacents
-            # Note : les table functions DuckLake sont enregistrées dans le catalogue mémoire
-            # (où l'extension est chargée), pas dans le catalogue attaché. L'alias du catalogue
+            # Note : les table functions DuckLake sont enregistrées dans le catalogue
+            # mémoire
+            # (où l'extension est chargée), pas dans le catalogue attaché. L'alias du
+            # catalogue
             # doit être passé en premier argument, et non utilisé comme préfixe.
             self.conn.execute(
-                f"CALL ducklake_merge_adjacent_files('{alias}', '{fact_table}', schema := '{schema}')"
+                f"CALL ducklake_merge_adjacent_files('{alias}', '{fact_table}', schema"
+                f":= '{schema}')"
             )
-            # Réécriture des fichiers de suppression (delete files) pour optimiser les lectures
+            # Réécriture des fichiers de suppression (delete files) pour optimiser les
+            # lectures
             self.conn.execute(
-                f"CALL ducklake_rewrite_data_files('{alias}', '{fact_table}', schema := '{schema}')"
+                f"CALL ducklake_rewrite_data_files('{alias}', '{fact_table}', schema"
+                f":= '{schema}')"
             )
             self.logger.info(f"DuckLake finished for '{fact_table}'")
         except Exception as e:
-            # Erreur non bloquante : la compaction est une optimisation, pas une étape critique
+            # Erreur non bloquante : la compaction est une optimisation, pas une étape
+            # critique
             self.logger.warning(f"Ducklake compaction failed : {e}")
 
     # Méthode principale de suppression de colonnes
@@ -577,7 +588,8 @@ class DatabaseDeleter(BaseSchemaManager):
                 successful_deletions = sum(results.values())
                 # Logging
                 self.logger.info(
-                    f"Column deletion completed: {successful_deletions}/{len(valid_columns)} columns deleted"
+                    f"Column deletion completed: {successful_deletions}"
+                    f"/{len(valid_columns)} columns deleted"
                 )
 
                 # Ajout des colonnes non trouvées au résultat
@@ -647,7 +659,8 @@ class DatabaseDeleter(BaseSchemaManager):
             successful_deletions = sum(results.values())
             # Logging
             self.logger.info(
-                f"Column deletion completed (direct mode): {successful_deletions}/{len(columns)} columns deleted"
+                f"Column deletion completed (direct mode): {successful_deletions}"
+                f"/{len(columns)} columns deleted"
             )
 
             return results
@@ -706,10 +719,12 @@ class DatabaseDeleter(BaseSchemaManager):
             self.logger.error(f"Error dropping fact table column {column}: {e}")
             return False
 
-    # Méthode de détection des colonnes devenant catégorielles après suppression de lignes
+    # Méthode de détection des colonnes devenant catégorielles après suppression de
+    # lignes
     def _detect_new_categorical_after_deletion(self) -> list[str]:
         """
-        Detect non-categorical columns that should become categorical after row deletion.
+        Detect non-categorical columns that should become categorical after row
+        deletion.
 
         Returns:
             List of column names that were converted to categorical
@@ -740,14 +755,16 @@ class DatabaseDeleter(BaseSchemaManager):
 
                 # Comptage des valeurs uniques non nulles
                 unique_count = self.conn.execute(
-                    f"SELECT COUNT(DISTINCT {col_name}) FROM fact_table WHERE {col_name} IS NOT NULL"
+                    f"SELECT COUNT(DISTINCT {col_name}) FROM fact_table WHERE"
+                    f" {col_name} IS NOT NULL"
                 ).fetchone()[0]
 
                 # Vérification du seuil catégoriel
                 if unique_count <= self.categorical_threshold:
                     # Extraction des valeurs distinctes sous forme de narwhals Series
                     values_pl = self.conn.execute(
-                        f"SELECT DISTINCT {col_name} FROM fact_table WHERE {col_name} IS NOT NULL"
+                        f"SELECT DISTINCT {col_name} FROM fact_table WHERE {col_name}"
+                        f" IS NOT NULL"
                     ).pl()
                     values = nw.from_native(values_pl, eager_only=True)[col_name]
 
@@ -755,7 +772,8 @@ class DatabaseDeleter(BaseSchemaManager):
                     if self.dimension_mgr.convert_to_categorical(col_name, values):
                         converted.append(col_name)
                         self.logger.info(
-                            f"Column {col_name} converted to categorical (unique values: {unique_count})"
+                            f"Column {col_name} converted to categorical (unique"
+                            f" values: {unique_count})"
                         )
 
         except Exception as e:
@@ -783,10 +801,12 @@ class DatabaseDeleter(BaseSchemaManager):
             )
 
             # Étape 2: Suppression des colonnes ne contenant que des nulles
-            # Utilisation de delete_columns pour assurer le nettoyage complet (dimensions, indexes, métadonnées)
+            # Utilisation de delete_columns pour assurer le nettoyage complet
+            # (dimensions, indexes, métadonnées)
             null_only_columns = self._get_null_only_columns()
             if null_only_columns:
-                # Suppression via delete_columns (sans transaction car déjà dans un contexte)
+                # Suppression via delete_columns (sans transaction car déjà dans un
+                # contexte)
                 column_results = self.delete_columns(
                     null_only_columns, use_transaction=False
                 )
@@ -826,12 +846,14 @@ class DatabaseDeleter(BaseSchemaManager):
             for index_name, expressions in all_indexes:
                 # Analyse des colonnes référencées
                 referenced_columns = []
-                # Vérification de l'existence de la colonne à laquelle se rapporte l'index
+                # Vérification de l'existence de la colonne à laquelle se rapporte
+                # l'index
                 for col in existing_columns:
                     if col in expressions or f"fact_table.{col}" in expressions:
                         referenced_columns.append(col)
 
-                # Si l'index ne référence aucune colonne existante mais référence fact_table
+                # Si l'index ne référence aucune colonne existante mais référence
+                # fact_table
                 if not referenced_columns and "fact_table" in expressions:
                     try:
                         # Exécution de la requête de suppression de l'index
@@ -886,7 +908,8 @@ class DatabaseDeleter(BaseSchemaManager):
         """Restore a fact table column (placeholder - handled by DuckDB transaction)."""
         # Logging
         self.logger.info(
-            f"Fact table column restoration for {column} handled by database transaction"
+            f"Fact table column restoration for {column} handled by database"
+            f" transaction"
         )
         return True
 
@@ -951,7 +974,8 @@ class DatabaseDeleter(BaseSchemaManager):
                     "is_categorical": self._is_dimension_column(column),
                     "has_dimension_table": False,
                     "has_indexes": False,
-                    "referenced_in_queries": False,  # Placeholder - nécessiterait analyse des logs
+                    # Placeholder — nécessiterait une analyse des logs
+                    "referenced_in_queries": False,
                 }
 
                 # Vérification de l'existence de table de dimension
@@ -964,7 +988,7 @@ class DatabaseDeleter(BaseSchemaManager):
                 # Vérification des index
                 try:
                     index_query = """
-                        SELECT COUNT(*) FROM duckdb_indexes() 
+                        SELECT COUNT(*) FROM duckdb_indexes()
                         WHERE expressions LIKE ?
                     """
                     index_count = self.conn.execute(
@@ -975,10 +999,12 @@ class DatabaseDeleter(BaseSchemaManager):
                     column_deps["has_indexes"] = False
 
                 # Avertissements
-                # Vérification des association variable catégorielle - table de dimension
+                # Vérification des association variable catégorielle - table de
+                # dimension
                 if column_deps["is_categorical"] and column_deps["has_dimension_table"]:
                     dependency_report["warnings"].append(
-                        f"Column {column} has associated dimension table that will be deleted"
+                        f"Column {column} has associated dimension table that will be"
+                        f" deleted"
                     )
                 # Vérification des indexes associés à une colonne
                 if column_deps["has_indexes"]:
@@ -990,7 +1016,8 @@ class DatabaseDeleter(BaseSchemaManager):
                 if self._is_primary_key_column(column):
                     dependency_report["has_critical_dependencies"] = True
                     dependency_report["warnings"].append(
-                        f"CRITICAL: Column {column} is a primary key - deletion will break data integrity"
+                        f"CRITICAL: Column {column} is a primary key - deletion will"
+                        f" break data integrity"
                     )
 
                 dependency_report["dependencies"][column] = column_deps
@@ -1008,7 +1035,8 @@ class DatabaseDeleter(BaseSchemaManager):
             }
 
     # Méthodes publiques additionnelles
-    # Méthode d'évaluation de l'impact sur la base de données d'une opération de suppression
+    # Méthode d'évaluation de l'impact sur la base de données d'une opération de
+    # suppression
     def get_deletion_impact(
         self, columns: list[str] | None = None, filters: str | list | dict | None = None
     ) -> dict[str, Any]:
@@ -1016,14 +1044,17 @@ class DatabaseDeleter(BaseSchemaManager):
         Analyze the impact of a potential deletion operation.
 
         Args:
-            columns: Columns to analyze for deletion impact (None for no column analysis)
-            filters: Row filters to analyze for deletion impact (None for no row analysis)
+            columns: Columns to analyze for deletion impact (None for no column
+            analysis)
+            filters: Row filters to analyze for deletion impact (None for no row
+            analysis)
 
         Returns:
             Dictionary containing impact analysis
 
         Example:
-            >>> impact = deleter.get_deletion_impact(columns=['old_col'], filters="status = 'inactive'")
+            >>> impact = deleter.get_deletion_impact(columns=['old_col'],
+            filters="status = 'inactive'")
             >>> print(f"Rows affected: {impact['rows_affected']}")
             >>> print(f"Dependencies: {impact['column_dependencies']}")
         """
@@ -1197,7 +1228,9 @@ class DatabaseDeleter(BaseSchemaManager):
             else:
                 # Nettoyage basique
                 results = {
-                    "orphaned_dimensions": self.dimension_mgr.cleanup_orphaned_dimension_entries(),
+                    "orphaned_dimensions": (
+                        self.dimension_mgr.cleanup_orphaned_dimension_entries()
+                    ),
                     "orphaned_indexes": self._cleanup_orphaned_indexes(),
                 }
                 # Logging

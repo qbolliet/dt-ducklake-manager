@@ -40,7 +40,8 @@ def test_atomic_operation_config_defaults():
     """Test that AtomicOperationConfig has correct default values.
 
     Examples:
-        >>> config = AtomicOperationConfig(operation_type=AtomicOperationType.BATCH_UPDATE)
+        >>> config =
+        AtomicOperationConfig(operation_type=AtomicOperationType.BATCH_UPDATE)
         >>> config.enable_backup
         True
     """
@@ -151,7 +152,8 @@ def atomic_ops(built_ducklake_schema, tmp_path):
     """Create an AtomicDatabaseOperations instance for testing.
 
     Args:
-        built_ducklake_schema: Fixture providing a DuckDB connection with a built schema.
+        built_ducklake_schema: Fixture providing a DuckDB connection with a built
+        schema.
         tmp_path: pytest temporary directory for backup storage.
 
     Returns:

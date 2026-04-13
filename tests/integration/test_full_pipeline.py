@@ -42,7 +42,8 @@ def test_full_schema_build_from_local_data(sample_df):
     tables = [row[0] for row in builder.conn.execute("SHOW TABLES").fetchall()]
     assert "metadata" in tables
     assert "fact_table" in tables
-    # Vérification de la présence des tables de dimension pour les colonnes catégorielles
+    # Vérification de la présence des tables de dimension pour les colonnes
+    # catégorielles
     assert "dim_category" in tables
     assert "dim_status" in tables
 
@@ -69,7 +70,8 @@ def test_build_then_update(built_ducklake_schema, sample_df):
     and that the fact table correctly reflects the additional data.
 
     Args:
-        built_ducklake_schema: Fixture providing a DuckDB connection with a built schema.
+        built_ducklake_schema: Fixture providing a DuckDB connection with a built
+        schema.
         sample_df: Sample polars DataFrame.
     """
     # Comptage initial des lignes
@@ -128,7 +130,8 @@ def test_build_then_delete_rows(built_ducklake_schema, sample_df):
     matching a filter and that the fact table correctly reflects the deletion.
 
     Args:
-        built_ducklake_schema: Fixture providing a DuckDB connection with a built schema.
+        built_ducklake_schema: Fixture providing a DuckDB connection with a built
+        schema.
         sample_df: Sample polars DataFrame.
     """
     # Comptage initial
@@ -180,7 +183,8 @@ def test_build_then_audit(built_ducklake_schema):
     database and returns no critical issues for a healthy database.
 
     Args:
-        built_ducklake_schema: Fixture providing a DuckDB connection with a built schema.
+        built_ducklake_schema: Fixture providing a DuckDB connection with a built
+        schema.
     """
     # Audit de la base fraîchement construite
     auditor = DatabaseAuditor(connection=built_ducklake_schema, categorical_threshold=4)
@@ -191,7 +195,8 @@ def test_build_then_audit(built_ducklake_schema):
 
     assert isinstance(report, ValidationReport)
 
-    # Une base fraîche et correctement construite ne doit pas avoir de problèmes critiques
+    # Une base fraîche et correctement construite ne doit pas avoir de problèmes
+    # critiques
     assert report.get_critical_issues_count() == 0
 
     # Vérification que la table des faits est reconnue dans les tables validées

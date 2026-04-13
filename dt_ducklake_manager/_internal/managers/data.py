@@ -21,7 +21,8 @@ from .base import BaseSchemaManager
 FILE_PATH = Path(os.path.abspath(__file__))
 
 
-# Classe de gestion des opérations sur la table des faits en accord ave la table des méta-données
+# Classe de gestion des opérations sur la table des faits en accord ave la table des
+# méta-données
 class DataManager(BaseSchemaManager):
     """
     Manages fact table operations including inserts, updates, upserts, and deletes.
@@ -73,7 +74,8 @@ class DataManager(BaseSchemaManager):
         Validate data operations before execution.
 
         Args:
-            operation_type: Type of operation ('insert', 'update', 'upsert', 'delete', 'add_column', 'drop_column')
+            operation_type: Type of operation ('insert', 'update', 'upsert', 'delete',
+            'add_column', 'drop_column')
             **kwargs: Operation-specific parameters
 
         Returns:
@@ -231,7 +233,8 @@ class DataManager(BaseSchemaManager):
 
             # Logging
             self.logger.info(
-                f"Created fact table with {len(df_nw)} rows and {len(df_nw.columns)} columns"
+                f"Created fact table with {len(df_nw)} rows and {len(df_nw.columns)}"
+                f" columns"
             )
             return True
 
@@ -299,7 +302,8 @@ class DataManager(BaseSchemaManager):
 
         Args:
             df: DataFrame containing data to upsert
-            merge_keys: Columns used to identify existing records (if None, uses all common columns)
+            merge_keys: Columns used to identify existing records (if None, uses all
+            common columns)
             use_batch: Whether to use batch processing for large datasets
 
         Returns:
@@ -434,10 +438,16 @@ class DataManager(BaseSchemaManager):
 
             # Ajout de la colonne avec valeur par défaut
             if default_value is not None:
-                alter_query = f"ALTER TABLE fact_table ADD COLUMN {column_name} {sql_type} DEFAULT ?"
+                alter_query = (
+                    f"ALTER TABLE fact_table ADD COLUMN {column_name}"
+                    f" {sql_type} DEFAULT ?"
+                )
                 self.conn.execute(alter_query, [default_value])
             else:
-                alter_query = f"ALTER TABLE fact_table ADD COLUMN {column_name} {sql_type} DEFAULT NULL"
+                alter_query = (
+                    f"ALTER TABLE fact_table ADD COLUMN {column_name}"
+                    f" {sql_type} DEFAULT NULL"
+                )
                 self.conn.execute(alter_query)
 
             # Ajout aux métadonnées
@@ -451,7 +461,8 @@ class DataManager(BaseSchemaManager):
             self.logger.error(f"Failed to add column {column_name}: {e}")
             return False
 
-    # Méthode de suppression de colonnes de la table des faits et de la table des méta-données
+    # Méthode de suppression de colonnes de la table des faits et de la table des
+    # méta-données
     def drop_columns(self, columns: list[str]) -> list[str]:
         """
         Drop columns from the fact table.
@@ -560,11 +571,13 @@ class DataManager(BaseSchemaManager):
                 inserted = self._direct_insert_data(batch_df)
                 # Ajout au total
                 total_inserted += inserted
-                # Vérification que le nombre d'observations insérées correspond bien à la longueur du batch
+                # Vérification que le nombre d'observations insérées correspond bien à
+                # la longueur du batch
                 if inserted != len(batch_df):
                     # Logging
                     self.logger.warning(
-                        f"Batch {i}-{batch_end}: Expected {len(batch_df)}, inserted {inserted}"
+                        f"Batch {i}-{batch_end}: Expected {len(batch_df)}, inserted"
+                        f" {inserted}"
                     )
 
             except Exception as e:
@@ -671,7 +684,8 @@ class DataManager(BaseSchemaManager):
                 ]
 
                 if update_columns:
-                    # Noms non-qualifiés côté gauche du SET : DuckDB rejette les qualificateurs
+                    # Noms non-qualifiés côté gauche du SET : DuckDB rejette les
+                    # qualificateurs
                     # de table (f.col) dans la clause SET d'un UPDATE ... FROM.
                     set_clause = ", ".join(
                         [f"{col} = t.{col}" for col in update_columns]
@@ -711,7 +725,8 @@ class DataManager(BaseSchemaManager):
 
             # Logging
             self.logger.info(
-                f"Upsert completed: {rows_inserted} rows inserted, {rows_updated} rows updated"
+                f"Upsert completed: {rows_inserted} rows inserted, {rows_updated} rows"
+                f" updated"
             )
             return rows_inserted, rows_updated
 
@@ -723,7 +738,8 @@ class DataManager(BaseSchemaManager):
                 pass
             raise e
 
-    # Méthode auxiliaire de vérification que toutes les colonnes d'un jeu de données existente dans la table des faits
+    # Méthode auxiliaire de vérification que toutes les colonnes d'un jeu de données
+    # existente dans la table des faits
     def _ensure_columns_exist(self, df: nw.DataFrame) -> None:
         """Ensure all DataFrame columns exist in the fact table."""
         # Identification des colonnes manquantes
