@@ -1327,7 +1327,7 @@ class DatabaseAuditor:
                                 f" in DataFrame",
                     suggested_fix="Remove duplicate entries based on primary key"
                                   " columns",
-                    affected_rows=duplicate_count,
+                    affected_rows=int(duplicate_count),
                 )
                 report.add_issue(issue)
 

@@ -35,7 +35,7 @@ class DimensionManager(BaseSchemaManager):
         self,
         connection: duckdb.DuckDBPyConnection | None = None,
         categorical_threshold: int | None = 50,
-        log_filename: os.PathLike | None = None,
+        log_filename: str | os.PathLike[str] | None = None,
         max_workers: int = 4,
     ):
         """
@@ -135,7 +135,7 @@ class DimensionManager(BaseSchemaManager):
 
     # Méthodes principales de gestion des dimensions
     # Méthode de création de la table de dimensions
-    def create_dimension_table(self, dimension_name: str, values: nw.Series) -> bool:
+    def create_dimension_table(self, dimension_name: str, values: nw.Series[Any]) -> bool:
         """
         Create a new dimension table with unique values.
 
@@ -198,7 +198,7 @@ class DimensionManager(BaseSchemaManager):
                 return False
 
     # Méthode de mise à jour d'une table de dimension
-    def update_dimension_values(self, dimension_name: str, values: nw.Series) -> int:
+    def update_dimension_values(self, dimension_name: str, values: nw.Series[Any]) -> int:
         """
         Update dimension table with new values.
 
@@ -327,7 +327,7 @@ class DimensionManager(BaseSchemaManager):
 
     # Méthodes de conversion entre catégoriel et non-catégoriel
     # Méthode de conversion en variable catégorielle
-    def convert_to_categorical(self, col_name: str, values: nw.Series) -> bool:
+    def convert_to_categorical(self, col_name: str, values: nw.Series[Any]) -> bool:
         """
         Convert a non-categorical column to categorical.
 
@@ -424,7 +424,7 @@ class DimensionManager(BaseSchemaManager):
     # Méthodes de traitement parallèle
     # Méthode de traitement de la mise à jour des dimensions en parallèle
     def batch_update_dimensions(
-        self, dimension_data: dict[str, nw.Series], use_parallel: bool = True
+        self, dimension_data: dict[str, nw.Series[Any]], use_parallel: bool = True
     ) -> dict[str, int]:
         """
         Update multiple dimensions in batch, optionally using parallel processing.
@@ -519,9 +519,10 @@ class DimensionManager(BaseSchemaManager):
                     continue
 
                 # Comptage initial
-                count_before = self.conn.execute(
+                _row_before = self.conn.execute(
                     f"SELECT COUNT(*) FROM {table_name}"
-                ).fetchone()[0]
+                ).fetchone()
+                count_before = _row_before[0] if _row_before is not None else 0
 
                 # Suppression des entrées orphelines.
                 # Cast explicite en VARCHAR pour garantir la compatibilité de types
@@ -538,9 +539,10 @@ class DimensionManager(BaseSchemaManager):
                 self.conn.execute(cleanup_query)
 
                 # Comptage final
-                count_after = self.conn.execute(
+                _row_after = self.conn.execute(
                     f"SELECT COUNT(*) FROM {table_name}"
-                ).fetchone()[0]
+                ).fetchone()
+                count_after = _row_after[0] if _row_after is not None else 0
 
                 # Comptage des suppressions
                 removed_count = count_before - count_after
@@ -558,7 +560,7 @@ class DimensionManager(BaseSchemaManager):
         return removed_counts
 
     # Méthode d'extration de la correspondance valeur-label dans la table de dimension
-    def get_dimension_mapping(self, dimension_name: str) -> nw.DataFrame | None:
+    def get_dimension_mapping(self, dimension_name: str) -> nw.DataFrame[Any] | None:
         """
         Get the complete mapping for a dimension table.
 

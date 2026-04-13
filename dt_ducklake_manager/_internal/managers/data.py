@@ -349,7 +349,7 @@ class DataManager(BaseSchemaManager):
             return 0, 0
 
     # Méthode de suppression de lignes de la table de faits
-    def delete_rows(self, filters: str | list | None) -> int:
+    def delete_rows(self, filters: str | list[Any] | dict[Any, Any] | None) -> int:
         """
         Delete rows from fact table based on filters.
 
@@ -377,7 +377,7 @@ class DataManager(BaseSchemaManager):
             initial_count = _r1[0] if _r1 is not None else 0
 
             # Construction de la clause WHERE
-            where_clause = _build_where_clause(filters)
+            where_clause = _build_where_clause(filters)  # type: ignore[arg-type]
 
             if not where_clause:
                 self.logger.warning("No valid filters provided for deletion")
@@ -557,7 +557,7 @@ class DataManager(BaseSchemaManager):
 
     # Méthodes privées pour le traitement par lots
     # Méthode auxiliaire d'insertion par batch
-    def _batch_insert_data(self, df: nw.DataFrame) -> int:
+    def _batch_insert_data(self, df: nw.DataFrame[Any]) -> int:
         """Insert data in batches for large datasets."""
         # Initialisation du compteur d'insertions
         total_inserted = 0
@@ -565,8 +565,8 @@ class DataManager(BaseSchemaManager):
         self.logger.info(f"Processing {len(df)} rows in batches of {self.batch_size}")
         # Parcours des batch
         for i in range(0, len(df), self.batch_size):
-            # Découpe du batch (narwhals : slice(offset, length))
-            batch_df = df.slice(i, self.batch_size)
+            # Découpe du batch via slicing standard Python
+            batch_df = df[i : i + self.batch_size]
             batch_end = i + len(batch_df)
 
             try:
@@ -592,7 +592,7 @@ class DataManager(BaseSchemaManager):
         return total_inserted
 
     # Méthode d'insertion directe des données
-    def _direct_insert_data(self, df: nw.DataFrame) -> int:
+    def _direct_insert_data(self, df: nw.DataFrame[Any]) -> int:
         """Insert data directly without batch processing."""
         try:
             # Préparation des colonnes manquantes
@@ -624,7 +624,7 @@ class DataManager(BaseSchemaManager):
 
     # Méthode de mise à jour et d'insertion des données en batch
     def _batch_upsert_data(
-        self, df: nw.DataFrame, merge_keys: list[str]
+        self, df: nw.DataFrame[Any], merge_keys: list[str]
     ) -> tuple[int, int]:
         """Upsert data in batches for large datasets."""
         # Initialisation des totaux
@@ -634,8 +634,8 @@ class DataManager(BaseSchemaManager):
         self.logger.info(f"Processing {len(df)} rows in batches of {self.batch_size}")
         # Parcours des batchs
         for i in range(0, len(df), self.batch_size):
-            # Découpe du batch (narwhals : slice(offset, length))
-            batch_df = df.slice(i, self.batch_size)
+            # Découpe du batch via slicing standard Python
+            batch_df = df[i : i + self.batch_size]
             batch_end = i + len(batch_df)
 
             try:
@@ -655,7 +655,7 @@ class DataManager(BaseSchemaManager):
 
     # Méthode de mise à jour et d'insertion des données directement
     def _direct_upsert_data(
-        self, df: nw.DataFrame, merge_keys: list[str]
+        self, df: nw.DataFrame[Any], merge_keys: list[str]
     ) -> tuple[int, int]:
         """Upsert data directly without batch processing."""
         try:
@@ -676,7 +676,8 @@ class DataManager(BaseSchemaManager):
                     WHERE {merge_condition}
                 )
             """
-            rows_updated = self.conn.execute(update_count_query).fetchone()[0]
+            _uc_row = self.conn.execute(update_count_query).fetchone()
+            rows_updated = _uc_row[0] if _uc_row is not None else 0
 
             # Mise à jour des lignes existantes
             if rows_updated > 0:
@@ -703,9 +704,8 @@ class DataManager(BaseSchemaManager):
                     self.conn.execute(update_query)
 
             # Insertion des nouvelles lignes
-            initial_count = self.conn.execute(
-                "SELECT COUNT(*) FROM fact_table"
-            ).fetchone()[0]
+            _ic_row = self.conn.execute("SELECT COUNT(*) FROM fact_table").fetchone()
+            initial_count = _ic_row[0] if _ic_row is not None else 0
 
             column_list = ", ".join(df.columns)
             insert_query = f"""
@@ -719,9 +719,8 @@ class DataManager(BaseSchemaManager):
             self.conn.execute(insert_query)
 
             # Comptage final
-            final_count = self.conn.execute(
-                "SELECT COUNT(*) FROM fact_table"
-            ).fetchone()[0]
+            _fc_row = self.conn.execute("SELECT COUNT(*) FROM fact_table").fetchone()
+            final_count = _fc_row[0] if _fc_row is not None else 0
             rows_inserted = final_count - initial_count
 
             # Suppression de la vue temporaire
@@ -744,7 +743,7 @@ class DataManager(BaseSchemaManager):
 
     # Méthode auxiliaire de vérification que toutes les colonnes d'un jeu de données
     # existente dans la table des faits
-    def _ensure_columns_exist(self, df: nw.DataFrame) -> None:
+    def _ensure_columns_exist(self, df: nw.DataFrame[Any]) -> None:
         """Ensure all DataFrame columns exist in the fact table."""
         # Identification des colonnes manquantes
         existing_columns = set(self._get_fact_table_columns())
@@ -772,9 +771,8 @@ class DataManager(BaseSchemaManager):
             stats = {}
 
             # Comptage des lignes
-            stats["row_count"] = self.conn.execute(
-                "SELECT COUNT(*) FROM fact_table"
-            ).fetchone()[0]
+            _rc_row = self.conn.execute("SELECT COUNT(*) FROM fact_table").fetchone()
+            stats["row_count"] = _rc_row[0] if _rc_row is not None else 0
 
             # Informations sur les colonnes
             columns_info = self.conn.execute("DESCRIBE fact_table").fetchall()

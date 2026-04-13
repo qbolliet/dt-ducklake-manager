@@ -40,7 +40,7 @@ class BaseSchemaManager(ABC):
         self,
         connection: duckdb.DuckDBPyConnection | None = None,
         categorical_threshold: int | None = 50,
-        log_filename: os.PathLike | None = None,
+        log_filename: str | os.PathLike[str] | None = None,
     ):
         """
         Initialize the base schema manager.
@@ -72,12 +72,12 @@ class BaseSchemaManager(ABC):
         self.logger = _init_logger(filename=log_filename)
 
         # Cache thread-safe pour optimiser les accès aux métadonnées
-        self._metadata_cache = None
+        self._metadata_cache: nw.DataFrame[Any] | None = None
         self._cache_lock = threading.RLock()
 
     # Méthodes de gestion du cache des métadonnées
     # Méthode de chargement des méta-données
-    def _load_current_metadata(self) -> nw.DataFrame:
+    def _load_current_metadata(self) -> nw.DataFrame[Any]:
         """
         Load current metadata from the database with thread-safe caching.
 
@@ -159,11 +159,11 @@ class BaseSchemaManager(ABC):
             True if table exists
         """
         # Exécution de la requête
-        result = self.conn.execute(
+        row = self.conn.execute(
             "SELECT COUNT(*) FROM information_schema.tables WHERE table_name = ?",
             [table_name],
         ).fetchone()
-        return result[0] > 0
+        return row[0] > 0 if row is not None else False
 
     # Méthode de vérification de l'existence d'une colonne dans une table
     def _column_exists(self, column: str, table: str = "fact_table") -> bool:
@@ -282,9 +282,10 @@ class BaseSchemaManager(ABC):
 
         # Upsert manuel
         # Vérification de l'existence de la colonne avant d'insérer ou de mettre à jour.
-        existing_count = self.conn.execute(
+        _row = self.conn.execute(
             "SELECT COUNT(*) FROM metadata WHERE name = ?", [column]
-        ).fetchone()[0]
+        ).fetchone()
+        existing_count = _row[0] if _row is not None else 0
 
         if existing_count == 0:
             # Colonne absente : insertion
@@ -363,7 +364,7 @@ class BaseSchemaManager(ABC):
 
     # Méthodes de résolution des conflits de types
     def _resolve_type_conflicts(
-        self, column: str, df: nw.DataFrame, current_metadata: nw.DataFrame
+        self, column: str, df: nw.DataFrame[Any], current_metadata: nw.DataFrame[Any]
     ) -> None:
         """
         Resolve type conflicts using the least restrictive strategy.
@@ -452,7 +453,8 @@ class BaseSchemaManager(ABC):
             for column in columns:
                 # Vérification si la colonne ne contient que des valeurs nulles
                 query = f"SELECT COUNT(*) FROM fact_table WHERE {column} IS NOT NULL"
-                non_null_count = self.conn.execute(query).fetchone()[0]
+                _row = self.conn.execute(query).fetchone()
+                non_null_count = _row[0] if _row is not None else 0
                 # Ajout à la liste si ne contient que des colonnes nulles
                 if non_null_count == 0:
                     null_only_columns.append(column)
@@ -461,6 +463,7 @@ class BaseSchemaManager(ABC):
                 self.logger.info(
                     f"Columns containing only null values detected: {null_only_columns}"
                 )
+            return null_only_columns
 
         except Exception as e:
             self.logger.error(f"An error occurred while detecting null values: {e}")
@@ -468,7 +471,7 @@ class BaseSchemaManager(ABC):
 
     # Méthode de vérification du seuil catégoriel
     def _check_categorical_threshold(
-        self, values: nw.Series, threshold: int | None = None
+        self, values: nw.Series[Any], threshold: int | None = None
     ) -> bool:
         """
         Check if values meet categorical threshold criteria.
@@ -480,7 +483,7 @@ class BaseSchemaManager(ABC):
         Returns:
             True if values should be categorical
         """
-        threshold = threshold or self.categorical_threshold
+        effective_threshold = threshold or self.categorical_threshold
         # Suppression des valeurs nulles avant le comptage
         non_null_values = values.drop_nulls()
         # Une série entièrement nulle ne peut pas être considérée catégorielle :
@@ -488,8 +491,11 @@ class BaseSchemaManager(ABC):
         # cardinalité.
         if len(non_null_values) == 0:
             return False
+        # Aucun seuil défini : impossible de déterminer le statut catégoriel
+        if effective_threshold is None:
+            return False
         unique_count = non_null_values.n_unique()
-        return unique_count <= threshold
+        return unique_count <= effective_threshold
 
     @abstractmethod
     def validate_operation(self, operation_type: str, **kwargs: Any) -> bool:

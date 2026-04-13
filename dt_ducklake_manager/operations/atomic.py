@@ -3,7 +3,7 @@
 import os
 import time
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
 from pathlib import Path
@@ -98,19 +98,11 @@ class AtomicOperationResult:
     execution_time: float
     backup_created: str | None = None
     validation_passed: bool = True
-    operations_performed: list[str] | None = None
+    operations_performed: list[str] = field(default_factory=list)
     error_message: str | None = None
     rollback_performed: bool = False
-    recommendations: list[str] | None = None
-    metrics: dict[str, Any] | None = None
-
-    def __post_init__(self) -> None:
-        if self.operations_performed is None:
-            self.operations_performed = []
-        if self.recommendations is None:
-            self.recommendations = []
-        if self.metrics is None:
-            self.metrics = {}
+    recommendations: list[str] = field(default_factory=list)
+    metrics: dict[str, Any] = field(default_factory=dict)
 
 
 # Classe d'exécution d'opération atomiques sur la base de données
@@ -817,7 +809,7 @@ class AtomicDatabaseOperations:
                 self.logger.warning("Update failed, attempting rollback to backup")
 
                 recovery_op = RecoveryOperation(
-                    strategy=RecoveryStrategy.RESTORE_BACKUP,
+                    strategy=RecoveryStrategy.USE_SNAPSHOT_HISTORY,
                     target_recovery_point=backup_id,
                     description="Rollback after failed update",
                 )
@@ -1026,7 +1018,7 @@ class AtomicDatabaseOperations:
                     ]  # Moins de 24h
 
                     if recent_backups and allow_destructive:
-                        recovery_strategy = RecoveryStrategy.RESTORE_BACKUP
+                        recovery_strategy = RecoveryStrategy.USE_SNAPSHOT_HISTORY
                     else:
                         recovery_strategy = RecoveryStrategy.CLEAN_ORPHANED_DATA
                 else:
@@ -1040,7 +1032,7 @@ class AtomicDatabaseOperations:
             )
 
             # Si on restaure une sauvegarde, utiliser la plus récente
-            if recovery_strategy == RecoveryStrategy.RESTORE_BACKUP:
+            if recovery_strategy == RecoveryStrategy.USE_SNAPSHOT_HISTORY:
                 recovery_points = self.recovery_mgr.list_recovery_points()
                 if recovery_points:
                     recovery_op.target_recovery_point = recovery_points[0].recovery_id
@@ -1124,7 +1116,7 @@ class AtomicDatabaseOperations:
         """Effectuer un rollback vers une sauvegarde."""
         try:
             recovery_op = RecoveryOperation(
-                strategy=RecoveryStrategy.RESTORE_BACKUP,
+                strategy=RecoveryStrategy.USE_SNAPSHOT_HISTORY,
                 target_recovery_point=backup_id,
                 description="Automatic rollback to backup",
             )

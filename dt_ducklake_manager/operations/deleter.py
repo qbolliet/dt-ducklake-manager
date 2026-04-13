@@ -51,7 +51,7 @@ class DatabaseDeleter(BaseSchemaManager):
         self,
         connection: duckdb.DuckDBPyConnection | None = None,
         categorical_threshold: int | None = 50,
-        log_filename: os.PathLike | None = None,
+        log_filename: str | os.PathLike[str] | None = None,
         enable_validation: bool = True,
         auto_cleanup: bool = True,
         ducklake_catalog_alias: str = "db",
@@ -123,7 +123,7 @@ class DatabaseDeleter(BaseSchemaManager):
         self.ducklake_schema = ducklake_schema
 
     # Méthode de validation de l'opération de suppression avant son exécution
-    def validate_operation(self, operation_type: str, **kwargs) -> bool:
+    def validate_operation(self, operation_type: str, **kwargs: Any) -> bool:
         """
         Validate delete operations before execution.
 
@@ -174,7 +174,7 @@ class DatabaseDeleter(BaseSchemaManager):
     # Méthode principale de suppression de lignes
     def delete_rows(
         self,
-        filters: str | list | dict | None = None,
+        filters: str | list[Any] | dict[Any, Any] | None = None,
         use_transaction: bool = True,
         perform_cleanup: bool | None = None,
         compact_after_update: bool = True,
@@ -233,7 +233,7 @@ class DatabaseDeleter(BaseSchemaManager):
     # Méthode de suppression des lignes de manière transactionnelle
     def _delete_rows_transactional(
         self,
-        filters: str | list | dict | None,
+        filters: str | list[Any] | dict[Any, Any] | None,
         perform_cleanup: bool,
         compact_after_update: bool,
     ) -> int:
@@ -246,9 +246,8 @@ class DatabaseDeleter(BaseSchemaManager):
 
         try:
             # Comptage initial pour le rollback
-            initial_count = self.conn.execute(
-                "SELECT COUNT(*) FROM fact_table"
-            ).fetchone()[0]
+            _row = self.conn.execute("SELECT COUNT(*) FROM fact_table").fetchone()
+            initial_count = _row[0] if _row is not None else 0
 
             # Étape 1: Suppression des lignes
             operation = TransactionOperation(
@@ -270,9 +269,8 @@ class DatabaseDeleter(BaseSchemaManager):
                 return -1
 
             # Calcul du nombre de lignes supprimées
-            current_count = self.conn.execute(
-                "SELECT COUNT(*) FROM fact_table"
-            ).fetchone()[0]
+            _row2 = self.conn.execute("SELECT COUNT(*) FROM fact_table").fetchone()
+            current_count = _row2[0] if _row2 is not None else 0
             rows_deleted = initial_count - current_count
 
             if rows_deleted == 0:
@@ -346,7 +344,7 @@ class DatabaseDeleter(BaseSchemaManager):
     # Méthode de suppression directe des lignes
     def _delete_rows_direct(
         self,
-        filters: str | list | dict | None,
+        filters: str | list[Any] | dict[Any, Any] | None,
         perform_cleanup: bool,
         compact_after_update: bool,
     ) -> int:
@@ -754,13 +752,17 @@ class DatabaseDeleter(BaseSchemaManager):
                     continue
 
                 # Comptage des valeurs uniques non nulles
-                unique_count = self.conn.execute(
+                _uq_row = self.conn.execute(
                     f"SELECT COUNT(DISTINCT {col_name}) FROM fact_table WHERE"
                     f" {col_name} IS NOT NULL"
-                ).fetchone()[0]
+                ).fetchone()
+                unique_count = _uq_row[0] if _uq_row is not None else 0
 
-                # Vérification du seuil catégoriel
-                if unique_count <= self.categorical_threshold:
+                # Vérification du seuil catégoriel (garde contre un seuil non défini)
+                if (
+                    self.categorical_threshold is not None
+                    and unique_count <= self.categorical_threshold
+                ):
                     # Extraction des valeurs distinctes sous forme de narwhals Series
                     values_pl = self.conn.execute(
                         f"SELECT DISTINCT {col_name} FROM fact_table WHERE {col_name}"
@@ -788,7 +790,7 @@ class DatabaseDeleter(BaseSchemaManager):
         """Comprehensive cleanup of orphaned data."""
         try:
             # Initialisation du dictionnaire résultat
-            results = {
+            results: dict[str, Any] = {
                 "orphaned_dimensions": {},
                 "null_columns": [],
                 "orphaned_indexes": [],
@@ -878,7 +880,7 @@ class DatabaseDeleter(BaseSchemaManager):
     # Méthodes de rollback
     # Méthode auxiliaire de restauration des lignes supprimées
     def _restore_deleted_rows(
-        self, filters: str | list | dict | None, initial_count: int
+        self, filters: str | list[Any] | dict[Any, Any] | None, initial_count: int
     ) -> bool:
         """Restore deleted rows (placeholder - handled by DuckDB transaction)."""
         # Logging
@@ -960,7 +962,7 @@ class DatabaseDeleter(BaseSchemaManager):
         """
         try:
             # Initialisation du rapport
-            dependency_report = {
+            dependency_report: dict[str, Any] = {
                 "columns_analyzed": columns,
                 "has_critical_dependencies": False,
                 "dependencies": {},
@@ -991,9 +993,10 @@ class DatabaseDeleter(BaseSchemaManager):
                         SELECT COUNT(*) FROM duckdb_indexes()
                         WHERE expressions LIKE ?
                     """
-                    index_count = self.conn.execute(
+                    _idx_row = self.conn.execute(
                         index_query, [f"%{column}%"]
-                    ).fetchone()[0]
+                    ).fetchone()
+                    index_count = _idx_row[0] if _idx_row is not None else 0
                     column_deps["has_indexes"] = index_count > 0
                 except Exception:
                     column_deps["has_indexes"] = False
@@ -1038,7 +1041,7 @@ class DatabaseDeleter(BaseSchemaManager):
     # Méthode d'évaluation de l'impact sur la base de données d'une opération de
     # suppression
     def get_deletion_impact(
-        self, columns: list[str] | None = None, filters: str | list | dict | None = None
+        self, columns: list[str] | None = None, filters: str | list[Any] | dict[Any, Any] | None = None
     ) -> dict[str, Any]:
         """
         Analyze the impact of a potential deletion operation.
@@ -1075,13 +1078,14 @@ class DatabaseDeleter(BaseSchemaManager):
             if filters is not None:
                 try:
                     # Construction de la condition associée aux filtres
-                    where_clause = _build_where_clause(filters)
+                    where_clause = _build_where_clause(filters)  # type: ignore[arg-type]
                     # Identification de slignes affectées
                     if where_clause:
                         count_query = f"SELECT COUNT(*) FROM fact_table {where_clause}"
-                        impact_report["rows_affected"] = self.conn.execute(
-                            count_query
-                        ).fetchone()[0]
+                        _impact_row = self.conn.execute(count_query).fetchone()
+                        impact_report["rows_affected"] = (
+                            _impact_row[0] if _impact_row is not None else 0
+                        )
                     # Ajout d'un message
                     if impact_report["rows_affected"] > 0:
                         impact_report["warnings"].append(

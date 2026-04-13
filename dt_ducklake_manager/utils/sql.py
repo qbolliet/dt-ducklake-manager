@@ -1,6 +1,6 @@
 # Importation des modules
 import logging
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 import narwhals as nw
 from narwhals.typing import IntoDataFrame
@@ -13,7 +13,7 @@ def remove_dataframe_duplicates(
     logger: logging.Logger | None = None,
     source: str = "DataFrame",
     primary_keys: list[str] | None = None,
-) -> nw.DataFrame:
+) -> nw.DataFrame[Any]:
     """
     Remove duplicates from a DataFrame based on primary keys or all columns.
 
@@ -70,7 +70,7 @@ def remove_dataframe_duplicates(
 
 # Fonction de construction d'une requête SQL de suppression des duplicats en base
 def build_database_duplicate_removal_query(
-    columns_to_check: list,
+    columns_to_check: list[str],
     keep: Literal["any", "none", "first", "last"],
     table_name: str = "fact_table",
 ) -> str:
@@ -189,14 +189,18 @@ def _build_sql_filter(
     # Disjonction de cas suivant le type de l'argument "filters"
     # Si filters est une liste de tuples
     if all(isinstance(i, tuple) for i in filters) and isinstance(filters, list):
-        return _build_conjonction_filter(filters=filters)
+        return _build_conjonction_filter(
+            filters=cast(list[tuple[str, str, Any]], filters)
+        )
     # Si filters est une liste de liste de tuples
     elif all(
         isinstance(i, list) and all(isinstance(j, tuple) for j in i) for i in filters
     ) and isinstance(filters, list):
         # Calul indépendant de chaque filtre de conjonction
         conditions = [
-            _build_conjonction_filter(filters=conjonction_filter)
+            _build_conjonction_filter(
+                filters=cast(list[tuple[str, str, Any]], conjonction_filter)
+            )
             for conjonction_filter in filters
         ]
         return " OR ".join(conditions)

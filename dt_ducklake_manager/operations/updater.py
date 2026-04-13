@@ -669,8 +669,11 @@ class DatabaseUpdater(BaseSchemaManager):
                     f"SELECT COUNT(*) FROM dim_{col_name}"
                 ).fetchone()
                 n_dim_entries = _rd[0] if _rd is not None else 0
-                # Vérification du seuil
-                if n_dim_entries > self.categorical_threshold:
+                # Vérification du seuil (garde contre un seuil non défini)
+                if (
+                    self.categorical_threshold is not None
+                    and n_dim_entries > self.categorical_threshold
+                ):
                     # Conversion en non-catégoriel
                     if not self.dimension_mgr.convert_to_non_categorical(col_name):
                         # Logging
@@ -1170,9 +1173,8 @@ class DatabaseUpdater(BaseSchemaManager):
             self.conn.execute(delete_query)
 
             # Calcul des lignes supprimées
-            final_count = self.conn.execute(
-                "SELECT COUNT(*) FROM fact_table"
-            ).fetchone()[0]
+            _final_row = self.conn.execute("SELECT COUNT(*) FROM fact_table").fetchone()
+            final_count = _final_row[0] if _final_row is not None else 0
             removed_count = initial_count - final_count
 
             if removed_count > 0:
