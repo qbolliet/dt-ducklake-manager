@@ -419,10 +419,6 @@ def test_query_nonexistent_table(ducklake_builder, table_name):
 @pytest.mark.skipif(
     not _ducklake_available(), reason="Extension ducklake non disponible"
 )
-@pytest.mark.xfail(
-    reason="PARTITION BY non supporté par la version courante de l'extension DuckLake",
-    strict=False,
-)
 def test_create_duckdb_fact_table_with_partition_by(sample_df):
     """Test that create_duckdb_fact_table accepts partition_by without error.
 
@@ -460,10 +456,6 @@ def test_create_duckdb_fact_table_with_partition_by(sample_df):
 # Test de build_schema avec partition_by
 @pytest.mark.skipif(
     not _ducklake_available(), reason="Extension ducklake non disponible"
-)
-@pytest.mark.xfail(
-    reason="PARTITION BY non supporté par la version courante de l'extension DuckLake",
-    strict=False,
 )
 def test_build_schema_with_partition_by(sample_df):
     """Test that build_schema propagates partition_by to create_duckdb_fact_table.

@@ -270,20 +270,22 @@ class DuckLakeTablesBuilder:
                     sql_type = matching_rows.get_column("sql_type")[0]
                     column_definitions.append(f"{col} {sql_type}")
 
-            # Construction de la clause PARTITION BY si des colonnes de partition sont
-            # spécifiées.
-            # Pas de clause PRIMARY KEY : DuckLake ne supporte pas les contraintes DDL.
-            partition_clause = (
-                f" PARTITION BY ({', '.join(partition_by)})" if partition_by else ""
-            )
-
             # Création de la table avec DDL explicite
             query = f"""
                 CREATE TABLE {table_name} (
                     {", ".join(column_definitions)}
-                ){partition_clause}
+                )
             """
             self.conn.execute(query)
+
+            # Définition du partitionnement Hive via ALTER TABLE.
+            # Cette instruction doit précéder l'INSERT pour que
+            # les données soient écrites dans des fichiers partitionnés.
+            if partition_by:
+                self.conn.execute(
+                    f"ALTER TABLE {table_name} SET PARTITIONED BY"
+                    f" ({', '.join(partition_by)})"
+                )
 
             # Insertion des données depuis la vue temporaire
             self.conn.execute(f"""
