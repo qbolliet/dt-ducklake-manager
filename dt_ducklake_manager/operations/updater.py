@@ -600,7 +600,7 @@ class DatabaseUpdater(BaseSchemaManager):
             # Colonnes non-catégorielles de type String (ex-'object' pandas) :
             # candidates à conversion
             non_cat_string_names = current_metadata.filter(
-                (not nw.col("is_categorical"))
+                (~nw.col("is_categorical"))
                 & (nw.col("python_type") == "String")
             )["name"].to_list()
 

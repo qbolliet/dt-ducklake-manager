@@ -743,7 +743,7 @@ class DatabaseDeleter(BaseSchemaManager):
 
             # Filtrage des colonnes non-catégorielles de type String (narwhals)
             non_categorical_names = metadata.filter(
-                (not nw.col("is_categorical"))
+                (~nw.col("is_categorical"))
                 & (nw.col("python_type") == "String")
             )["name"].to_list()
 
