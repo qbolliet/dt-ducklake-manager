@@ -286,6 +286,12 @@ class DuckLakeTablesBuilder:
                     f"ALTER TABLE {table_name} SET PARTITIONED BY"
                     f" ({', '.join(partition_by)})"
                 )
+                
+                # Logging
+                self.logger.info(
+                    f"The fact_table is successfully partitionned among"
+                    f" the following dimensions : ({partition_by})"
+                )
 
             # Insertion des données depuis la vue temporaire
             self.conn.execute(f"""

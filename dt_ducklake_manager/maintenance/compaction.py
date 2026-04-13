@@ -97,8 +97,8 @@ class DuckLakeMaintenance:
             # Exécution de la fusion des fichiers
             # Note : les table functions DuckLake vivent dans le catalogue mémoire.
             self.conn.execute(
-                f"CALL ducklake_merge_adjacent_files('{self.catalog_alias}', '{table}"
-                f" ', schema := '{schema}')"
+                f"CALL ducklake_merge_adjacent_files('{self.catalog_alias}', '{table}',"
+                f" schema := '{schema}')"
             )
             # Logging
             self.logger.info(
