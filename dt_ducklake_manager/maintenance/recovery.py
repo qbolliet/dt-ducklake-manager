@@ -402,9 +402,8 @@ class DatabaseRecoveryManager:
             # Sauvegarde automatique des métadonnées avant les opérations in-place
             # destructrices.
             # Les opérations sur les données sont couvertes par l'historique DuckLake.
-            pre_recovery_point = None
             if operation.strategy == RecoveryStrategy.REPAIR_SCHEMA:
-                pre_recovery_point = self.create_recovery_point(
+                self.create_recovery_point(
                     description=f"Auto-backup before {operation.strategy.value}",
                 )
 
@@ -925,13 +924,12 @@ class DatabaseRecoveryManager:
             try:
                 result = self.conn.execute("DESCRIBE metadata").fetchall()
                 existing_columns = {row[0] for row in result}
-            except:
+            except Exception:
                 pass
 
             # Ajout des colonnes manquantes
             for col_name, col_type in required_columns.items():
                 if col_name not in existing_columns:
-                    default_value = "FALSE" if "BOOLEAN" in col_type else "NULL"
                     self.conn.execute(
                         f"ALTER TABLE metadata ADD COLUMN {col_name} {col_type}"
                     )
@@ -982,7 +980,7 @@ class DatabaseRecoveryManager:
                 metadata = self.conn.execute(
                     "SELECT name, is_categorical FROM metadata"
                 ).pl()
-                categorical_cols = metadata.filter(pl.col("is_categorical") == True)[
+                categorical_cols = metadata.filter(pl.col("is_categorical"))[
                     "name"
                 ].to_list()
 
@@ -1346,7 +1344,7 @@ class DatabaseRecoveryManager:
             # Ajout des informations de santé
             try:
                 metadata["health_check"] = self.auditor.get_quick_health_check()
-            except:
+            except Exception:
                 metadata["health_check"] = {"status": "unknown"}
 
             return metadata
@@ -1367,7 +1365,7 @@ class DatabaseRecoveryManager:
             # Exécution de la requête
             result = self.conn.execute("SHOW TABLES").fetchall()
             return [row[0] for row in result]
-        except:
+        except Exception:
             return []
 
     # Méthode auxiliaire de vérification de l'existence d'une table dans la base de
@@ -1385,7 +1383,7 @@ class DatabaseRecoveryManager:
             # Exécution de la requête
             self.conn.execute(f"SELECT 1 FROM {table_name} LIMIT 1")
             return True
-        except:
+        except Exception:
             return False
 
     # Méthode de sauvegarde des informations d'un point de récupération

@@ -298,7 +298,7 @@ def test_build_sql_filter_list_of_tuples():
 
 # Test d'un filtre OR (liste de listes de tuples)
 def test_build_sql_filter_list_of_lists_of_tuples():
-    """Test that a list of lists of tuples generates 
+    """Test that a list of lists of tuples generates
     an AND ... OR AND condition.
 
     Examples:

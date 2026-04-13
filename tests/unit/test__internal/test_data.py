@@ -163,7 +163,7 @@ def test_insert_data_batch_mode(data_manager, built_ducklake_schema, new_rows):
     ).fetchone()[0]
 
     # Insertion en mode batch
-    inserted = data_manager.insert_data(new_rows, use_batch=True)
+    _ = data_manager.insert_data(new_rows, use_batch=True)
 
     after = built_ducklake_schema.execute("SELECT COUNT(*) FROM fact_table").fetchone()[
         0

@@ -93,7 +93,7 @@ class BaseSchemaManager(ABC):
                         self.conn.execute("SELECT * FROM metadata").pl(),
                         eager_only=True,
                     )
-                except:
+                except Exception:
                     # Si la table n'existe pas encore, initialisation d'un DataFrame
                     # vide
                     self._metadata_cache = nw.from_dict(

@@ -1021,8 +1021,8 @@ class DatabaseAuditor:
             >>> perf_issues = report.get_issues_by_type(IssueType.PERFORMANCE_ISSUE)
         """
         # Seuils déclenchant une recommandation de maintenance
-        SNAPSHOT_THRESHOLD: int = 100
-        DATA_FILES_THRESHOLD: int = 500
+        snapshot_threshold: int = 100
+        data_files_threshold: int = 500
 
         # Vérification du nombre de snapshots accumulés dans le catalogue Ducklake
         try:
@@ -1030,7 +1030,7 @@ class DatabaseAuditor:
                 "SELECT COUNT(*) FROM ducklake_snapshots()"
             ).fetchone()
             snapshot_count: int = result[0] if result else 0
-            if snapshot_count > SNAPSHOT_THRESHOLD:
+            if snapshot_count > snapshot_threshold:
                 issue = ValidationIssue(
                     issue_type=IssueType.PERFORMANCE_ISSUE,
                     severity=IssueSeverity.LOW,
@@ -1038,7 +1038,7 @@ class DatabaseAuditor:
                     description=(
                         f"Ducklake snapshot history is large ({snapshot_count}"
                         f" snapshots). "
-                        f"Threshold: {SNAPSHOT_THRESHOLD}."
+                        f"Threshold: {snapshot_threshold}."
                     ),
                     suggested_fix=(
                         "Run ducklake_expire_snapshots() to purge old snapshots "
@@ -1046,7 +1046,7 @@ class DatabaseAuditor:
                     ),
                     additional_info={
                         "snapshot_count": snapshot_count,
-                        "threshold": SNAPSHOT_THRESHOLD,
+                        "threshold": snapshot_threshold,
                     },
                 )
                 report.add_issue(issue)
@@ -1061,7 +1061,7 @@ class DatabaseAuditor:
                 "SELECT COUNT(*) FROM ducklake_data_files()"
             ).fetchone()
             data_file_count: int = result[0] if result else 0
-            if data_file_count > DATA_FILES_THRESHOLD:
+            if data_file_count > data_files_threshold:
                 issue = ValidationIssue(
                     issue_type=IssueType.PERFORMANCE_ISSUE,
                     severity=IssueSeverity.LOW,
@@ -1069,7 +1069,7 @@ class DatabaseAuditor:
                     description=(
                         f"Ducklake data file count is high ({data_file_count} files). "
                         f"Excessive small files degrade scan performance. Threshold:"
-                        f"{DATA_FILES_THRESHOLD}."
+                        f"{data_files_threshold}."
                     ),
                     suggested_fix=(
                         "Run ducklake_merge_adjacent_files() or"
@@ -1078,7 +1078,7 @@ class DatabaseAuditor:
                     ),
                     additional_info={
                         "data_file_count": data_file_count,
-                        "threshold": DATA_FILES_THRESHOLD,
+                        "threshold": data_files_threshold,
                     },
                 )
                 report.add_issue(issue)
@@ -1181,9 +1181,9 @@ class DatabaseAuditor:
             for dim_table in dimension_tables:
                 # Vérification des doublons dans la colonne 'value' (clé primaire)
                 duplicates_query = f"""
-                    SELECT value, COUNT(*) as count 
-                    FROM {dim_table} 
-                    GROUP BY value 
+                    SELECT value, COUNT(*) as count
+                    FROM {dim_table}
+                    GROUP BY value
                     HAVING COUNT(*) > 1
                 """
 
@@ -1369,7 +1369,7 @@ class DatabaseAuditor:
         try:
             result = self.conn.execute("SHOW TABLES").fetchall()
             return [row[0] for row in result]
-        except:
+        except Exception:
             return []
 
     # Méthode auxiliaire d'extraction des colonnes de la table des faits
@@ -1378,7 +1378,7 @@ class DatabaseAuditor:
         try:
             result = self.conn.execute("DESCRIBE fact_table").fetchall()
             return [row[0] for row in result]
-        except:
+        except Exception:
             return []
 
     # Méthode auxiliaire d'extraction des coonnes d'une table spécifique
@@ -1387,7 +1387,7 @@ class DatabaseAuditor:
         try:
             result = self.conn.execute(f"DESCRIBE {table_name}").fetchall()
             return [row[0] for row in result]
-        except:
+        except Exception:
             return []
 
     # Méthode auxiliaire de description d'une table
@@ -1395,7 +1395,7 @@ class DatabaseAuditor:
         """Get the complete structure of a table."""
         try:
             return self.conn.execute(f"DESCRIBE {table_name}").fetchall()
-        except:
+        except Exception:
             return []
 
     # Méthode auxiliaire d'extraction des métadonnées
@@ -1405,7 +1405,7 @@ class DatabaseAuditor:
             return pl.from_arrow(
                 self.conn.execute("SELECT * FROM metadata").to_arrow_table()
             )
-        except:
+        except Exception:
             return pl.DataFrame()
 
     # méthode auxiliaire de vérification de l'existence d'une table
@@ -1414,7 +1414,7 @@ class DatabaseAuditor:
         try:
             self.conn.execute(f"SELECT 1 FROM {table_name} LIMIT 1")
             return True
-        except:
+        except Exception:
             return False
 
     # Méthode auxiliaire de vérification de l'existence d'une colonne dans la table des
@@ -1440,7 +1440,7 @@ class DatabaseAuditor:
                 "SELECT name FROM metadata WHERE is_primary_key = true"
             ).fetchall()
             return [row[0] for row in result]
-        except:
+        except Exception:
             return []
 
     # Méthode auxiliaire de vérification de la compatibilité des types entre eux

@@ -429,7 +429,7 @@ class TransactionManager(BaseSchemaManager):
 
         try:
             # Exécution de l'opération
-            result = operation.operation_func(
+            operation.operation_func(
                 *operation.operation_args, **operation.operation_kwargs
             )
 

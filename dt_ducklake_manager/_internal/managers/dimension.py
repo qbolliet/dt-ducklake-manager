@@ -637,9 +637,9 @@ class DimensionManager(BaseSchemaManager):
             if values_to_labels:
                 # Conversion values → labels (pour revenir aux données originales)
                 update_query = f"""
-                    UPDATE fact_table 
+                    UPDATE fact_table
                     SET {col_name} = (
-                        SELECT label FROM temp_dim_mapping 
+                        SELECT label FROM temp_dim_mapping
                         WHERE temp_dim_mapping.value = fact_table.{col_name}
                     )
                     WHERE {col_name} IS NOT NULL
@@ -648,9 +648,9 @@ class DimensionManager(BaseSchemaManager):
             else:
                 # Conversion labels → values (pour utiliser les index de dimension)
                 update_query = f"""
-                    UPDATE fact_table 
+                    UPDATE fact_table
                     SET {col_name} = (
-                        SELECT value FROM temp_dim_mapping 
+                        SELECT value FROM temp_dim_mapping
                         WHERE temp_dim_mapping.label = fact_table.{col_name}
                     )
                     WHERE {col_name} IS NOT NULL
@@ -671,7 +671,7 @@ class DimensionManager(BaseSchemaManager):
             # Nettoyage en cas d'erreur
             try:
                 self.conn.execute("DROP VIEW IF EXISTS temp_dim_mapping")
-            except:
+            except Exception:
                 pass
 
             self.logger.error(f"Error converting dimension mapping for {col_name}: {e}")

@@ -600,7 +600,7 @@ class DatabaseUpdater(BaseSchemaManager):
             # Colonnes non-catégorielles de type String (ex-'object' pandas) :
             # candidates à conversion
             non_cat_string_names = current_metadata.filter(
-                (nw.col("is_categorical") == False)
+                (not nw.col("is_categorical"))
                 & (nw.col("python_type") == "String")
             )["name"].to_list()
 
@@ -1111,7 +1111,7 @@ class DatabaseUpdater(BaseSchemaManager):
         """
         try:
             # Cette méthode modifie le DataFrame en place via la référence
-            cleaned_df = remove_dataframe_duplicates(
+            _ = remove_dataframe_duplicates(
                 update_df, keep, self.logger, "update"
             )
             return True

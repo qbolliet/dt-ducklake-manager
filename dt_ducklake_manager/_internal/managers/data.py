@@ -242,7 +242,7 @@ class DataManager(BaseSchemaManager):
             # Nettoyage en cas d'erreur
             try:
                 self.conn.execute("DROP VIEW IF EXISTS temp_fact_creation")
-            except:
+            except Exception:
                 pass
 
             # Logging
@@ -540,7 +540,7 @@ class DataManager(BaseSchemaManager):
                     [new_type, column_name],
                 )
                 self._invalidate_metadata_cache()
-            except:
+            except Exception:
                 pass  # Métadonnées non disponibles
 
             # Logging
@@ -583,7 +583,7 @@ class DataManager(BaseSchemaManager):
             except Exception as e:
                 # Logging
                 self.logger.error(
-                    f"Error processing batch {batch_start}-{batch_end}: {e}"
+                    f"Error processing batch {i}-{batch_end}: {e}"
                 )
 
         return total_inserted
@@ -615,7 +615,7 @@ class DataManager(BaseSchemaManager):
             # Nettoyage en cas d'erreur
             try:
                 self.conn.execute("DROP VIEW IF EXISTS temp_insert")
-            except:
+            except Exception:
                 pass
             raise e
 
@@ -633,6 +633,7 @@ class DataManager(BaseSchemaManager):
         for i in range(0, len(df), self.batch_size):
             # Découpe du batch (narwhals : slice(offset, length))
             batch_df = df.slice(i, self.batch_size)
+            batch_end = i + len(batch_df)
 
             try:
                 # Mise à jour du jeu de données
@@ -644,7 +645,7 @@ class DataManager(BaseSchemaManager):
             except Exception as e:
                 # Logging
                 self.logger.error(
-                    f"Error processing upsert batch {batch_start}-{batch_end}: {e}"
+                    f"Error processing upsert batch {i}-{batch_end}: {e}"
                 )
 
         return total_inserted, total_updated
@@ -734,7 +735,7 @@ class DataManager(BaseSchemaManager):
             # Nettoyage en cas d'erreur
             try:
                 self.conn.execute("DROP VIEW IF EXISTS temp_upsert")
-            except:
+            except Exception:
                 pass
             raise e
 
@@ -786,7 +787,7 @@ class DataManager(BaseSchemaManager):
                 )
                 size_result = self.conn.execute(size_query).fetchone()
                 stats["table_size"] = size_result[0] if size_result else "Unknown"
-            except:
+            except Exception:
                 stats["table_size"] = "Unknown"
 
             return stats

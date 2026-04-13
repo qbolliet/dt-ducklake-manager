@@ -680,8 +680,8 @@ class DatabaseDeleter(BaseSchemaManager):
 
             # Recherche des index utilisant cette colonne
             index_query = """
-                SELECT index_name, expressions 
-                FROM duckdb_indexes() 
+                SELECT index_name, expressions
+                FROM duckdb_indexes()
                 WHERE expressions LIKE ?
             """
             indexes = self.conn.execute(index_query, [f"%{column}%"]).fetchall()
@@ -743,7 +743,7 @@ class DatabaseDeleter(BaseSchemaManager):
 
             # Filtrage des colonnes non-catégorielles de type String (narwhals)
             non_categorical_names = metadata.filter(
-                (nw.col("is_categorical") == False)
+                (not nw.col("is_categorical"))
                 & (nw.col("python_type") == "String")
             )["name"].to_list()
 
@@ -839,7 +839,7 @@ class DatabaseDeleter(BaseSchemaManager):
 
             # Récupération de tous les index
             all_indexes = self.conn.execute("""
-                SELECT index_name, expressions 
+                SELECT index_name, expressions
                 FROM duckdb_indexes()
             """).fetchall()
             # Parcours des indexs
@@ -995,7 +995,7 @@ class DatabaseDeleter(BaseSchemaManager):
                         index_query, [f"%{column}%"]
                     ).fetchone()[0]
                     column_deps["has_indexes"] = index_count > 0
-                except:
+                except Exception:
                     column_deps["has_indexes"] = False
 
                 # Avertissements
