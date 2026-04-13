@@ -287,7 +287,7 @@ def test_build_sql_filter_list_of_tuples():
     Examples:
         >>> _build_sql_filter([('col1', '=', 'val1'), ('col2', '=', 'val2')])
         "col1 = 'val1' AND col2 = 'val2'"
-    " ""
+    """
     filters = [("col1", "=", "val1"), ("col2", "=", "val2")]
     result = _build_sql_filter(filters)
     assert "AND" in result
@@ -298,12 +298,13 @@ def test_build_sql_filter_list_of_tuples():
 
 # Test d'un filtre OR (liste de listes de tuples)
 def test_build_sql_filter_list_of_lists_of_tuples():
-    """Test that a list of lists of tuples generates an AND ... OR AND condition.
+    """Test that a list of lists of tuples generates 
+    an AND ... OR AND condition.
 
     Examples:
         >>> _build_sql_filter([[('a', '=', 1)], [('b', '=', 2)]])
         "A = '1' OR B = '2'"
-    " ""
+    """
     filters = [[("col1", "=", "val1")], [("col2", "=", "val2")]]
     result = _build_sql_filter(filters)
     assert "OR" in result
@@ -316,7 +317,7 @@ def test_build_sql_filter_in_operator():
     Examples:
         >>> _build_sql_filter([('status', 'in', ['active', 'pending'])])
         "STATUS IN (active, pending)"
-    " ""
+    """
     filters = [("status", "in", ["active", "pending"])]
     result = _build_sql_filter(filters)
     assert "IN" in result
@@ -329,7 +330,7 @@ def test_build_sql_filter_not_in_operator():
     Examples:
         >>> _build_sql_filter([('status', 'not in', ['deleted'])])
         "STATUS NOT IN (deleted)"
-    " ""
+    """
     filters = [("status", "not in", ["deleted"])]
     result = _build_sql_filter(filters)
     assert "NOT IN" in result
