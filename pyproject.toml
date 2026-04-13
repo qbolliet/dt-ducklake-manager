@@ -69,7 +69,7 @@ search = 'version = "{current_version}"'
 replace = 'version = "{new_version}"'
 
 [tool.taskipy.tasks]
-test = "pytest -m 'not integration'"
+test = "pytest -m \"not integration\""
 test-integration = "pytest -m integration"
 lint = "ruff check ."
 format = "ruff format ."
