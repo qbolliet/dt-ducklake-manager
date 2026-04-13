@@ -1069,7 +1069,7 @@ class DatabaseUpdater(BaseSchemaManager):
                             "_lbl_": list(label_to_value.keys()),
                             "_val_": list(label_to_value.values()),
                         },
-                        native_namespace=nw.get_native_namespace(prepared_df),
+                        backend=nw.get_native_namespace(prepared_df),
                     )
                     prepared_df = (
                         prepared_df.rename({col_name: "_lbl_"})

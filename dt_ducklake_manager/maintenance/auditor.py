@@ -1403,7 +1403,7 @@ class DatabaseAuditor:
         """Get metadata table content."""
         try:
             return pl.from_arrow(
-                self.conn.execute("SELECT * FROM metadata").fetch_arrow_table()
+                self.conn.execute("SELECT * FROM metadata").to_arrow_table()
             )
         except:
             return pl.DataFrame()

@@ -218,7 +218,7 @@ class SchemaBuilder:
         col_oriented = {k: [d[k] for d in list_metadata] for k in keys}
         # Création du DataFrame de métadonnées via narwhals (même backend que self.df)
         self.df_metadata = nw.from_dict(
-            col_oriented, native_namespace=nw.get_native_namespace(self.df)
+            col_oriented, backend=nw.get_native_namespace(self.df)
         ).sort("label")
 
         # Logging
@@ -260,7 +260,7 @@ class SchemaBuilder:
             # Création de la table de dimension via narwhals (même backend que self.df)
             self.dimension_tables[categorical_dimension] = nw.from_dict(
                 {"value": list(range(len(unique_list))), "label": unique_list},
-                native_namespace=nw.get_native_namespace(self.df),
+                backend=nw.get_native_namespace(self.df),
             ).sort("label")
             # Logging
             self.logger.info(
