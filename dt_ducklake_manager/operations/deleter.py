@@ -1060,7 +1060,7 @@ class DatabaseDeleter(BaseSchemaManager):
         """
         try:
             # Initialisation du rapport
-            impact_report = {
+            impact_report: dict[str, Any] = {
                 "timestamp": datetime.now().isoformat(),
                 "rows_affected": 0,
                 "columns_affected": [],
@@ -1184,7 +1184,7 @@ class DatabaseDeleter(BaseSchemaManager):
     # Méthode de validation de l'état de la base de données
     def validate_database_state(
         self, validation_level: ValidationLevel = ValidationLevel.STANDARD
-    ):
+    ) -> Any:
         """
         Validate the current state of the database.
 

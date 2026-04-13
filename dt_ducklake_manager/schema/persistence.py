@@ -55,7 +55,7 @@ class DuckLakeTablesBuilder:
         categorical_threshold: int | None = None,
         primary_keys: list[str] | None = None,
         connection: duckdb.DuckDBPyConnection | None = None,
-        log_filename: os.PathLike | None = os.path.join(
+        log_filename: str | os.PathLike[str] | None = os.path.join(
             FILE_PATH.parents[2], "logs/ducklake_tables_builder.log"
         ),
     ):

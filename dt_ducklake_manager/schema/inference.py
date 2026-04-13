@@ -4,6 +4,8 @@ import os
 import warnings
 from pathlib import Path
 
+from typing import Any
+
 import narwhals as nw
 from narwhals.typing import IntoDataFrame
 
@@ -42,7 +44,7 @@ class SchemaBuilder:
         df: IntoDataFrame,
         categorical_threshold: int | None = None,
         primary_keys: list[str] | None = None,
-        log_filename: os.PathLike | None = None,
+        log_filename: str | os.PathLike[str] | None = None,
     ) -> None:
         """
         Initialize the SchemaBuilder with a DataFrame and optional parameters.
@@ -131,7 +133,7 @@ class SchemaBuilder:
     # Méthode inférant le type des colonnes du jeu de données
     def create_metadata_table(
         self, column_labels: dict[str, str] | None | None = None
-    ) -> nw.DataFrame:
+    ) -> nw.DataFrame[Any]:
         """
         Automatically infer metadata for the DataFrame's columns, including types,
         labels,
@@ -229,7 +231,7 @@ class SchemaBuilder:
     # Méthode créant la dimension table
     def create_dimension_tables(
         self, column_labels: dict[str, str] | None | None = None
-    ) -> dict[str, nw.DataFrame]:
+    ) -> dict[str, nw.DataFrame[Any]]:
         """
         Generate dimension tables for categorical columns in the dataset.
 
@@ -275,7 +277,7 @@ class SchemaBuilder:
     # Méthode créant la table des informations
     def create_fact_table(
         self, column_labels: dict[str, str] | None | None = None
-    ) -> nw.DataFrame:
+    ) -> nw.DataFrame[Any]:
         """
         Generate a fact table by replacing categorical values with corresponding IDs.
 
@@ -321,7 +323,7 @@ class SchemaBuilder:
     # Méthode créant les différentes tables
     def build(
         self, column_labels: dict[str, str] | None | None = None
-    ) -> tuple[nw.DataFrame, dict[str, nw.DataFrame], nw.DataFrame]:
+    ) -> tuple[nw.DataFrame[Any], dict[str, nw.DataFrame[Any]], nw.DataFrame[Any]]:
         """
         Execute the full pipeline to create metadata, dimension tables, and a fact
         table.

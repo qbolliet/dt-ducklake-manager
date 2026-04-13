@@ -50,7 +50,7 @@ class DatabaseUpdater(BaseSchemaManager):
         self,
         connection: duckdb.DuckDBPyConnection | None = None,
         categorical_threshold: int | None = 50,
-        log_filename: os.PathLike | None = None,
+        log_filename: str | os.PathLike[str] | None = None,
         max_workers: int = 4,
         batch_size: int = 10000,
         enable_validation: bool = True,
@@ -128,7 +128,7 @@ class DatabaseUpdater(BaseSchemaManager):
         self.ducklake_schema = ducklake_schema
 
     # Méthode de validation d'une opération
-    def validate_operation(self, operation_type: str, **kwargs) -> bool:
+    def validate_operation(self, operation_type: str, **kwargs: Any) -> bool:
         """
         Validate update operations before execution.
 
@@ -258,7 +258,7 @@ class DatabaseUpdater(BaseSchemaManager):
     # Méthode de mise à jour de la base de données de manière transactionnelle
     def _update_database_transactional(
         self,
-        update_df: nw.DataFrame,
+        update_df: nw.DataFrame[Any],
         check_duplicates_db: bool,
         check_duplicates_update: bool,
         keep: Literal["any", "none", "first", "last"],
@@ -470,7 +470,7 @@ class DatabaseUpdater(BaseSchemaManager):
     # Méthode auxiliaire de mise à jour directe de la base de données
     def _update_database_direct(
         self,
-        update_df: nw.DataFrame,
+        update_df: nw.DataFrame[Any],
         check_duplicates_db: bool,
         check_duplicates_update: bool,
         keep: Literal["any", "none", "first", "last"],
@@ -546,7 +546,7 @@ class DatabaseUpdater(BaseSchemaManager):
 
     # Méthodes de mise à jour sécurisées
     # Méthode auxiliaire de mise à jour des méta-données
-    def _update_metadata_safe(self, update_df: nw.DataFrame) -> bool:
+    def _update_metadata_safe(self, update_df: nw.DataFrame[Any]) -> bool:
         """Safely update metadata table with type conflict resolution.
 
         Args:
@@ -577,7 +577,7 @@ class DatabaseUpdater(BaseSchemaManager):
             return False
 
     # Méthode auxiliaire de mise à jour des tables de dimension
-    def _update_dimensions_safe(self, update_df: nw.DataFrame) -> bool:
+    def _update_dimensions_safe(self, update_df: nw.DataFrame[Any]) -> bool:
         """Safely update dimension tables with categorical threshold checks.
 
         Handles conversion between categorical and non-categorical status
@@ -665,9 +665,10 @@ class DatabaseUpdater(BaseSchemaManager):
             for col_name in categorical_columns.keys():
                 # Comptage des entrées dans la table de dimension après
                 # batch_update_dimensions
-                n_dim_entries = self.conn.execute(
+                _rd = self.conn.execute(
                     f"SELECT COUNT(*) FROM dim_{col_name}"
-                ).fetchone()[0]
+                ).fetchone()
+                n_dim_entries = _rd[0] if _rd is not None else 0
                 # Vérification du seuil
                 if n_dim_entries > self.categorical_threshold:
                     # Conversion en non-catégoriel
@@ -685,7 +686,7 @@ class DatabaseUpdater(BaseSchemaManager):
             return False
 
     # Méthode auxiliaire de mise à jour directe de la table des faits
-    def _update_fact_table_direct(self, update_df: nw.DataFrame) -> bool:
+    def _update_fact_table_direct(self, update_df: nw.DataFrame[Any]) -> bool:
         """Update fact table directly without batch processing.
 
         Uses primary keys from metadata to determine INSERT vs UPSERT strategy:
@@ -749,7 +750,7 @@ class DatabaseUpdater(BaseSchemaManager):
             return False
 
     # Méthode auxiliaire de la mise à jour par batch de la table des faits
-    def _update_fact_table_batch(self, update_df: nw.DataFrame) -> bool:
+    def _update_fact_table_batch(self, update_df: nw.DataFrame[Any]) -> bool:
         """Update fact table using batch processing for large datasets.
 
         Uses primary keys from metadata to determine INSERT vs UPSERT strategy:
@@ -814,8 +815,8 @@ class DatabaseUpdater(BaseSchemaManager):
 
     # Méthode auxiliaire de séparation des lignes selon l'existence de leur clé primaire
     def _split_dataframe_by_pk_existence(
-        self, df: nw.DataFrame, primary_keys: list[str]
-    ) -> tuple[nw.DataFrame, nw.DataFrame]:
+        self, df: nw.DataFrame[Any], primary_keys: list[str]
+    ) -> tuple[nw.DataFrame[Any], nw.DataFrame[Any]]:
         """Split a DataFrame into rows to INSERT and rows to UPDATE
         based on primary key existence.
 
@@ -851,7 +852,8 @@ class DatabaseUpdater(BaseSchemaManager):
                 return df.clone(), df.head(0)
 
             # Vérification que la fact_table n'est pas vide
-            count = self.conn.execute("SELECT COUNT(*) FROM fact_table").fetchone()[0]
+            _rc = self.conn.execute("SELECT COUNT(*) FROM fact_table").fetchone()
+            count = _rc[0] if _rc is not None else 0
             if count == 0:
                 return df.clone(), df.head(0)
 
@@ -1013,7 +1015,7 @@ class DatabaseUpdater(BaseSchemaManager):
 
     # Méthodes utilitaires
     # Méthode auxiliaire de préparation du jeu de données pour la table des faits
-    def _prepare_dataframe_for_fact_table(self, df: nw.DataFrame) -> nw.DataFrame:
+    def _prepare_dataframe_for_fact_table(self, df: nw.DataFrame[Any]) -> nw.DataFrame[Any]:
         """Prepare DataFrame for fact table insertion.
 
         Converts categorical columns to their dimension table values
@@ -1098,7 +1100,7 @@ class DatabaseUpdater(BaseSchemaManager):
 
     # Méthode auxiliaire de suppression des doublons des données de mise à jour
     def _remove_update_duplicates(
-        self, update_df: nw.DataFrame, keep: Literal[False, "first", "last"]
+        self, update_df: nw.DataFrame[Any], keep: Literal["any", "none", "first", "last"]
     ) -> bool:
         """Remove duplicates from update DataFrame.
 
@@ -1122,8 +1124,8 @@ class DatabaseUpdater(BaseSchemaManager):
 
     # Méthode auxiliaire de nettoyage des données mises à jour
     def _get_cleaned_update_data(
-        self, update_df: nw.DataFrame, keep: Literal[False, "first", "last"]
-    ) -> nw.DataFrame:
+        self, update_df: nw.DataFrame[Any], keep: Literal["any", "none", "first", "last"]
+    ) -> nw.DataFrame[Any]:
         """Get deduplicated update data.
 
         Args:
@@ -1137,7 +1139,7 @@ class DatabaseUpdater(BaseSchemaManager):
 
     # Méthode auxiliaire de suppression des doublons dans la base de données
     def _remove_database_duplicates(
-        self, keep: Literal[False, "first", "last"]
+        self, keep: Literal["any", "none", "first", "last"]
     ) -> bool:
         """Remove duplicate rows from the database fact table.
 
@@ -1149,9 +1151,8 @@ class DatabaseUpdater(BaseSchemaManager):
         """
         try:
             # Récupération du nombre initial de lignes
-            initial_count = self.conn.execute(
-                "SELECT COUNT(*) FROM fact_table"
-            ).fetchone()[0]
+            _ri = self.conn.execute("SELECT COUNT(*) FROM fact_table").fetchone()
+            initial_count = _ri[0] if _ri is not None else 0
 
             # Récupération des colonnes
             all_columns = [

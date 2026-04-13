@@ -11,6 +11,7 @@ from typing import Any
 
 # DuckDB
 import duckdb
+import narwhals as nw
 import polars as pl
 
 from .._internal.managers.dimension import DimensionManager
@@ -67,7 +68,7 @@ class RecoveryPoint:
     recovery_id: str
     timestamp: float
     backup_path: str
-    metadata: dict = field(default_factory=dict)
+    metadata: dict[str, Any] = field(default_factory=dict)
     validation_report: Any | None = None
     description: str = ""
 
@@ -88,7 +89,7 @@ class RecoveryOperation:
 
     strategy: RecoveryStrategy
     target_recovery_point: str | None = None
-    parameters: dict = field(default_factory=dict)
+    parameters: dict[str, Any] = field(default_factory=dict)
     auto_validate: bool = True
     description: str = ""
 
@@ -140,9 +141,9 @@ class DatabaseRecoveryManager:
     def __init__(
         self,
         connection: duckdb.DuckDBPyConnection | None = None,
-        backup_dir: os.PathLike | None = None,
+        backup_dir: str | os.PathLike[str] | None = None,
         categorical_threshold: int | None = 50,
-        log_filename: os.PathLike | None = None,
+        log_filename: str | os.PathLike[str] | None = None,
         max_backup_age_days: int = 30,
         auto_backup_on_changes: bool = True,
         catalog_alias: str = "db",
@@ -878,15 +879,16 @@ class DatabaseRecoveryManager:
             ):
                 col_name = issue.column_name
                 if col_name:
-                    # Création de la table de dimension à partir des valeurs existantes
+                    # Récupération des valeurs distinctes de la fact_table puis
+                    # création/mise à jour de la table de dimension.
+                    # update_dimension_values crée la table si elle n'existe pas encore.
                     dim_mgr = DimensionManager(self.conn, self.categorical_threshold)
-                    dim_mgr.create_dimension_table(col_name)
-                    # Récupération des valeurs distinctes de la fact_table
-                    values = self.conn.execute(
+                    values_pl = self.conn.execute(
                         f"SELECT DISTINCT {col_name} FROM fact_table WHERE {col_name}"
                         f" IS NOT NULL"
                     ).pl()[col_name]
-                    dim_mgr.update_dimension_values(col_name, values)
+                    values_nw = nw.from_native(values_pl, series_only=True)
+                    dim_mgr.update_dimension_values(col_name, values_nw)
                     self.logger.info(f"Created missing dimension table for {col_name}")
                     return True
 
@@ -987,13 +989,14 @@ class DatabaseRecoveryManager:
                 for col_name in categorical_cols:
                     dim_table = f"dim_{col_name}"
                     if not self._table_exists(dim_table):
-                        # Recréation de la table de dimension à partir de la fact_table
-                        dim_mgr.create_dimension_table(col_name)
-                        values = self.conn.execute(
+                        # Recréation de la table de dimension à partir de la fact_table.
+                        # update_dimension_values crée la table si elle n'existe pas.
+                        values_pl = self.conn.execute(
                             f"SELECT DISTINCT {col_name} FROM fact_table WHERE"
                             f" {col_name} IS NOT NULL"
                         ).pl()[col_name]
-                        added = dim_mgr.update_dimension_values(col_name, values)
+                        values_nw = nw.from_native(values_pl, series_only=True)
+                        added = dim_mgr.update_dimension_values(col_name, values_nw)
                         operations_performed.append(
                             f"Recreated {dim_table} with {added} values"
                         )
@@ -1552,17 +1555,15 @@ class DatabaseRecoveryManager:
                 return False
 
             # Comptage des lignes avant suppression
-            initial_count = self.conn.execute(
-                "SELECT COUNT(*) FROM fact_table"
-            ).fetchone()[0]
+            _r1 = self.conn.execute("SELECT COUNT(*) FROM fact_table").fetchone()
+            initial_count = _r1[0] if _r1 is not None else 0
 
             # Suppression des lignes contenant des valeurs nulles
             self.conn.execute(f"DELETE FROM fact_table WHERE {col_name} IS NULL")
 
             # Comptage des lignes après suppression
-            final_count = self.conn.execute(
-                "SELECT COUNT(*) FROM fact_table"
-            ).fetchone()[0]
+            _r2 = self.conn.execute("SELECT COUNT(*) FROM fact_table").fetchone()
+            final_count = _r2[0] if _r2 is not None else 0
             deleted_count = initial_count - final_count
 
             self.logger.info(
@@ -1647,25 +1648,24 @@ class DatabaseRecoveryManager:
             dim_mgr = DimensionManager(self.conn, self.categorical_threshold)
 
             # Cas 1: Table de dimension manquante → création
+            # update_dimension_values crée la table si elle n'existe pas.
             if "missing" in issue.description.lower():
-                dim_mgr.create_dimension_table(col_name)
-                values = self.conn.execute(
+                values_pl = self.conn.execute(
                     f"SELECT DISTINCT {col_name} FROM fact_table WHERE {col_name} IS"
                     f" NOT NULL"
                 ).pl()[col_name]
-                dim_mgr.update_dimension_values(col_name, values)
+                dim_mgr.update_dimension_values(col_name, nw.from_native(values_pl, series_only=True))
                 self.logger.info(f"Created missing dimension table {dim_table}")
                 return True
 
             # Cas 2: Table de dimension corrompue → reconstruction
             if self._table_exists(dim_table):
                 self.conn.execute(f"DROP TABLE {dim_table}")
-                dim_mgr.create_dimension_table(col_name)
-                values = self.conn.execute(
+                values_pl = self.conn.execute(
                     f"SELECT DISTINCT {col_name} FROM fact_table WHERE {col_name} IS"
                     f" NOT NULL"
                 ).pl()[col_name]
-                dim_mgr.update_dimension_values(col_name, values)
+                dim_mgr.update_dimension_values(col_name, nw.from_native(values_pl, series_only=True))
                 self.logger.info(f"Rebuilt corrupted dimension table {dim_table}")
                 return True
 

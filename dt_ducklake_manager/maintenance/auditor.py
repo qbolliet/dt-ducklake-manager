@@ -79,7 +79,7 @@ class ValidationIssue:
     suggested_fix: str = ""
     affected_rows: int | None = None
     detected_at: float = field(default_factory=time.time)
-    additional_info: dict = field(default_factory=dict)
+    additional_info: dict[str, Any] = field(default_factory=dict)
 
 
 # Classe de rapport d'audit de la base de données
@@ -103,7 +103,7 @@ class ValidationReport:
     end_time: float | None = None
     issues: list[ValidationIssue] = field(default_factory=list)
     tables_validated: set[str] = field(default_factory=set)
-    validation_summary: dict = field(default_factory=dict)
+    validation_summary: dict[str, Any] = field(default_factory=dict)
     recommendations: list[str] = field(default_factory=list)
 
     # Méthode d'ajout d'un problème
@@ -197,7 +197,7 @@ class DatabaseAuditor:
         self,
         connection: duckdb.DuckDBPyConnection | None = None,
         categorical_threshold: int | None = 50,
-        log_filename: os.PathLike | None = None,
+        log_filename: str | os.PathLike[str] | None = None,
     ):
         """
         Initialize the database auditor.
@@ -316,7 +316,7 @@ class DatabaseAuditor:
 
     # Validation des prérequis d'une opération
     def validate_operation_preconditions(
-        self, operation_type: str, **kwargs
+        self, operation_type: str, **kwargs: Any
     ) -> ValidationReport:
         """
         Validate preconditions before executing specific operations.
@@ -489,7 +489,7 @@ class DatabaseAuditor:
                             description=f"Found {null_count} null values in critical"
                                         f" metadata column '{col}'",
                             suggested_fix=f"Update null values in metadata.{col}",
-                            affected_rows=null_count,
+                            affected_rows=int(null_count),
                         )
                         report.add_issue(issue)
 
@@ -789,7 +789,7 @@ class DatabaseAuditor:
                 unique_count = result[0] if result else 0
 
                 # Si le nombre de modalités est supérieur au seuil, renvoie un problème
-                if unique_count > self.categorical_threshold:
+                if self.categorical_threshold is not None and unique_count > self.categorical_threshold:
                     issue = ValidationIssue(
                         issue_type=IssueType.INVALID_DIMENSION,
                         severity=IssueSeverity.MEDIUM,
@@ -830,7 +830,7 @@ class DatabaseAuditor:
                 result = self.conn.execute(unique_count_query).fetchone()
                 unique_count = result[0] if result else 0
 
-                if unique_count <= self.categorical_threshold:
+                if self.categorical_threshold is not None and unique_count <= self.categorical_threshold:
                     issue = ValidationIssue(
                         issue_type=IssueType.PERFORMANCE_ISSUE,
                         severity=IssueSeverity.LOW,
@@ -1096,9 +1096,8 @@ class DatabaseAuditor:
                 return
 
             # Comptage total des lignes
-            total_rows = self.conn.execute(
-                "SELECT COUNT(*) FROM fact_table"
-            ).fetchone()[0]
+            _r = self.conn.execute("SELECT COUNT(*) FROM fact_table").fetchone()
+            total_rows = _r[0] if _r is not None else 0
 
             # Vérification que la table des faits n'est pas vide
             if total_rows == 0:
@@ -1122,7 +1121,8 @@ class DatabaseAuditor:
                     f"SELECT COUNT(*) FROM fact_table WHERE {col_name} IS NULL"
                 )
                 # Exécution de la requête
-                null_count = self.conn.execute(null_count_query).fetchone()[0]
+                _rn = self.conn.execute(null_count_query).fetchone()
+                null_count = _rn[0] if _rn is not None else 0
                 # Calcul du pourcentage de valeurs nulles
                 null_percentage = (null_count / total_rows) * 100
 
@@ -1226,7 +1226,7 @@ class DatabaseAuditor:
     # Méthodes de validation des préconditions d'opération
     # Méthode de validation des conditions préalables à une opération d'insertion
     def _validate_insert_preconditions(
-        self, report: ValidationReport, df: IntoDataFrame | None = None, **kwargs
+        self, report: ValidationReport, df: IntoDataFrame | None = None, **kwargs: Any
     ) -> None:
         """Validate insert preconditions."""
         # Vérifiation que le jeu de données est spécifié
@@ -1241,8 +1241,10 @@ class DatabaseAuditor:
             report.add_issue(issue)
             return
 
+        # Conversion vers narwhals pour accéder à len() et .columns de façon sûre
+        df_nw = nw.from_native(df, eager_only=True)
         # Vérification que le jeu de données est non vide
-        if len(df) == 0:
+        if len(df_nw) == 0:
             issue = ValidationIssue(
                 issue_type=IssueType.DATA_INTEGRITY,
                 severity=IssueSeverity.MEDIUM,
@@ -1255,7 +1257,7 @@ class DatabaseAuditor:
         # Vérification des noms de colonnes valides
         invalid_columns = [
             col
-            for col in df.columns
+            for col in df_nw.columns
             if not col.replace("_", "").replace(" ", "").isalnum()
         ]
         if invalid_columns:
@@ -1272,7 +1274,7 @@ class DatabaseAuditor:
     # Méthode de validation des conditions préalables à une mise à jour de la base de
     # données
     def _validate_update_preconditions(
-        self, report: ValidationReport, df=None, **kwargs
+        self, report: ValidationReport, df: IntoDataFrame | None = None, **kwargs: Any
     ) -> None:
         """Validate update preconditions.
 
@@ -1293,7 +1295,8 @@ class DatabaseAuditor:
 
         # Vérification que les clés primaires sont présentes dans le DataFrame
         if df is not None:
-            missing_keys = [key for key in primary_keys if key not in df.columns]
+            df_nw = nw.from_native(df, eager_only=True)
+            missing_keys = [key for key in primary_keys if key not in df_nw.columns]
             if missing_keys:
                 issue = ValidationIssue(
                     issue_type=IssueType.SCHEMA_INCONSISTENCY,
@@ -1330,7 +1333,7 @@ class DatabaseAuditor:
 
     # Méthode de validation des conditions préalable à la suppression de données
     def _validate_delete_preconditions(
-        self, report: ValidationReport, filters: Any = None, **kwargs
+        self, report: ValidationReport, filters: Any = None, **kwargs: Any
     ) -> None:
         """Validate delete preconditions."""
         # Vérification de l'existence du filtre de suppression des données
@@ -1348,7 +1351,7 @@ class DatabaseAuditor:
     # méthode de validation des conditions préalable à un changement de schéma dans la
     # base de données
     def _validate_schema_change_preconditions(
-        self, report: ValidationReport, **kwargs
+        self, report: ValidationReport, **kwargs: Any
     ) -> None:
         """Validate schema change preconditions."""
         # Vérification de l'existence des tables avant modification
@@ -1391,7 +1394,7 @@ class DatabaseAuditor:
             return []
 
     # Méthode auxiliaire de description d'une table
-    def _get_table_structure(self, table_name: str) -> list[tuple]:
+    def _get_table_structure(self, table_name: str) -> list[tuple[Any, ...]]:
         """Get the complete structure of a table."""
         try:
             return self.conn.execute(f"DESCRIBE {table_name}").fetchall()
@@ -1402,9 +1405,13 @@ class DatabaseAuditor:
     def _get_metadata(self) -> pl.DataFrame:
         """Get metadata table content."""
         try:
-            return pl.from_arrow(
+            result = pl.from_arrow(
                 self.conn.execute("SELECT * FROM metadata").to_arrow_table()
             )
+            # pl.from_arrow() peut retourner DataFrame ou Series selon la forme
+            # de l'entrée Arrow. On s'assure de retourner un DataFrame.
+            assert isinstance(result, pl.DataFrame)
+            return result
         except Exception:
             return pl.DataFrame()
 
@@ -1487,7 +1494,7 @@ class DatabaseAuditor:
             ...     print("Database is healthy")
         """
         try:
-            health_info = {
+            health_info: dict[str, Any] = {
                 "status": "unknown",
                 "timestamp": time.time(),
                 "tables_count": 0,

@@ -4,6 +4,7 @@ import os
 import threading
 from abc import ABC, abstractmethod
 from pathlib import Path
+from typing import Any
 
 # DuckDB
 import duckdb
@@ -491,7 +492,7 @@ class BaseSchemaManager(ABC):
         return unique_count <= threshold
 
     @abstractmethod
-    def validate_operation(self, operation_type: str, **kwargs) -> bool:
+    def validate_operation(self, operation_type: str, **kwargs: Any) -> bool:
         """
         Abstract method to validate operations before execution.
 

@@ -48,12 +48,12 @@ class TransactionOperation:
     """
 
     operation_type: str
-    operation_func: Callable
-    operation_args: tuple = field(default_factory=tuple)
-    operation_kwargs: dict = field(default_factory=dict)
-    rollback_func: Callable | None = None
-    rollback_args: tuple = field(default_factory=tuple)
-    rollback_kwargs: dict = field(default_factory=dict)
+    operation_func: Callable[..., Any]
+    operation_args: tuple[Any, ...] = field(default_factory=tuple)
+    operation_kwargs: dict[str, Any] = field(default_factory=dict)
+    rollback_func: Callable[..., Any] | None = None
+    rollback_args: tuple[Any, ...] = field(default_factory=tuple)
+    rollback_kwargs: dict[str, Any] = field(default_factory=dict)
     description: str = ""
 
 
@@ -114,7 +114,7 @@ class TransactionManager(BaseSchemaManager):
         self,
         connection: duckdb.DuckDBPyConnection | None = None,
         categorical_threshold: int | None = 50,
-        log_filename: os.PathLike | None = None,
+        log_filename: str | os.PathLike[str] | None = None,
         transaction_timeout: int = 300,
         ducklake_catalog_alias: str = "db",
         ducklake_schema: str = "main",
@@ -157,7 +157,7 @@ class TransactionManager(BaseSchemaManager):
         self._transaction_lock = threading.RLock()
 
     # Méthode de validation de l'opération
-    def validate_operation(self, operation_type: str, **kwargs) -> bool:
+    def validate_operation(self, operation_type: str, **kwargs: Any) -> bool:
         """
         Validate transaction operations before execution.
 
@@ -183,7 +183,7 @@ class TransactionManager(BaseSchemaManager):
             return False
 
     # Méthode de validation d'un commit de transaction
-    def _validate_commit(self, transaction_id: str | None = None, **kwargs) -> bool:
+    def _validate_commit(self, transaction_id: str | None = None, **kwargs: Any) -> bool:
         """Validate transaction commit parameters."""
         # Vérification que la transaction possède un identifiant et n'est plus active
         if transaction_id and transaction_id not in self._active_transactions:
@@ -193,7 +193,7 @@ class TransactionManager(BaseSchemaManager):
         return True
 
     # Méthode de validation d'un rollback de transaction
-    def _validate_rollback(self, transaction_id: str | None = None, **kwargs) -> bool:
+    def _validate_rollback(self, transaction_id: str | None = None, **kwargs: Any) -> bool:
         """Validate transaction rollback parameters."""
         # Vérification que la transaction possède un identifiant et n'est plus active
         if transaction_id and transaction_id not in self._active_transactions:
@@ -204,7 +204,7 @@ class TransactionManager(BaseSchemaManager):
 
     # Méthode de validation de l'exécution d'une opération
     def _validate_execute(
-        self, transaction_id: str, operation: TransactionOperation, **kwargs
+        self, transaction_id: str, operation: TransactionOperation, **kwargs: Any
     ) -> bool:
         """Validate operation execution parameters."""
         # Vérification que la transaction n'est pas active
@@ -289,12 +289,12 @@ class TransactionManager(BaseSchemaManager):
         self,
         transaction_id: str,
         operation_type: str,
-        operation_func: Callable,
-        operation_args: tuple = (),
-        operation_kwargs: dict = None,
-        rollback_func: Callable | None = None,
-        rollback_args: tuple = (),
-        rollback_kwargs: dict = None,
+        operation_func: Callable[..., Any],
+        operation_args: tuple[Any, ...] = (),
+        operation_kwargs: dict[str, Any] | None = None,
+        rollback_func: Callable[..., Any] | None = None,
+        rollback_args: tuple[Any, ...] = (),
+        rollback_kwargs: dict[str, Any] | None = None,
         description: str = "",
     ) -> bool:
         """
@@ -758,8 +758,9 @@ class TransactionManager(BaseSchemaManager):
         """
         with self._transaction_lock:
             return [
-                self.get_transaction_status(tx_id)
+                s
                 for tx_id in list(self._active_transactions.keys())
+                if (s := self.get_transaction_status(tx_id)) is not None
             ]
 
     # Méthode de nettoyage des transactions passées

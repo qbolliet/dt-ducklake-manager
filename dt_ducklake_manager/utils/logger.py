@@ -6,7 +6,7 @@ import os
 
 
 # Fonction d'initialisation du logger
-def _init_logger(filename: os.PathLike) -> logging.Logger:
+def _init_logger(filename: str | os.PathLike[str]) -> logging.Logger:
     """
     Initializes the logger for logging to a file.
 
@@ -22,7 +22,6 @@ def _init_logger(filename: os.PathLike) -> logging.Logger:
     # Configuration de logging
     logging.basicConfig(
         format="%(asctime)s - %(levelname)s - %(message)s",
-        encoding="utf-8",
         level=logging.INFO,
     )
 

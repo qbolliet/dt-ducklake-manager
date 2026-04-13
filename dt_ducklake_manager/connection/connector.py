@@ -56,7 +56,7 @@ class DuckLakeConnector:
         snapshot_time: str | None = None,
         catalog_alias: str = "db",
         schema: str = "main",
-        log_filename: os.PathLike | None = os.path.join(
+        log_filename: str | os.PathLike[str] | None = os.path.join(
             FILE_PATH.parents[2], "logs/ducklake_connector.log"
         ),
     ) -> None:
@@ -105,6 +105,10 @@ class DuckLakeConnector:
         self.schema = schema
 
         # Initialisation du logger
+        if log_filename is None:
+            log_filename = os.path.join(
+                FILE_PATH.parents[2], "logs/ducklake_connector.log"
+            )
         self.logger = _init_logger(filename=log_filename)
 
     # ---------------------------------------------------------------------------

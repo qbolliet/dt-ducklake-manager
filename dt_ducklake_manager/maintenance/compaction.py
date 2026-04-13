@@ -46,7 +46,7 @@ class DuckLakeMaintenance:
         self,
         connection: duckdb.DuckDBPyConnection,
         catalog_alias: str = "db",
-        log_filename: os.PathLike | None = os.path.join(
+        log_filename: str | os.PathLike[str] | None = os.path.join(
             FILE_PATH.parents[2], "logs/ducklake_maintenance.log"
         ),
     ) -> None:
@@ -70,6 +70,10 @@ class DuckLakeMaintenance:
         self.catalog_alias = catalog_alias
 
         # Initialisation du logger
+        if log_filename is None:
+            log_filename = os.path.join(
+                FILE_PATH.parents[2], "logs/ducklake_maintenance.log"
+            )
         self.logger = _init_logger(filename=log_filename)
 
     # ---------------------------------------------------------------------------

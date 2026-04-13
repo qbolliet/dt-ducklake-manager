@@ -39,7 +39,7 @@ class DataManager(BaseSchemaManager):
         self,
         connection: duckdb.DuckDBPyConnection | None = None,
         categorical_threshold: int | None = 50,
-        log_filename: os.PathLike | None = None,
+        log_filename: str | os.PathLike[str] | None = None,
         batch_size: int = 10000,
     ):
         """
@@ -69,7 +69,7 @@ class DataManager(BaseSchemaManager):
 
     # Méthodes de validation des opérations avant leur exécution
     # Méthode de validation de l'ensemble des opérations
-    def validate_operation(self, operation_type: str, **kwargs) -> bool:
+    def validate_operation(self, operation_type: str, **kwargs: Any) -> bool:
         """
         Validate data operations before execution.
 
@@ -100,17 +100,19 @@ class DataManager(BaseSchemaManager):
             return False
 
     # Méthode de validation des insertions de données
-    def _validate_insert(self, df: IntoDataFrame, **kwargs) -> bool:
+    def _validate_insert(self, df: IntoDataFrame, **kwargs: Any) -> bool:
         """Validate data insertion parameters."""
+        # Conversion vers narwhals pour accéder à len() et .columns de façon sûre
+        df_nw = nw.from_native(df, eager_only=True)
         # Validation du jeu de données à insérer
-        if df is None or len(df) == 0:
+        if len(df_nw) == 0:
             # Logging
             self.logger.error("DataFrame cannot be empty for insertion")
             return False
 
         # Vérification des noms de colonnes valides
         invalid_columns = [
-            col for col in df.columns if not col.replace("_", "").isalnum()
+            col for col in df_nw.columns if not col.replace("_", "").isalnum()
         ]
         if invalid_columns:
             self.logger.error(f"Invalid column names: {invalid_columns}")
@@ -120,11 +122,10 @@ class DataManager(BaseSchemaManager):
 
     # Méthode de validation de la mise à jour des données
     def _validate_update(
-        self, df: IntoDataFrame, merge_keys: list[str], **kwargs
+        self, df: IntoDataFrame, merge_keys: list[str], **kwargs: Any
     ) -> bool:
         """Validate data update parameters."""
         # Validation de l'insertion
-
         if not self._validate_insert(df, **kwargs):
             return False
         # Vérification de l'existence des clés d'appariement
@@ -133,8 +134,10 @@ class DataManager(BaseSchemaManager):
             self.logger.error("Merge keys cannot be empty for update operation")
             return False
 
+        # Conversion vers narwhals pour accéder à .columns de façon sûre
+        df_nw = nw.from_native(df, eager_only=True)
         # Vérification que les clés d'appariement existent dans le DataFrame
-        missing_keys = [key for key in merge_keys if key not in df.columns]
+        missing_keys = [key for key in merge_keys if key not in df_nw.columns]
         if missing_keys:
             # Logging
             self.logger.error(f"Merge keys not found in DataFrame: {missing_keys}")
@@ -144,13 +147,13 @@ class DataManager(BaseSchemaManager):
 
     # Méthode de validation de la mise à jour et l'insertion de données
     def _validate_upsert(
-        self, df: IntoDataFrame, merge_keys: list[str], **kwargs
+        self, df: IntoDataFrame, merge_keys: list[str], **kwargs: Any
     ) -> bool:
         """Validate data upsert parameters."""
         return self._validate_update(df, merge_keys, **kwargs)
 
     # Méthode de validation de la suppression de données
-    def _validate_delete(self, filters: str | list | None, **kwargs) -> bool:
+    def _validate_delete(self, filters: str | list[Any] | None, **kwargs: Any) -> bool:
         """Validate data deletion parameters."""
 
         # Vérification de la spécification des filtres
@@ -163,7 +166,7 @@ class DataManager(BaseSchemaManager):
 
     # Méthode de validation de l'ajout d'une colonne
     def _validate_add_column(
-        self, column_name: str, df: IntoDataFrame, **kwargs
+        self, column_name: str, df: IntoDataFrame, **kwargs: Any
     ) -> bool:
         """Validate column addition parameters."""
         # Vérification que le nom est valide
@@ -171,15 +174,17 @@ class DataManager(BaseSchemaManager):
             # logging
             self.logger.error("Column name cannot be empty")
             return False
+        # Conversion vers narwhals pour accéder à .columns de façon sûre
+        df_nw = nw.from_native(df, eager_only=True)
         # Vérification que le nom de colonne n'est pas présent dans le jeu de données
-        if column_name not in df.columns:
+        if column_name not in df_nw.columns:
             self.logger.error(f"Column {column_name} not found in DataFrame")
             return False
 
         return True
 
     # Méthode de validation de la suppression de colonnes de la table des faits
-    def _validate_drop_column(self, columns: list[str], **kwargs) -> bool:
+    def _validate_drop_column(self, columns: list[str], **kwargs: Any) -> bool:
         """Validate column drop parameters."""
         # Vérification de la spécification des colonnes
         if not columns:
@@ -368,9 +373,8 @@ class DataManager(BaseSchemaManager):
 
         try:
             # Comptage initial
-            initial_count = self.conn.execute(
-                "SELECT COUNT(*) FROM fact_table"
-            ).fetchone()[0]
+            _r1 = self.conn.execute("SELECT COUNT(*) FROM fact_table").fetchone()
+            initial_count = _r1[0] if _r1 is not None else 0
 
             # Construction de la clause WHERE
             where_clause = _build_where_clause(filters)
@@ -384,9 +388,8 @@ class DataManager(BaseSchemaManager):
             self.conn.execute(delete_query)
 
             # Comptage final
-            final_count = self.conn.execute(
-                "SELECT COUNT(*) FROM fact_table"
-            ).fetchone()[0]
+            _r2 = self.conn.execute("SELECT COUNT(*) FROM fact_table").fetchone()
+            final_count = _r2[0] if _r2 is not None else 0
             rows_deleted = initial_count - final_count
 
             # Logging

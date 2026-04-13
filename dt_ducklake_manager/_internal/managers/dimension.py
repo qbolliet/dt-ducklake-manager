@@ -4,6 +4,7 @@ import os
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
+from typing import Any
 
 # DuckDB
 import duckdb
@@ -66,7 +67,7 @@ class DimensionManager(BaseSchemaManager):
         self._dimension_lock = threading.RLock()
 
     # Méthode de validation de l'opération
-    def validate_operation(self, operation_type: str, **kwargs) -> bool:
+    def validate_operation(self, operation_type: str, **kwargs: Any) -> bool:
         """
         Validate dimension operations before execution.
 
@@ -93,7 +94,7 @@ class DimensionManager(BaseSchemaManager):
 
     # Méthode de validation de la création de dimensions
     def _validate_create_dimension(
-        self, column_name: str, values: nw.Series, **kwargs
+        self, column_name: str, values: nw.Series[Any], **kwargs: Any
     ) -> bool:
         """Validate dimension creation parameters."""
         # Validation du nom de colonne
@@ -111,13 +112,13 @@ class DimensionManager(BaseSchemaManager):
 
     # Méthode de validation de la mise à jour de dimensions
     def _validate_update_dimension(
-        self, column_name: str, values: nw.Series, **kwargs
+        self, column_name: str, values: nw.Series[Any], **kwargs: Any
     ) -> bool:
         """Validate dimension update parameters."""
         return self._validate_create_dimension(column_name, values, **kwargs)
 
     # Méthode de validation de la suppresion de dimension
-    def _validate_delete_dimension(self, column_name: str, **kwargs) -> bool:
+    def _validate_delete_dimension(self, column_name: str, **kwargs: Any) -> bool:
         """Validate dimension deletion parameters."""
         if not column_name or column_name.strip() == "":
             self.logger.error("Column name cannot be empty")
@@ -127,7 +128,7 @@ class DimensionManager(BaseSchemaManager):
 
     # Méthode de validation de la conversion d'une dimension
     def _validate_convert_dimension(
-        self, column_name: str, values: nw.Series, **kwargs
+        self, column_name: str, values: nw.Series[Any], **kwargs: Any
     ) -> bool:
         """Validate dimension conversion parameters."""
         return self._validate_create_dimension(column_name, values, **kwargs)

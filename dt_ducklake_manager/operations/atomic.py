@@ -11,6 +11,7 @@ from typing import Any
 
 # DuckDB
 import duckdb
+import narwhals as nw
 from narwhals.typing import IntoDataFrame
 
 # Import des gestionnaires
@@ -97,13 +98,13 @@ class AtomicOperationResult:
     execution_time: float
     backup_created: str | None = None
     validation_passed: bool = True
-    operations_performed: list[str] = None
+    operations_performed: list[str] | None = None
     error_message: str | None = None
     rollback_performed: bool = False
-    recommendations: list[str] = None
-    metrics: dict[str, Any] = None
+    recommendations: list[str] | None = None
+    metrics: dict[str, Any] | None = None
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         if self.operations_performed is None:
             self.operations_performed = []
         if self.recommendations is None:
@@ -136,8 +137,8 @@ class AtomicDatabaseOperations:
         self,
         connection: duckdb.DuckDBPyConnection | None = None,
         categorical_threshold: int | None = 50,
-        log_filename: os.PathLike | None = None,
-        backup_dir: os.PathLike | None = None,
+        log_filename: str | os.PathLike[str] | None = None,
+        backup_dir: str | os.PathLike[str] | None = None,
         default_batch_size: int = 10000,
         default_max_workers: int = 4,
     ):
@@ -233,10 +234,12 @@ class AtomicDatabaseOperations:
             config = AtomicOperationConfig(AtomicOperationType.BATCH_UPDATE)
 
         start_time = time.time()
+        # Conversion vers narwhals pour les opérations nécessitant len()
+        _update_nw = nw.from_native(update_data, eager_only=True)
 
         try:
             self.logger.info(
-                f"Starting atomic batch update with {len(update_data)} rows"
+                f"Starting atomic batch update with {len(_update_nw)} rows"
             )
 
             # Pré-validation si activée
@@ -271,7 +274,7 @@ class AtomicDatabaseOperations:
                 update_data,
                 check_duplicates_db=True,
                 check_duplicates_update=True,
-                use_batch_processing=(len(update_data) > batch_size),
+                use_batch_processing=(len(_update_nw) > batch_size),
                 use_transaction=True,
             )
 
@@ -313,13 +316,13 @@ class AtomicDatabaseOperations:
                 backup_created=backup_id,
                 validation_passed=validation_passed,
                 operations_performed=[
-                    f"Updated {len(update_data)} rows",
+                    f"Updated {len(_update_nw)} rows",
                     "Metadata updated",
                     "Dimensions updated",
                     "Fact table updated",
                 ],
                 metrics={
-                    "rows_processed": len(update_data),
+                    "rows_processed": len(_update_nw),
                     "batch_size_used": batch_size,
                     "parallel_workers_used": parallel_workers,
                 },
@@ -349,7 +352,7 @@ class AtomicDatabaseOperations:
 
     def execute_schema_migration(
         self,
-        migration_operations: list[Callable],
+        migration_operations: list[Callable[..., Any]],
         config: AtomicOperationConfig | None = None,
     ) -> AtomicOperationResult:
         """
@@ -777,10 +780,12 @@ class AtomicDatabaseOperations:
         config.enable_backup = True  # Ensure backup is always enabled
 
         start_time = time.time()
+        # Conversion vers narwhals pour les opérations nécessitant len()
+        _update_nw2 = nw.from_native(update_data, eager_only=True)
 
         try:
             self.logger.info(
-                f"Starting atomic backup and update with {len(update_data)} rows"
+                f"Starting atomic backup and update with {len(_update_nw2)} rows"
             )
 
             # Étape 1: Création de la sauvegarde
@@ -884,7 +889,7 @@ class AtomicDatabaseOperations:
             >>> print(f"Active transactions: {status['active_transactions']}")
         """
         try:
-            status = {
+            status: dict[str, Any] = {
                 "timestamp": datetime.now(),
                 "active_transactions": len(
                     self.transaction_mgr.list_active_transactions()
