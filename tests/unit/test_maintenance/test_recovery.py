@@ -9,7 +9,7 @@ from dt_ducklake_manager.maintenance import (
     RecoveryOperation,
     RecoveryStrategy,
 )
-from dt_ducklake_manager.maintenance.recovery import BackupType, RecoveryResult
+from dt_ducklake_manager.maintenance.recovery import RecoveryResult
 
 # ===========================================================================
 # Tests des dataclasses
@@ -124,7 +124,6 @@ def test_create_recovery_point(recovery_manager):
         recovery_manager: DatabaseRecoveryManager fixture.
     """
     recovery_id = recovery_manager.create_recovery_point(
-        backup_type=BackupType.METADATA_BACKUP,
         description="Test recovery point",
     )
     # Vérification que l'identifiant est bien retourné
@@ -142,7 +141,6 @@ def test_list_recovery_points_after_creation(recovery_manager):
     """
     # Création d'un point de récupération
     recovery_manager.create_recovery_point(
-        backup_type=BackupType.METADATA_BACKUP,
         description="Test point",
     )
 
@@ -161,7 +159,6 @@ def test_delete_recovery_point(recovery_manager):
     """
     # Création d'un point de récupération à supprimer
     recovery_id = recovery_manager.create_recovery_point(
-        backup_type=BackupType.METADATA_BACKUP,
         description="Point à supprimer",
     )
     assert recovery_id is not None
@@ -184,14 +181,11 @@ def test_create_schema_backup(recovery_manager):
         recovery_manager: DatabaseRecoveryManager fixture.
     """
     recovery_id = recovery_manager.create_recovery_point(
-        backup_type=BackupType.METADATA_BACKUP,
         description="Schema backup test",
     )
     assert recovery_id is not None
 
-    # Vérification du type de backup
-    points = recovery_manager.list_recovery_points(
-        backup_type=BackupType.METADATA_BACKUP
-    )
+    # Vérification que le point est bien listé
+    points = recovery_manager.list_recovery_points()
     assert len(points) >= 1
-    assert points[0].backup_type == BackupType.METADATA_BACKUP
+    assert any(p.recovery_id == recovery_id for p in points)

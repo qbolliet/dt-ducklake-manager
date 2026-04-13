@@ -14,7 +14,6 @@ import duckdb
 import polars as pl
 
 from .._internal.managers.dimension import DimensionManager
-from ..operations.deleter import DatabaseDeleter
 
 # Import des utilitaires
 from ..utils.logger import _init_logger
@@ -49,21 +48,6 @@ class RecoveryStrategy(Enum):
     VALIDATE_AND_FIX = "validate_and_fix"
 
 
-# Classe des types de sauvegarde possibles
-# Seule la sauvegarde des métadonnées est conservée : DuckLake gère nativement
-# l'historique complet des données via ses snapshots, rendant les sauvegardes CSV
-# redondantes pour les tables de faits et de dimensions.
-class BackupType(Enum):
-    """Available backup types for recovery points.
-
-    Only ``METADATA_BACKUP`` is retained. Full-data backups are superseded by
-    DuckLake's native snapshot history, which provides immutable time-travel
-    access to every previous state of the catalog.
-    """
-
-    METADATA_BACKUP = "metadata_backup"
-
-
 # Classe de point de récupération de la base de données
 @dataclass
 class RecoveryPoint:
@@ -73,7 +57,6 @@ class RecoveryPoint:
     Attributes:
         recovery_id (str): Unique identifier of the recovery point
         timestamp (float): Creation timestamp
-        backup_type (BackupType): Type of backup
         backup_path (str): Path to the backup files
         metadata (dict): Metadata about the database state
         validation_report (Optional[ValidationReport]): Validation report at the time of
@@ -83,7 +66,6 @@ class RecoveryPoint:
 
     recovery_id: str
     timestamp: float
-    backup_type: BackupType
     backup_path: str
     metadata: dict = field(default_factory=dict)
     validation_report: Any | None = None
@@ -226,20 +208,17 @@ class DatabaseRecoveryManager:
     # Méthode de création d'un point de récupération
     def create_recovery_point(
         self,
-        backup_type: BackupType = BackupType.METADATA_BACKUP,
         description: str = "",
         force_validation: bool = True,
     ) -> str | None:
         """
         Create a metadata recovery point with optional pre-validation.
 
-        Only ``BackupType.METADATA_BACKUP`` is supported : it exports the
-        ``metadata`` table to CSV and writes a system health snapshot to JSON.
-        For full data recovery, rely on DuckLake's native snapshot history via
-        ``USE_SNAPSHOT_HISTORY``.
+        Exports the ``metadata`` table to CSV and writes a system health snapshot
+        to JSON. For full data recovery, rely on DuckLake's native snapshot history
+        via ``USE_SNAPSHOT_HISTORY``.
 
         Args:
-            backup_type: Must be ``BackupType.METADATA_BACKUP`` (only supported type).
             description: Human-readable description of the recovery point.
             force_validation: Whether to run a standard validation before backup.
 
@@ -288,7 +267,6 @@ class DatabaseRecoveryManager:
             recovery_point = RecoveryPoint(
                 recovery_id=recovery_id,
                 timestamp=timestamp,
-                backup_type=backup_type,
                 backup_path=str(backup_path),
                 metadata=self._collect_database_metadata(),
                 validation_report=validation_report,
@@ -305,9 +283,7 @@ class DatabaseRecoveryManager:
             self._cleanup_old_recovery_points()
 
             # Logging
-            self.logger.info(
-                f"Created recovery point {recovery_id} ({backup_type.value})"
-            )
+            self.logger.info(f"Created recovery point {recovery_id}")
             return recovery_id
 
         except Exception as e:
@@ -316,30 +292,21 @@ class DatabaseRecoveryManager:
             return None
 
     # Méthode d'énumération des points de récupération
-    def list_recovery_points(
-        self, backup_type: BackupType | None = None
-    ) -> list[RecoveryPoint]:
+    def list_recovery_points(self) -> list[RecoveryPoint]:
         """
         List available recovery points.
-
-        Args:
-            backup_type: Filter by backup type (None for all)
 
         Returns:
             List of recovery points sorted by timestamp (newest first)
 
         Example:
-            >>> points = recovery_mgr.list_recovery_points(BackupType.FULL_BACKUP)
+            >>> points = recovery_mgr.list_recovery_points()
             >>> for point in points:
             ...     print(f"{point.recovery_id}: {point.description}")
         """
         try:
             # Extraction des points de récupération
             points = list(self._recovery_points.values())
-
-            # Filtrage par type si spécifié
-            if backup_type:
-                points = [p for p in points if p.backup_type == backup_type]
 
             # Tri par timestamp décroissant
             points.sort(key=lambda p: p.timestamp, reverse=True)
@@ -438,8 +405,7 @@ class DatabaseRecoveryManager:
             pre_recovery_point = None
             if operation.strategy == RecoveryStrategy.REPAIR_SCHEMA:
                 pre_recovery_point = self.create_recovery_point(
-                    BackupType.METADATA_BACKUP,
-                    f"Auto-backup before {operation.strategy.value}",
+                    description=f"Auto-backup before {operation.strategy.value}",
                 )
 
             # Exécution de la stratégie de récupération
@@ -1087,6 +1053,10 @@ class DatabaseRecoveryManager:
             # Initialisation de la liste des opérations appliquées au jeu de données
             operations_performed = []
 
+            # Import local pour éviter l'import circulaire :
+            # recovery → operations/__init__ → atomic → recovery
+            from ..operations.deleter import DatabaseDeleter
+
             # Utilisation du deleter pour nettoyer
             deleter = DatabaseDeleter(
                 self.conn,
@@ -1433,7 +1403,6 @@ class DatabaseRecoveryManager:
             data = {
                 "recovery_id": recovery_point.recovery_id,
                 "timestamp": recovery_point.timestamp,
-                "backup_type": recovery_point.backup_type.value,
                 "backup_path": recovery_point.backup_path,
                 "metadata": recovery_point.metadata,
                 "description": recovery_point.description,
@@ -1482,7 +1451,6 @@ class DatabaseRecoveryManager:
                             recovery_point = RecoveryPoint(
                                 recovery_id=data["recovery_id"],
                                 timestamp=data["timestamp"],
-                                backup_type=BackupType(data["backup_type"]),
                                 backup_path=data["backup_path"],
                                 metadata=data.get("metadata", {}),
                                 description=data.get("description", ""),
