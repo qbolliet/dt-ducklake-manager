@@ -286,7 +286,7 @@ class DuckLakeTablesBuilder:
                     f"ALTER TABLE {table_name} SET PARTITIONED BY"
                     f" ({', '.join(partition_by)})"
                 )
-                
+
                 # Logging
                 self.logger.info(
                     f"The fact_table is successfully partitionned among"

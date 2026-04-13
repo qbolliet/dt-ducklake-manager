@@ -205,6 +205,158 @@ class DuckLakeMaintenance:
             self.logger.warning(f"cleanup_files failed for {schema} : {e}")
 
     # ---------------------------------------------------------------------------
+    # Méthodes de gestion du partitionnement
+    # ---------------------------------------------------------------------------
+
+    # Définition ou remplacement du partitionnement d'une table
+    def set_partitioned_by(
+        self,
+        table: str,
+        partition_by: list[str],
+        schema: str = "main",
+    ) -> None:
+        """
+        Set or replace the partition keys of an existing DuckLake table.
+
+        Executes ``ALTER TABLE … SET PARTITIONED BY`` with the provided keys.
+        Only data written *after* this call will be stored in the new partition
+        layout; existing files are unaffected (see ``repartition`` to force a
+        physical rewrite).
+
+        Supported partition expressions (passed as plain strings):
+
+        - column name — ``'country'``
+        - time transforms — ``'year(ts)'``, ``'month(ts)'``,
+                            ``'day(ts)'``, ``'hour(ts)'``
+        - hash distribution — ``'bucket(8, user_id)'``
+
+        Args:
+            table (str): Table name (e.g. ``'fact_table'``).
+            partition_by (list[str]): Non-empty list of partition expressions.
+            schema (str): DuckLake schema name. Defaults to ``'main'``.
+
+        Raises:
+            ValueError: If ``partition_by`` is empty.
+
+        Examples:
+            >>> maint.set_partitioned_by('fact_table', ['country'])
+            >>> maint.set_partitioned_by('fact_table', ['year(date_col)', 'country'])
+            >>> maint.set_partitioned_by('fact_table', ['bucket(8, user_id)'])
+        """
+        # Validation : au moins une clé de partitionnement est requise
+        if not partition_by:
+            raise ValueError(
+                "partition_by ne peut pas être vide. "
+                "Pour supprimer le partitionnement, utilisez reset_partitioned_by()."
+            )
+
+        # Construction et exécution du DDL
+        cols = ", ".join(partition_by)
+        self.conn.execute(
+            f"ALTER TABLE {schema}.{table} SET PARTITIONED BY ({cols})"
+        )
+
+        # Logging
+        self.logger.info(
+            f"Partitionning defined on {schema}.{table} : ({cols})"
+        )
+
+    # Suppression du partitionnement d'une table
+    def reset_partitioned_by(
+        self,
+        table: str,
+        schema: str = "main",
+    ) -> None:
+        """
+        Remove all partition keys from an existing DuckLake table.
+
+        Executes ``ALTER TABLE … RESET PARTITIONED BY``. Subsequent writes
+        will produce unpartitioned files; existing files are unaffected.
+
+        Args:
+            table (str): Table name (e.g. ``'fact_table'``).
+            schema (str): DuckLake schema name. Defaults to ``'main'``.
+
+        Examples:
+            >>> maint.reset_partitioned_by('fact_table')
+        """
+        # Suppression de la définition de partitionnement
+        self.conn.execute(f"ALTER TABLE {schema}.{table} RESET PARTITIONED BY")
+
+        # Logging
+        self.logger.info(
+            f"Partitionning removed on {schema}.{table}"
+        )
+
+    # Réinitialisation et application d'un nouveau partitionnement
+    def repartition(
+        self,
+        table: str,
+        partition_by: list[str] | None = None,
+        schema: str = "main",
+        run_maintenance: bool = True,
+    ) -> None:
+        """
+        Reset the current partitioning and optionally apply a new one.
+
+        Orchestrates three steps in order:
+
+        1. ``reset_partitioned_by`` — clears the existing partition definition.
+        2. ``set_partitioned_by`` — applies the new keys (skipped if
+           ``partition_by`` is ``None``).
+        3. ``merge_files`` + ``rewrite_data_files`` — rewrites existing Parquet
+           files so they adopt the new layout (only when ``run_maintenance=True``).
+
+        Note: DuckLake only partitions *newly written* data by default.
+        Pass ``run_maintenance=True`` (the default) to also rewrite the existing
+        files into the new partition structure.
+
+        Args:
+            table (str): Table name (e.g. ``'fact_table'``).
+            partition_by (Optional[list[str]]): New partition keys. Pass ``None``
+                to remove partitioning without defining a replacement.
+            schema (str): DuckLake schema name. Defaults to ``'main'``.
+            run_maintenance (bool): Whether to trigger ``merge_files`` and
+                ``rewrite_data_files`` after changing the partition definition.
+                Defaults to ``True``.
+
+        Examples:
+            >>> # Chang partition keys
+            >>> maint.repartition(
+            >>>     'fact_table',
+            >>>     partition_by=['year(date_col)', 'country']
+            >>> )
+            >>> # Remove partitioning
+            >>> maint.repartition('fact_table', partition_by=None)
+            >>> # Change without rewriting the existing files
+            >>> maint.repartition('fact_table', ['country'], run_maintenance=False)
+        """
+        # Logging de début d'opération
+        self.logger.info(
+            f"Begin the repartition of {schema}.{table} "
+            f"— new partition keys : {partition_by}"
+        )
+
+        # Étape 1 : suppression du partitionnement courant
+        self.reset_partitioned_by(table, schema=schema)
+
+        # Étape 2 : application du nouveau partitionnement (si fourni)
+        if partition_by is not None:
+            self.set_partitioned_by(table, partition_by, schema=schema)
+
+        # Étape 3 : réécriture physique des fichiers existants dans la nouvelle
+        # structure, afin que les données déjà présentes bénéficient également du
+        # nouveau layout de partitionnement.
+        if run_maintenance:
+            self.merge_files(schema, table)
+            self.rewrite_data_files(schema, table)
+
+        # Logging de fin d'opération
+        self.logger.info(
+            f"The reparttition of {schema}.{table} is completed"
+        )
+
+    # ---------------------------------------------------------------------------
     # Méthode de maintenance complète
     # ---------------------------------------------------------------------------
 

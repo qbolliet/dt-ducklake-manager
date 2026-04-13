@@ -233,3 +233,176 @@ def test_full_maintenance_continues_on_step_failure(maint, ducklake_conn):
     assert "rewrite_data_files" in call_log
     assert "expire_snapshots" in call_log
     assert "cleanup_files" in call_log
+
+
+# ---------------------------------------------------------------------------
+# Tests de set_partitioned_by
+# ---------------------------------------------------------------------------
+
+
+# Test que set_partitioned_by applique le DDL sans erreur
+def test_set_partitioned_by_simple(maint, ducklake_conn):
+    """Test that set_partitioned_by executes ALTER TABLE without raising.
+
+    Args:
+        maint: DuckLakeMaintenance fixture.
+        ducklake_conn: Fixture providing (connection, table_name).
+    """
+    conn, table = ducklake_conn
+    # Aucune exception ne doit être levée
+    maint.set_partitioned_by(table, ["id"])
+
+
+# Test que set_partitioned_by lève ValueError sur liste vide
+def test_set_partitioned_by_empty_raises(maint, ducklake_conn):
+    """Test that set_partitioned_by raises ValueError when partition_by is empty.
+
+    Args:
+        maint: DuckLakeMaintenance fixture.
+        ducklake_conn: Fixture providing (connection, table_name).
+    """
+    _, table = ducklake_conn
+    with pytest.raises(ValueError, match="partition_by ne peut pas être vide"):
+        maint.set_partitioned_by(table, [])
+
+
+# Test que set_partitioned_by accepte plusieurs clés
+def test_set_partitioned_by_multiple_keys(maint, ducklake_conn):
+    """Test that set_partitioned_by accepts a list with multiple partition keys.
+
+    Args:
+        maint: DuckLakeMaintenance fixture.
+        ducklake_conn: Fixture providing (connection, table_name).
+    """
+    conn, table = ducklake_conn
+    # id et value sont toutes les deux des colonnes valides de fact_table
+    maint.set_partitioned_by(table, ["id", "value"])
+
+
+# ---------------------------------------------------------------------------
+# Tests de reset_partitioned_by
+# ---------------------------------------------------------------------------
+
+
+# Test que reset_partitioned_by supprime le partitionnement sans erreur
+def test_reset_partitioned_by(maint, ducklake_conn):
+    """Test that reset_partitioned_by executes RESET PARTITIONED BY without raising.
+
+    Args:
+        maint: DuckLakeMaintenance fixture.
+        ducklake_conn: Fixture providing (connection, table_name).
+    """
+    conn, table = ducklake_conn
+    # On définit d'abord un partitionnement pour avoir quelque chose à supprimer
+    maint.set_partitioned_by(table, ["id"])
+    # La suppression ne doit pas lever d'exception
+    maint.reset_partitioned_by(table)
+
+
+# Test que reset_partitioned_by fonctionne même sans partitionnement préalable
+def test_reset_partitioned_by_without_prior_partitioning(maint, ducklake_conn):
+    """Test that reset_partitioned_by succeeds even if no partitioning was defined.
+
+    Args:
+        maint: DuckLakeMaintenance fixture.
+        ducklake_conn: Fixture providing (connection, table_name).
+    """
+    _, table = ducklake_conn
+    # La table de test n'a pas de partitionnement défini.
+    # Le reset doit quand même passer
+    maint.reset_partitioned_by(table)
+
+
+# ---------------------------------------------------------------------------
+# Tests de repartition
+# ---------------------------------------------------------------------------
+
+
+# Test de repartition avec changement de clé
+def test_repartition_change_key(maint, ducklake_conn):
+    """Test that repartition resets and applies new partition keys.
+
+    Args:
+        maint: DuckLakeMaintenance fixture.
+        ducklake_conn: Fixture providing (connection, table_name).
+    """
+    conn, table = ducklake_conn
+    # Partitionnement initial
+    maint.set_partitioned_by(table, ["id"])
+    # Repartitionnement sur une autre colonne, sans réécriture pour accélérer le test
+    maint.repartition(table, partition_by=["value"], run_maintenance=False)
+
+
+# Test de repartition avec suppression du partitionnement (partition_by=None)
+def test_repartition_remove_partitioning(maint, ducklake_conn):
+    """Test that repartition with partition_by=None removes partitioning entirely.
+
+    Args:
+        maint: DuckLakeMaintenance fixture.
+        ducklake_conn: Fixture providing (connection, table_name).
+    """
+    conn, table = ducklake_conn
+    maint.set_partitioned_by(table, ["id"])
+    # Suppression sans nouveau partitionnement
+    maint.repartition(table, partition_by=None, run_maintenance=False)
+
+
+# Test que repartition déclenche merge_files
+# et rewrite_data_files quand run_maintenance=True
+def test_repartition_with_maintenance(maint, ducklake_conn):
+    """Test that repartition triggers merge_files
+    and rewrite_data_files when run_maintenance=True.
+
+    Args:
+        maint: DuckLakeMaintenance fixture.
+        ducklake_conn: Fixture providing (connection, table_name).
+    """
+    _, table = ducklake_conn
+    call_log: list = []
+
+    original_merge = maint.merge_files
+    original_rewrite = maint.rewrite_data_files
+
+    def tracking_merge(schema, tbl):
+        call_log.append("merge_files")
+        original_merge(schema, tbl)
+
+    def tracking_rewrite(schema, tbl):
+        call_log.append("rewrite_data_files")
+        original_rewrite(schema, tbl)
+
+    maint.merge_files = tracking_merge
+    maint.rewrite_data_files = tracking_rewrite
+
+    maint.repartition(table, partition_by=["id"], run_maintenance=True)
+
+    # Vérification que les deux méthodes de maintenance ont bien été appelées
+    assert "merge_files" in call_log
+    assert "rewrite_data_files" in call_log
+
+
+# Test que repartition ne déclenche pas la maintenance quand run_maintenance=False
+def test_repartition_without_maintenance(maint, ducklake_conn):
+    """Test that repartition skips maintenance calls when run_maintenance=False.
+
+    Args:
+        maint: DuckLakeMaintenance fixture.
+        ducklake_conn: Fixture providing (connection, table_name).
+    """
+    _, table = ducklake_conn
+    call_log: list = []
+
+    def tracking_merge(schema, tbl):
+        call_log.append("merge_files")
+
+    def tracking_rewrite(schema, tbl):
+        call_log.append("rewrite_data_files")
+
+    maint.merge_files = tracking_merge
+    maint.rewrite_data_files = tracking_rewrite
+
+    maint.repartition(table, partition_by=["id"], run_maintenance=False)
+
+    # Aucune méthode de maintenance ne doit avoir été appelée
+    assert "merge_files" not in call_log
+    assert "rewrite_data_files" not in call_log
