@@ -15,9 +15,13 @@ dependencies = [
 
 [dependency-groups]
 dev = [
+    "bump-my-version>=0.33.0",
+    "git-cliff>=2.8.0",
     "ipykernel>=6.29.5",
+    "mypy>=1.15.0",
     "pandas>=3.0.2",
     "pytest>=8.3.4",
+    "ruff>=0.11.0",
 ]
 docs = [
     "mkdocs>=1.6.1,<2",
@@ -37,9 +41,39 @@ markers = [
     "slow: tests that take a long time to run",
 ]
 
+[tool.ruff]
+line-length = 88
+target-version = "py313"
+
+[tool.ruff.lint]
+select = ["E", "W", "F", "I", "N", "UP"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S101"]
+
+[tool.mypy]
+python_version = "3.13"
+strict = true
+ignore_missing_imports = true
+
+[tool.bumpversion]
+current_version = "0.1.0"
+commit = false
+tag = true
+tag_name = "v{new_version}"
+
+[[tool.bumpversion.files]]
+filename = "pyproject.toml"
+search = 'version = "{current_version}"'
+replace = 'version = "{new_version}"'
+
 [tool.uv.scripts]
-test = "pytest"
+test = "pytest -m 'not integration'"
 test-integration = "pytest -m integration"
+lint = "ruff check ."
+format = "ruff format ."
+typecheck = "mypy dt_ducklake_manager/"
+changelog = "git-cliff --output CHANGELOG.md"
 
 [build-system]
 requires = ["hatchling"]
