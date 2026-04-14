@@ -1,1 +1,0 @@
-::: dt_ducklake_manager.storage.local.saver.save_local

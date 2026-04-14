@@ -186,7 +186,7 @@ class DatabaseDeleter(BaseSchemaManager):
             filters: Filter conditions (string SQL condition or structured filters)
             use_transaction: Whether to use database transactions
             perform_cleanup: Whether to cleanup orphaned data (None = use auto_cleanup
-            setting)
+                setting)
             compact_after_update: Whether to run DuckLake compaction (merge small delta
                 files and rewrite delete files) immediately after a successful deletion.
                 Adds write latency but keeps read performance optimal. Defaults to True.
@@ -1049,9 +1049,9 @@ class DatabaseDeleter(BaseSchemaManager):
 
         Args:
             columns: Columns to analyze for deletion impact (None for no column
-            analysis)
+                analysis)
             filters: Row filters to analyze for deletion impact (None for no row
-            analysis)
+                analysis)
 
         Returns:
             Dictionary containing impact analysis

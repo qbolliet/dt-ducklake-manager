@@ -61,7 +61,7 @@ class RecoveryPoint:
         backup_path (str): Path to the backup files
         metadata (dict): Metadata about the database state
         validation_report (Optional[ValidationReport]): Validation report at the time of
-        backup
+            backup
         description (str): Description of the recovery point
     """
 
@@ -371,7 +371,7 @@ class DatabaseRecoveryManager:
         Args:
             operation: Recovery operation to perform
             confirm_destructive: Confirm destructive operations (required for some
-            strategies)
+                strategies)
 
         Returns:
             RecoveryResult with operation details

@@ -323,7 +323,7 @@ class DatabaseAuditor:
 
         Args:
             operation_type: Type of operation ('insert', 'update', 'delete',
-            'schema_change')
+                'schema_change')
             **kwargs: Operation-specific parameters
 
         Returns:

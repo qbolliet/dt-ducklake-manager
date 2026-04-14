@@ -110,9 +110,9 @@ class DuckLakeTablesBuilder:
 
         Args:
             table_name (Optional[str]): Name of the metadata table in DuckDB. Defaults
-            to 'metadata'.
+                to 'metadata'.
             column_labels (Optional[Dict[str, str]]): Optional mapping of column names
-            to labels.
+                to labels.
 
         """
         # Création de la table des méta-données si elle n'existe pas déjà
@@ -165,9 +165,9 @@ class DuckLakeTablesBuilder:
 
         Args:
             table_prefix (Optional[str]): Prefix for dimension table names. Defaults to
-            'dim_'.
+                'dim_'.
             column_labels (Optional[Dict[str, str]]): Optional mapping of column names
-            to labels.
+                to labels.
 
         """
         # Création du dictionnaire des tables de dimensions si elles n'existent pas déjà
@@ -224,14 +224,14 @@ class DuckLakeTablesBuilder:
 
         Args:
             table_name (Optional[str]): Name of the fact table in DuckDB. Defaults to
-            'fact_table'.
+                'fact_table'.
             table_prefix (Optional[str]): Prefix for dimension table names. Defaults to
-            'dim_'.
+                'dim_'.
             column_labels (Optional[Dict[str, str]]): Optional mapping of column names
-            to labels.
+                to labels.
             partition_by (Optional[List[str]]): Column names to partition the table by
-            using
-                DuckLake's Hive-style partitioning. Defaults to None (no partitioning).
+                using DuckLake's Hive-style partitioning. Defaults to None (no
+                partitioning).
 
         Examples:
             >>> builder.create_duckdb_fact_table()
@@ -347,19 +347,19 @@ class DuckLakeTablesBuilder:
 
         Args:
             metadata_table (Optional[str]): Name of the metadata table. Defaults to
-            'metadata'.
+                'metadata'.
             fact_table (Optional[str]): Name of the fact table. Defaults to
-            'fact_table'.
+                'fact_table'.
             dim_table_prefix (Optional[str]): Prefix for dimension tables. Defaults to
-            'dim_'.
+                'dim_'.
             column_labels (Optional[Dict[str, str]]): Optional mapping of column names
-            to labels.
+                to labels.
             check_duplicates (bool): Whether to check and remove duplicates. Defaults to
-            True.
+                True.
             keep (Literal['any', 'none', 'first', 'last']): Which duplicates to keep.
-            Defaults to 'none'.
+                Defaults to 'none'.
             partition_by (Optional[List[str]]): Column names to partition the fact table
-            by.
+                by.
                 Passed through to ``create_duckdb_fact_table()``. Defaults to None.
 
         Examples:

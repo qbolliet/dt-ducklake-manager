@@ -1,1 +1,0 @@
-::: dt_ducklake_manager.builders.tables.DuckdbTablesBuilder

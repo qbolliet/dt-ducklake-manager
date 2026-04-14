@@ -75,7 +75,7 @@ class DataManager(BaseSchemaManager):
 
         Args:
             operation_type: Type of operation ('insert', 'update', 'upsert', 'delete',
-            'add_column', 'drop_column')
+                'add_column', 'drop_column')
             **kwargs: Operation-specific parameters
 
         Returns:
@@ -308,7 +308,7 @@ class DataManager(BaseSchemaManager):
         Args:
             df: DataFrame containing data to upsert
             merge_keys: Columns used to identify existing records (if None, uses all
-            common columns)
+                common columns)
             use_batch: Whether to use batch processing for large datasets
 
         Returns:

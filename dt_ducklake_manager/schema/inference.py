@@ -32,8 +32,7 @@ class SchemaBuilder:
     Attributes:
         df (nw.DataFrame): The input dataset (converted to narwhals).
         categorical_threshold (int): Threshold for determining if a column is
-        categorical
-                                     based on the number of unique modalities.
+            categorical based on the number of unique modalities.
         logger (logging.Logger): Logger instance for tracking processing steps.
     """
 
