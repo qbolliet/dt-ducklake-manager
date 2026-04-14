@@ -1,90 +1,84 @@
-# Database schema builder for dashboard template
+# dt-ducklake-manager
 
-This directory contains utilities to build a specific generic database scheme from a table.
-> Full documentation is available [here](https://qbolliet.github.io/dashboard-template-database/)
+Utilities to build and manage a DuckLake database from a tabular dataset, designed for dashboard and ML prediction pipelines.
+
+> Full documentation is available [here](https://qbolliet.github.io/dt-ducklake-manager/)
 
 ## Objectives
 
-This package is built to create :
-* a generic schema to store a a table as a database ;
-* export this schema a relational DuckDB database.
+This package provides a complete lifecycle for a DuckLake database:
 
-## Organization
+- **Build** a structured schema from any tabular dataset
+- **Update** the database with new or modified observations (upsert)
+- **Delete** rows based on filter conditions
+- **Audit & validate** database integrity at configurable levels
+- **Maintain** physical storage (file compaction, snapshot expiry)
 
-The repository is organized as follow :
+The schema is built around a **fact table**, a **metadata table**, and **dimension tables** for low-cardinality categorical columns.
 
-* the `docs` folder contains all the package documentation and descriptions of the database scheme
-* the `logs` folder contains the logging files associated with the builders
-* the `notebooks` folder contains illustrative notebooks
-* the `outputs` folder contains program outputs.
-* the `parameters` folder contains default labels for naming columns.
-* the `scripts` folder contains a script for building a database from the table and with the paramters listed in the `config.yaml` file at the root.
+Input dataframes are handled via [narwhals](https://narwhals-dev.github.io/narwhals/), making the package compatible with pandas, polars, and any other narwhals-supported backend.
 
 ## Installation
 
-### Package and dependencies
-
 ```bash
-git clone https://github.com/qbolliet/dashboard-template-database.git
-poetry install
+git clone https://github.com/qbolliet/dt-ducklake-manager.git
+uv sync
 ```
-
-The package is then usable as any other python package.
-
-### Parametrisation
-
-File in the `config.yaml` file :
-```yaml
-INPUT_DATA : '../data/df_origin.csv'
-OUTPUT_DATA : '../outputs/database.db'
-THRESHOLD : 200
-``` 
 
 ### Documentation
 
-To visualize the documentation :
-```
-poetry install --with docs
-```
-
-```
-mkdocs build --port 5000
+```bash
+uv sync --group docs
+mkdocs serve --port 5000
 ```
 
 ## Usage
 
-Here's an example of how to use the functions in the package:
-
 ```python
 import pandas as pd
-from dashboard_template_database.builders.schema import SchemaBuilder
-from dashboard_template_database.builders.tables import DuckdbTablesBuilder
-from dashboard_template_database.loaders.local.loader import Loader
+from dt_ducklake_manager.connection import DuckLakeConnector
+from dt_ducklake_manager.schema import DuckLakeTablesBuilder
+from dt_ducklake_manager.operations import DatabaseUpdater, DatabaseDeleter
+from dt_ducklake_manager.maintenance import DatabaseAuditor, DuckLakeMaintenance, ValidationLevel
 
-# Load a sample DataFrame
-loader = Loader()
-sample_data = pd.DataFrame({
-    'Name': ['Alice', 'Bob', 'Charlie'],
-    'Age': [25, 30, 35],
-    'City': ['Paris', 'Berlin', 'Madrid']
+# 1. Build the schema from an initial dataset
+df = pd.DataFrame({
+    "id": [1, 2, 3],
+    "city": ["Paris", "Berlin", "Madrid"],
+    "score": [0.9, 0.7, 0.5],
 })
+connector = DuckLakeConnector(catalog_path="outputs/database.db")
+builder = DuckLakeTablesBuilder(connector=connector, df=df, categorical_threshold=200)
+builder.build_schema()
 
-# Initialize the SchemaBuilder
-schema_builder = SchemaBuilder(df=sample_data, categorical_threshold=3)
+# 2. Update the database with new observations (upsert)
+df_new = pd.DataFrame({"id": [2, 4], "city": ["Lyon", "Rome"], "score": [0.8, 0.6]})
+updater = DatabaseUpdater(connector=connector)
+updater.update_database(df=df_new)
 
-# Build the schema
-metadata, dimension_tables, fact_table = schema_builder.build()
+# 3. Delete rows matching a condition
+deleter = DatabaseDeleter(connector=connector)
+deleter.delete_rows(conditions=[("score", "<", 0.6)])
 
-# Initialize the DuckDB tables builder
-duckdb_builder = DuckdbTablesBuilder(df=sample_data)
+# 4. Audit database integrity
+auditor = DatabaseAuditor(connector=connector)
+report = auditor.validate_database(level=ValidationLevel.STANDARD)
+print(report)
 
-# Create the schema in DuckDB
-duckdb_builder.build_duckdb_schema()
+# 5. Run full maintenance (compaction, snapshot expiry)
+maintenance = DuckLakeMaintenance(connector=connector)
+maintenance.full_maintenance()
+```
 
-# Display the schema in DuckDB
-duckdb_builder.display_schema()
-``` 
+More detailed examples and parametrization walkthroughs are available in the `notebooks/` folder.
+
+## Organization
+
+- `docs/` — package documentation and database schema description
+- `logs/` — logging files produced by the builders
+- `notebooks/` — illustrative notebooks covering various use cases
+- `outputs/` — program outputs
 
 ## License
 
-The package is licensed under the MIT License.
+MIT

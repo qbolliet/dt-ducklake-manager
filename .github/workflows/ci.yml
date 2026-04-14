@@ -1,0 +1,51 @@
+name: CI
+
+on:
+  push:
+    branches-ignore:
+      - main
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  lint:
+    name: Lint & Type check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.13"
+
+      - name: Installer les dépendances de développement
+        run: uv sync --group dev
+
+      - name: Vérification du style (ruff)
+        run: uv run ruff check .
+
+      - name: Vérification du formatage (ruff)
+        run: uv run ruff format --check .
+
+      - name: Vérification des types (mypy)
+        run: uv run mypy dt_ducklake_manager/
+
+  test:
+    name: Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.13"
+
+      - name: Installer les dépendances de développement
+        run: uv sync --group dev
+
+      - name: Exécution des tests unitaires
+        run: uv run pytest -m "not integration"
+
+      - name: Exécution des tests d'intégration
+        run: uv run pytest -m integration

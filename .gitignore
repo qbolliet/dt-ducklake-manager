@@ -165,3 +165,10 @@ outputs/*
 # logs
 logs/*
 !logs/.gitkeep
+
+# claude
+CLAUDE.md
+.claude/
+
+# TODO
+TODO

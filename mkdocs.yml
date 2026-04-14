@@ -1,107 +1,122 @@
-site_name: Dashboard Template Database
-site_url: https://qbolliet.github.io/dashboard-template-database/
-repo_url: https://github.com/qbolliet/dashboard-template-database
+site_name: Ducklake Manager
+site_url: https://qbolliet.github.io/dt-ducklake-manager/
+repo_url: https://github.com/qbolliet/dt-ducklake-manager
 site_dir: site
 docs_dir: docs
 theme:
   name: material
-  pygments_style: 'lovelace'
+  pygments_style: lovelace
   logo: assets/logo.svg
   favicon: assets/logo.svg
   features:
-    - content.tabs.link
-    - content.code.annotate
-    - content.code.copy
-    - navigation.sections
-    #- navigation.expand
-    - navigation.path
+  - content.tabs.link
+  - content.code.annotate
+  - content.code.copy
+  - navigation.sections
+  - navigation.path
   palette:
-   # Palette toggle for light mode
-    - scheme: default
-      toggle:
-        icon: material/brightness-7 
-        name: Switch to dark mode
-
-    # Palette toggle for dark mode
-    - scheme: slate
-      toggle:
-        icon: material/brightness-4
-        name: Switch to light mode
-
-# extra_css:
-#   - assets/stylesheets/extra.css
-
+  - scheme: default
+    toggle:
+      icon: material/brightness-7
+      name: Switch to dark mode
+  - scheme: slate
+    toggle:
+      icon: material/brightness-4
+      name: Switch to light mode
 markdown_extensions:
-  - tables
-  - pymdownx.highlight:
-      anchor_linenums: true
-      line_spans: __span
-      pygments_lang_class: true
-  - pymdownx.inlinehilite
-  - pymdownx.snippets
-  - pymdownx.superfences
-  - markdown.extensions.sane_lists
-  - pymdownx.arithmatex:
-      generic: true
-
+- tables
+- pymdownx.highlight:
+    anchor_linenums: true
+    line_spans: __span
+    pygments_lang_class: true
+- pymdownx.inlinehilite
+- pymdownx.snippets
+- pymdownx.superfences
+- markdown.extensions.sane_lists
+- pymdownx.arithmatex:
+    generic: true
 plugins:
-  - search
-  - autorefs
-  - mkdocstrings:
-      handlers:
-        python:
-          paths: [src, docs/snippets]
-          import:
-          - https://docs.python.org/3/objects.inv
-          - https://mkdocstrings.github.io/objects.inv
-          - https://mkdocstrings.github.io/autorefs/objects.inv
-          - https://mkdocstrings.github.io/griffe/objects.inv
-          - https://python-markdown.github.io/objects.inv
-          options:
-            docstring_options:
-              ignore_init_summary: true
-            show_root_heading: true 
-            merge_init_into_class: false 
-            docstring_style: google
-            docstring_section_style: table
-            heading_level: 1
-            filters: ["!^_"]
-            inherited_members: true
-            parameter_headings: true
-            preload_modules: [mkdocstrings]
-            relative_crossrefs: true
-            scoped_crossrefs: true
-            separate_signature: true
-            show_bases: false
-            show_inheritance_diagram: true
-            show_root_full_path: false
-            show_signature_annotations: true
-            show_source: true
-            show_symbol_type_heading: false
-            show_symbol_type_toc: true
-            signature_crossrefs: true
-            summary: true
-            unwrap_annotated: true
-
+- search
+- autorefs
+- mkdocstrings:
+    handlers:
+      python:
+        paths:
+        - src
+        - docs/snippets
+        import:
+        - https://docs.python.org/3/objects.inv
+        - https://mkdocstrings.github.io/objects.inv
+        - https://mkdocstrings.github.io/autorefs/objects.inv
+        - https://mkdocstrings.github.io/griffe/objects.inv
+        - https://python-markdown.github.io/objects.inv
+        options:
+          docstring_options:
+            ignore_init_summary: true
+          show_root_heading: true
+          merge_init_into_class: false
+          docstring_style: google
+          docstring_section_style: table
+          heading_level: 1
+          filters:
+          - '!^_'
+          inherited_members: true
+          parameter_headings: true
+          preload_modules:
+          - mkdocstrings
+          relative_crossrefs: true
+          scoped_crossrefs: true
+          separate_signature: true
+          show_bases: false
+          show_inheritance_diagram: true
+          show_root_full_path: false
+          show_signature_annotations: true
+          show_source: true
+          show_symbol_type_heading: false
+          show_symbol_type_toc: true
+          signature_crossrefs: true
+          summary: true
+          unwrap_annotated: true
 extra_javascript:
-  - https://cdnjs.cloudflare.com/ajax/libs/mathjax/2.7.4/MathJax.js?config=TeX-AMS-MML_HTMLorMML
-
-
+- https://cdnjs.cloudflare.com/ajax/libs/mathjax/2.7.4/MathJax.js?config=TeX-AMS-MML_HTMLorMML
 nav:
-  - Package description: index.md
-  - API Documentation:
-    - Builders :
-      - DuckdbTablesBuilder : api/builders/tables/DuckdbTablesBuilder.md
-      - SchemaBuilder : api/builders/schema/SchemaBuilder.md
-    - Storage :
-      - Loader : api/storage/Loader.md
-      - Saver : api/storage/Saver.md
-      - Local :
-        - load_local : api/storage/local/load_local.md
-        - save_local : api/storage/local/save_local.md
-      - S3 :
-        - _S3Connection : api/storage/s3/_S3Connection.md
-        - S3Loader : api/storage/s3/S3Loader.md
-        - S3Saver : api/storage/s3/S3Saver.md
-    - Utils :
-      - _init_logger : api/utils/_init_logger.md
+- Package description: index.md
+- API Documentation:
+  - connection:
+    - DuckLakeConnector: api\connection\DuckLakeConnector.md
+  - maintenance:
+    - ValidationLevel: api\maintenance\ValidationLevel.md
+    - IssueType: api\maintenance\IssueType.md
+    - IssueSeverity: api\maintenance\IssueSeverity.md
+    - ValidationIssue: api\maintenance\ValidationIssue.md
+    - ValidationReport: api\maintenance\ValidationReport.md
+    - DatabaseAuditor: api\maintenance\DatabaseAuditor.md
+    - DuckLakeMaintenance: api\maintenance\DuckLakeMaintenance.md
+    - RecoveryStrategy: api\maintenance\RecoveryStrategy.md
+    - RecoveryPoint: api\maintenance\RecoveryPoint.md
+    - RecoveryOperation: api\maintenance\RecoveryOperation.md
+    - RecoveryResult: api\maintenance\RecoveryResult.md
+    - DatabaseRecoveryManager: api\maintenance\DatabaseRecoveryManager.md
+  - operations:
+    - AtomicOperationType: api\operations\AtomicOperationType.md
+    - AtomicOperationConfig: api\operations\AtomicOperationConfig.md
+    - AtomicOperationResult: api\operations\AtomicOperationResult.md
+    - AtomicDatabaseOperations: api\operations\AtomicDatabaseOperations.md
+    - DatabaseDeleter: api\operations\DatabaseDeleter.md
+    - DatabaseUpdater: api\operations\DatabaseUpdater.md
+  - schema:
+    - SchemaBuilder: api\schema\SchemaBuilder.md
+    - DuckLakeTablesBuilder: api\schema\DuckLakeTablesBuilder.md
+  - utils:
+    - remove_dataframe_duplicates: api\utils\remove_dataframe_duplicates.md
+    - build_database_duplicate_removal_query: api\utils\build_database_duplicate_removal_query.md
+    - map_python_to_sql_type: api\utils\map_python_to_sql_type.md
+  - _internal:
+    - managers:
+      - BaseSchemaManager: api\_internal\managers\BaseSchemaManager.md
+      - DataManager: api\_internal\managers\DataManager.md
+      - DimensionManager: api\_internal\managers\DimensionManager.md
+      - TransactionState: api\_internal\managers\TransactionState.md
+      - TransactionOperation: api\_internal\managers\TransactionOperation.md
+      - TransactionContext: api\_internal\managers\TransactionContext.md
+      - TransactionManager: api\_internal\managers\TransactionManager.md

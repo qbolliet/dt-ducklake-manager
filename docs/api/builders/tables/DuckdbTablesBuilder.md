@@ -1,1 +1,0 @@
-::: dashboard_template_database.builders.tables.DuckdbTablesBuilder
