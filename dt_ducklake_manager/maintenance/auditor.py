@@ -403,7 +403,7 @@ class DatabaseAuditor:
                         table_name=table,
                         description=f"Essential table '{table}' is missing",
                         suggested_fix=f"Create the '{table}' table with proper"
-                                      f" structure",
+                        f" structure",
                     )
                     report.add_issue(issue)
                 else:
@@ -417,7 +417,7 @@ class DatabaseAuditor:
                     table_name="fact_table",
                     description="Fact table is missing",
                     suggested_fix="Create the fact table or check if database is"
-                                  " properly initialized",
+                    " properly initialized",
                 )
                 report.add_issue(issue)
             else:
@@ -471,7 +471,7 @@ class DatabaseAuditor:
                     severity=IssueSeverity.HIGH,
                     table_name="metadata",
                     description=f"Missing required columns in metadata:"
-                                f"{missing_columns}",
+                    f"{missing_columns}",
                     suggested_fix="Add missing columns to metadata table",
                 )
                 report.add_issue(issue)
@@ -487,7 +487,7 @@ class DatabaseAuditor:
                             table_name="metadata",
                             column_name=col,
                             description=f"Found {null_count} null values in critical"
-                                        f" metadata column '{col}'",
+                            f" metadata column '{col}'",
                             suggested_fix=f"Update null values in metadata.{col}",
                             affected_rows=int(null_count),
                         )
@@ -506,7 +506,7 @@ class DatabaseAuditor:
                         table_name="metadata",
                         column_name="name",
                         description=f"Duplicate column names in metadata:"
-                                    f"{duplicate_names}",
+                        f"{duplicate_names}",
                         suggested_fix="Remove or rename duplicate entries in metadata",
                         affected_rows=len(duplicate_names),
                     )
@@ -558,9 +558,9 @@ class DatabaseAuditor:
                         table_name=dim_table_name,
                         column_name=col_name,
                         description=f"Dimension table '{dim_table_name}' missing for"
-                                    f" categorical column '{col_name}'",
+                        f" categorical column '{col_name}'",
                         suggested_fix=f"Create dimension table for '{col_name}' or"
-                                      f" update metadata",
+                        f" update metadata",
                     )
                     report.add_issue(issue)
                     continue
@@ -578,7 +578,7 @@ class DatabaseAuditor:
                         severity=IssueSeverity.HIGH,
                         table_name=dim_table_name,
                         description=f"Missing required columns in dimension table:"
-                                    f"{missing_dim_columns}",
+                        f"{missing_dim_columns}",
                         suggested_fix=f"Add missing columns to {dim_table_name}",
                     )
                     report.add_issue(issue)
@@ -600,7 +600,7 @@ class DatabaseAuditor:
                     severity=IssueSeverity.MEDIUM,
                     table_name="fact_table",
                     description=f"Columns in fact_table missing from metadata:"
-                                f"{list(missing_metadata)}",
+                    f"{list(missing_metadata)}",
                     suggested_fix="Add missing columns to metadata table",
                 )
                 report.add_issue(issue)
@@ -615,9 +615,9 @@ class DatabaseAuditor:
                     severity=IssueSeverity.MEDIUM,
                     table_name="metadata",
                     description=f"Columns in metadata not found in fact_table:"
-                                f"{list(orphaned_metadata)}",
+                    f"{list(orphaned_metadata)}",
                     suggested_fix="Remove orphaned metadata entries or add missing"
-                                  " columns to fact_table",
+                    " columns to fact_table",
                 )
                 report.add_issue(issue)
 
@@ -658,9 +658,9 @@ class DatabaseAuditor:
                     table_name="fact_table",
                     column_name=col_name,
                     description=f"Found {orphaned_count} orphaned references in"
-                                f" fact_table.{col_name}",
+                    f" fact_table.{col_name}",
                     suggested_fix=f"Update dimension table {dim_table_name} or clean"
-                                  f" orphaned references",
+                    f" orphaned references",
                     affected_rows=orphaned_count,
                 )
                 report.add_issue(issue)
@@ -682,7 +682,7 @@ class DatabaseAuditor:
                     severity=IssueSeverity.LOW,
                     table_name=dim_table_name,
                     description=f"Found {unused_count} unused dimension values in"
-                                f" {dim_table_name}",
+                    f" {dim_table_name}",
                     suggested_fix=f"Clean unused values from {dim_table_name}",
                     affected_rows=unused_count,
                 )
@@ -696,7 +696,7 @@ class DatabaseAuditor:
                 table_name=dim_table_name,
                 column_name=col_name,
                 description=f"Error validating referential integrity for {col_name}:"
-                            f"{str(e)}",
+                f"{str(e)}",
                 suggested_fix="Check column and table structure",
             )
             report.add_issue(issue)
@@ -739,9 +739,9 @@ class DatabaseAuditor:
                         table_name="fact_table",
                         column_name=col_name,
                         description=f"Type mismatch for column '{col_name}': expected"
-                                    f" {expected_sql_type}, got {actual_sql_type}",
+                        f" {expected_sql_type}, got {actual_sql_type}",
                         suggested_fix="Update metadata or alter column type in"
-                                      " fact_table",
+                        " fact_table",
                         additional_info={
                             "expected_type": expected_sql_type,
                             "actual_type": actual_sql_type,
@@ -789,7 +789,10 @@ class DatabaseAuditor:
                 unique_count = result[0] if result else 0
 
                 # Si le nombre de modalités est supérieur au seuil, renvoie un problème
-                if self.categorical_threshold is not None and unique_count > self.categorical_threshold:
+                if (
+                    self.categorical_threshold is not None
+                    and unique_count > self.categorical_threshold
+                ):
                     issue = ValidationIssue(
                         issue_type=IssueType.INVALID_DIMENSION,
                         severity=IssueSeverity.MEDIUM,
@@ -830,7 +833,10 @@ class DatabaseAuditor:
                 result = self.conn.execute(unique_count_query).fetchone()
                 unique_count = result[0] if result else 0
 
-                if self.categorical_threshold is not None and unique_count <= self.categorical_threshold:
+                if (
+                    self.categorical_threshold is not None
+                    and unique_count <= self.categorical_threshold
+                ):
                     issue = ValidationIssue(
                         issue_type=IssueType.PERFORMANCE_ISSUE,
                         severity=IssueSeverity.LOW,
@@ -891,7 +897,7 @@ class DatabaseAuditor:
                     table_name=table_name,
                     description=f"Orphaned dimension table '{table_name}' found",
                     suggested_fix=f"Remove '{table_name}' or add corresponding"
-                                  f" metadata entry",
+                    f" metadata entry",
                 )
                 report.add_issue(issue)
 
@@ -1001,7 +1007,7 @@ class DatabaseAuditor:
                 table_name="fact_table",
                 description=f"Error validating partition configuration: {str(e)}",
                 suggested_fix="Check fact_table definition and DuckDB version"
-                              " compatibility",
+                " compatibility",
             )
             report.add_issue(issue)
 
@@ -1134,9 +1140,9 @@ class DatabaseAuditor:
                         table_name="fact_table",
                         column_name=col_name,
                         description=f"Column '{col_name}' has {null_percentage:.1f}%"
-                                    f"null values",
+                        f"null values",
                         suggested_fix=f"Review data quality for column '{col_name}' or"
-                                      f" consider dropping it",
+                        f" consider dropping it",
                         affected_rows=null_count,
                         additional_info={"null_percentage": null_percentage},
                     )
@@ -1149,7 +1155,7 @@ class DatabaseAuditor:
                         column_name=col_name,
                         description=f"Column '{col_name}' contains only null values",
                         suggested_fix=f"Consider dropping column '{col_name}' or"
-                                      f" investigate data loading",
+                        f" investigate data loading",
                         affected_rows=null_count,
                     )
                     report.add_issue(issue)
@@ -1267,7 +1273,7 @@ class DatabaseAuditor:
                 table_name="fact_table",
                 description=f"Invalid column names detected: {invalid_columns}",
                 suggested_fix="Use valid column names (alphanumeric and underscores"
-                              " only)",
+                " only)",
             )
             report.add_issue(issue)
 
@@ -1304,7 +1310,7 @@ class DatabaseAuditor:
                     table_name="fact_table",
                     description=f"Primary keys not found in DataFrame: {missing_keys}",
                     suggested_fix="Ensure all primary keys are present in the"
-                                  " DataFrame",
+                    " DataFrame",
                 )
                 report.add_issue(issue)
                 return
@@ -1324,9 +1330,9 @@ class DatabaseAuditor:
                     severity=IssueSeverity.HIGH,
                     table_name="fact_table",
                     description=f"Found {duplicate_count} duplicate primary key values"
-                                f" in DataFrame",
+                    f" in DataFrame",
                     suggested_fix="Remove duplicate entries based on primary key"
-                                  " columns",
+                    " columns",
                     affected_rows=int(duplicate_count),
                 )
                 report.add_issue(issue)
@@ -1344,7 +1350,7 @@ class DatabaseAuditor:
                 table_name="fact_table",
                 description="No filters provided for delete operation",
                 suggested_fix="Provide valid filters for delete operation to avoid"
-                              " deleting all data",
+                " deleting all data",
             )
             report.add_issue(issue)
 

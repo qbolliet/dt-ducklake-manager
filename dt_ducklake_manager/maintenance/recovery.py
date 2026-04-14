@@ -648,7 +648,7 @@ class DatabaseRecoveryManager:
                     strategy_used=operation.strategy,
                     recovery_time=0,
                     error_message=f"Impossible d'interroger les snapshots DuckLake :"
-                                  f"{e}",
+                    f"{e}",
                 )
 
             snapshot_count = len(snapshots_df)
@@ -1654,7 +1654,9 @@ class DatabaseRecoveryManager:
                     f"SELECT DISTINCT {col_name} FROM fact_table WHERE {col_name} IS"
                     f" NOT NULL"
                 ).pl()[col_name]
-                dim_mgr.update_dimension_values(col_name, nw.from_native(values_pl, series_only=True))
+                dim_mgr.update_dimension_values(
+                    col_name, nw.from_native(values_pl, series_only=True)
+                )
                 self.logger.info(f"Created missing dimension table {dim_table}")
                 return True
 
@@ -1665,7 +1667,9 @@ class DatabaseRecoveryManager:
                     f"SELECT DISTINCT {col_name} FROM fact_table WHERE {col_name} IS"
                     f" NOT NULL"
                 ).pl()[col_name]
-                dim_mgr.update_dimension_values(col_name, nw.from_native(values_pl, series_only=True))
+                dim_mgr.update_dimension_values(
+                    col_name, nw.from_native(values_pl, series_only=True)
+                )
                 self.logger.info(f"Rebuilt corrupted dimension table {dim_table}")
                 return True
 

@@ -1078,7 +1078,7 @@ class AtomicDatabaseOperations:
                     operation_type=AtomicOperationType.VALIDATION_AND_REPAIR,
                     execution_time=execution_time,
                     error_message=f"Emergency recovery failed:"
-                                  f"{recovery_result.error_message}",
+                    f"{recovery_result.error_message}",
                 )
 
         except Exception as e:

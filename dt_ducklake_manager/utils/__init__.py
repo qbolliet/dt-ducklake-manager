@@ -8,5 +8,5 @@ __all__ = [
     "_init_logger",
     "remove_dataframe_duplicates",
     "build_database_duplicate_removal_query",
-    "map_python_to_sql_type"
+    "map_python_to_sql_type",
 ]

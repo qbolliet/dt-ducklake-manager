@@ -585,9 +585,7 @@ class DataManager(BaseSchemaManager):
 
             except Exception as e:
                 # Logging
-                self.logger.error(
-                    f"Error processing batch {i}-{batch_end}: {e}"
-                )
+                self.logger.error(f"Error processing batch {i}-{batch_end}: {e}")
 
         return total_inserted
 
@@ -647,9 +645,7 @@ class DataManager(BaseSchemaManager):
 
             except Exception as e:
                 # Logging
-                self.logger.error(
-                    f"Error processing upsert batch {i}-{batch_end}: {e}"
-                )
+                self.logger.error(f"Error processing upsert batch {i}-{batch_end}: {e}")
 
         return total_inserted, total_updated
 

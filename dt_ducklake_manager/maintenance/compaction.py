@@ -256,14 +256,10 @@ class DuckLakeMaintenance:
 
         # Construction et exécution du DDL
         cols = ", ".join(partition_by)
-        self.conn.execute(
-            f"ALTER TABLE {schema}.{table} SET PARTITIONED BY ({cols})"
-        )
+        self.conn.execute(f"ALTER TABLE {schema}.{table} SET PARTITIONED BY ({cols})")
 
         # Logging
-        self.logger.info(
-            f"Partitionning defined on {schema}.{table} : ({cols})"
-        )
+        self.logger.info(f"Partitionning defined on {schema}.{table} : ({cols})")
 
     # Suppression du partitionnement d'une table
     def reset_partitioned_by(
@@ -288,9 +284,7 @@ class DuckLakeMaintenance:
         self.conn.execute(f"ALTER TABLE {schema}.{table} RESET PARTITIONED BY")
 
         # Logging
-        self.logger.info(
-            f"Partitionning removed on {schema}.{table}"
-        )
+        self.logger.info(f"Partitionning removed on {schema}.{table}")
 
     # Réinitialisation et application d'un nouveau partitionnement
     def repartition(
@@ -356,9 +350,7 @@ class DuckLakeMaintenance:
             self.rewrite_data_files(schema, table)
 
         # Logging de fin d'opération
-        self.logger.info(
-            f"The reparttition of {schema}.{table} is completed"
-        )
+        self.logger.info(f"The reparttition of {schema}.{table} is completed")
 
     # ---------------------------------------------------------------------------
     # Méthode de maintenance complète

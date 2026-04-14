@@ -183,7 +183,9 @@ class TransactionManager(BaseSchemaManager):
             return False
 
     # Méthode de validation d'un commit de transaction
-    def _validate_commit(self, transaction_id: str | None = None, **kwargs: Any) -> bool:
+    def _validate_commit(
+        self, transaction_id: str | None = None, **kwargs: Any
+    ) -> bool:
         """Validate transaction commit parameters."""
         # Vérification que la transaction possède un identifiant et n'est plus active
         if transaction_id and transaction_id not in self._active_transactions:
@@ -193,7 +195,9 @@ class TransactionManager(BaseSchemaManager):
         return True
 
     # Méthode de validation d'un rollback de transaction
-    def _validate_rollback(self, transaction_id: str | None = None, **kwargs: Any) -> bool:
+    def _validate_rollback(
+        self, transaction_id: str | None = None, **kwargs: Any
+    ) -> bool:
         """Validate transaction rollback parameters."""
         # Vérification que la transaction possède un identifiant et n'est plus active
         if transaction_id and transaction_id not in self._active_transactions:

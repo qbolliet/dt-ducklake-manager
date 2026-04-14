@@ -135,7 +135,9 @@ class DimensionManager(BaseSchemaManager):
 
     # Méthodes principales de gestion des dimensions
     # Méthode de création de la table de dimensions
-    def create_dimension_table(self, dimension_name: str, values: nw.Series[Any]) -> bool:
+    def create_dimension_table(
+        self, dimension_name: str, values: nw.Series[Any]
+    ) -> bool:
         """
         Create a new dimension table with unique values.
 
@@ -198,7 +200,9 @@ class DimensionManager(BaseSchemaManager):
                 return False
 
     # Méthode de mise à jour d'une table de dimension
-    def update_dimension_values(self, dimension_name: str, values: nw.Series[Any]) -> int:
+    def update_dimension_values(
+        self, dimension_name: str, values: nw.Series[Any]
+    ) -> int:
         """
         Update dimension table with new values.
 

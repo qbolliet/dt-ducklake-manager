@@ -741,8 +741,7 @@ class DatabaseDeleter(BaseSchemaManager):
 
             # Filtrage des colonnes non-catégorielles de type String (narwhals)
             non_categorical_names = metadata.filter(
-                (~nw.col("is_categorical"))
-                & (nw.col("python_type") == "String")
+                (~nw.col("is_categorical")) & (nw.col("python_type") == "String")
             )["name"].to_list()
 
             # Parcours des colonnes candidates
@@ -1041,7 +1040,9 @@ class DatabaseDeleter(BaseSchemaManager):
     # Méthode d'évaluation de l'impact sur la base de données d'une opération de
     # suppression
     def get_deletion_impact(
-        self, columns: list[str] | None = None, filters: str | list[Any] | dict[Any, Any] | None = None
+        self,
+        columns: list[str] | None = None,
+        filters: str | list[Any] | dict[Any, Any] | None = None,
     ) -> dict[str, Any]:
         """
         Analyze the impact of a potential deletion operation.

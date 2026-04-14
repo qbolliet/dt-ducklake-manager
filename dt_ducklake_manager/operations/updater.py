@@ -600,8 +600,7 @@ class DatabaseUpdater(BaseSchemaManager):
             # Colonnes non-catégorielles de type String (ex-'object' pandas) :
             # candidates à conversion
             non_cat_string_names = current_metadata.filter(
-                (~nw.col("is_categorical"))
-                & (nw.col("python_type") == "String")
+                (~nw.col("is_categorical")) & (nw.col("python_type") == "String")
             )["name"].to_list()
 
             categorical_columns = {
@@ -1018,7 +1017,9 @@ class DatabaseUpdater(BaseSchemaManager):
 
     # Méthodes utilitaires
     # Méthode auxiliaire de préparation du jeu de données pour la table des faits
-    def _prepare_dataframe_for_fact_table(self, df: nw.DataFrame[Any]) -> nw.DataFrame[Any]:
+    def _prepare_dataframe_for_fact_table(
+        self, df: nw.DataFrame[Any]
+    ) -> nw.DataFrame[Any]:
         """Prepare DataFrame for fact table insertion.
 
         Converts categorical columns to their dimension table values
@@ -1103,7 +1104,9 @@ class DatabaseUpdater(BaseSchemaManager):
 
     # Méthode auxiliaire de suppression des doublons des données de mise à jour
     def _remove_update_duplicates(
-        self, update_df: nw.DataFrame[Any], keep: Literal["any", "none", "first", "last"]
+        self,
+        update_df: nw.DataFrame[Any],
+        keep: Literal["any", "none", "first", "last"],
     ) -> bool:
         """Remove duplicates from update DataFrame.
 
@@ -1116,9 +1119,7 @@ class DatabaseUpdater(BaseSchemaManager):
         """
         try:
             # Cette méthode modifie le DataFrame en place via la référence
-            _ = remove_dataframe_duplicates(
-                update_df, keep, self.logger, "update"
-            )
+            _ = remove_dataframe_duplicates(update_df, keep, self.logger, "update")
             return True
         except Exception as e:
             # Logging
@@ -1127,7 +1128,9 @@ class DatabaseUpdater(BaseSchemaManager):
 
     # Méthode auxiliaire de nettoyage des données mises à jour
     def _get_cleaned_update_data(
-        self, update_df: nw.DataFrame[Any], keep: Literal["any", "none", "first", "last"]
+        self,
+        update_df: nw.DataFrame[Any],
+        keep: Literal["any", "none", "first", "last"],
     ) -> nw.DataFrame[Any]:
         """Get deduplicated update data.
 
