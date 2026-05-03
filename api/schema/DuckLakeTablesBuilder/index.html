@@ -17,7 +17,7 @@
       
       
       <link rel="icon" href="../../../assets/logo.svg">
-      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.1">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.6">
     
     
       
@@ -1962,7 +1962,7 @@ instantiating this class.</p>
           <tr class="doc-section-item">
             <td><code><span title="dt_ducklake_manager.schema.persistence.DuckLakeTablesBuilder.logger">logger</span></code></td>
             <td>
-                  <code><a class="autorefs autorefs-external" title="logging.Logger" href="https://docs.python.org/3/library/logging.html#logging.Logger">Logger</a></code>
+                  <code><span title="logging.Logger">Logger</span></code>
             </td>
             <td>
               <div class="doc-md-description">
@@ -2872,7 +2872,7 @@ instantiating this class.</p>
 
 
 
-  <div class="doc doc-children">
+<div class="doc doc-children">
 
 
 
@@ -2892,13 +2892,13 @@ instantiating this class.</p>
 
 </h2>
 <div class="language-python doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nf">build_schema</span><span class="p">(</span>
-</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>    <span class="n"><a class="autorefs autorefs-internal" title="metadata_table (dt_ducklake_manager.schema.persistence.DuckLakeTablesBuilder.build_schema(metadata_table))" href="#dt_ducklake_manager.schema.persistence.DuckLakeTablesBuilder.build_schema(metadata_table)">metadata_table</a></span><span class="p">:</span> <span class="n"><a class="autorefs autorefs-external" href="https://docs.python.org/3/library/stdtypes.html#str">str</a></span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="s2">&quot;metadata&quot;</span><span class="p">,</span>
-</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>    <span class="n"><a class="autorefs autorefs-internal" title="fact_table (dt_ducklake_manager.schema.persistence.DuckLakeTablesBuilder.build_schema(fact_table))" href="#dt_ducklake_manager.schema.persistence.DuckLakeTablesBuilder.build_schema(fact_table)">fact_table</a></span><span class="p">:</span> <span class="n"><a class="autorefs autorefs-external" href="https://docs.python.org/3/library/stdtypes.html#str">str</a></span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="s2">&quot;fact_table&quot;</span><span class="p">,</span>
-</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>    <span class="n"><a class="autorefs autorefs-internal" title="dim_table_prefix (dt_ducklake_manager.schema.persistence.DuckLakeTablesBuilder.build_schema(dim_table_prefix))" href="#dt_ducklake_manager.schema.persistence.DuckLakeTablesBuilder.build_schema(dim_table_prefix)">dim_table_prefix</a></span><span class="p">:</span> <span class="n"><a class="autorefs autorefs-external" href="https://docs.python.org/3/library/stdtypes.html#str">str</a></span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="s2">&quot;dim_&quot;</span><span class="p">,</span>
-</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>    <span class="n"><a class="autorefs autorefs-internal" title="column_labels (dt_ducklake_manager.schema.persistence.DuckLakeTablesBuilder.build_schema(column_labels))" href="#dt_ducklake_manager.schema.persistence.DuckLakeTablesBuilder.build_schema(column_labels)">column_labels</a></span><span class="p">:</span> <span class="n"><a class="autorefs autorefs-external" href="https://docs.python.org/3/library/stdtypes.html#dict">dict</a></span><span class="p">[</span><span class="n"><a class="autorefs autorefs-external" href="https://docs.python.org/3/library/stdtypes.html#str">str</a></span><span class="p">,</span> <span class="n"><a class="autorefs autorefs-external" href="https://docs.python.org/3/library/stdtypes.html#str">str</a></span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
-</span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a>    <span class="n"><a class="autorefs autorefs-internal" title="check_duplicates (dt_ducklake_manager.schema.persistence.DuckLakeTablesBuilder.build_schema(check_duplicates))" href="#dt_ducklake_manager.schema.persistence.DuckLakeTablesBuilder.build_schema(check_duplicates)">check_duplicates</a></span><span class="p">:</span> <span class="n"><a class="autorefs autorefs-external" href="https://docs.python.org/3/library/functions.html#bool">bool</a></span> <span class="o">=</span> <span class="kc">True</span><span class="p">,</span>
-</span><span id="__span-0-7"><a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a>    <span class="n"><a class="autorefs autorefs-internal" title="keep (dt_ducklake_manager.schema.persistence.DuckLakeTablesBuilder.build_schema(keep))" href="#dt_ducklake_manager.schema.persistence.DuckLakeTablesBuilder.build_schema(keep)">keep</a></span><span class="p">:</span> <span class="n"><a class="autorefs autorefs-external" title="typing.Literal" href="https://docs.python.org/3/library/typing.html#typing.Literal">Literal</a></span><span class="p">[</span><span class="s2">&quot;any&quot;</span><span class="p">,</span> <span class="s2">&quot;none&quot;</span><span class="p">,</span> <span class="s2">&quot;first&quot;</span><span class="p">,</span> <span class="s2">&quot;last&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="s2">&quot;none&quot;</span><span class="p">,</span>
-</span><span id="__span-0-8"><a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a>    <span class="n"><a class="autorefs autorefs-internal" title="partition_by (dt_ducklake_manager.schema.persistence.DuckLakeTablesBuilder.build_schema(partition_by))" href="#dt_ducklake_manager.schema.persistence.DuckLakeTablesBuilder.build_schema(partition_by)">partition_by</a></span><span class="p">:</span> <span class="n"><a class="autorefs autorefs-external" href="https://docs.python.org/3/library/stdtypes.html#list">list</a></span><span class="p">[</span><span class="n"><a class="autorefs autorefs-external" href="https://docs.python.org/3/library/stdtypes.html#str">str</a></span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>    <span class="n"><a class="autorefs autorefs-internal" title="metadata_table (dt_ducklake_manager.schema.persistence.DuckLakeTablesBuilder.build_schema(metadata_table))" href="#dt_ducklake_manager.schema.persistence.DuckLakeTablesBuilder.build_schema(metadata_table)">metadata_table</a></span><span class="p">:</span> <span class="n"><span title="str">str</span></span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="s2">&quot;metadata&quot;</span><span class="p">,</span>
+</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>    <span class="n"><a class="autorefs autorefs-internal" title="fact_table (dt_ducklake_manager.schema.persistence.DuckLakeTablesBuilder.build_schema(fact_table))" href="#dt_ducklake_manager.schema.persistence.DuckLakeTablesBuilder.build_schema(fact_table)">fact_table</a></span><span class="p">:</span> <span class="n"><span title="str">str</span></span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="s2">&quot;fact_table&quot;</span><span class="p">,</span>
+</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>    <span class="n"><a class="autorefs autorefs-internal" title="dim_table_prefix (dt_ducklake_manager.schema.persistence.DuckLakeTablesBuilder.build_schema(dim_table_prefix))" href="#dt_ducklake_manager.schema.persistence.DuckLakeTablesBuilder.build_schema(dim_table_prefix)">dim_table_prefix</a></span><span class="p">:</span> <span class="n"><span title="str">str</span></span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="s2">&quot;dim_&quot;</span><span class="p">,</span>
+</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>    <span class="n"><a class="autorefs autorefs-internal" title="column_labels (dt_ducklake_manager.schema.persistence.DuckLakeTablesBuilder.build_schema(column_labels))" href="#dt_ducklake_manager.schema.persistence.DuckLakeTablesBuilder.build_schema(column_labels)">column_labels</a></span><span class="p">:</span> <span class="n"><span title="dict">dict</span></span><span class="p">[</span><span class="n"><span title="str">str</span></span><span class="p">,</span> <span class="n"><span title="str">str</span></span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+</span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a>    <span class="n"><a class="autorefs autorefs-internal" title="check_duplicates (dt_ducklake_manager.schema.persistence.DuckLakeTablesBuilder.build_schema(check_duplicates))" href="#dt_ducklake_manager.schema.persistence.DuckLakeTablesBuilder.build_schema(check_duplicates)">check_duplicates</a></span><span class="p">:</span> <span class="n"><span title="bool">bool</span></span> <span class="o">=</span> <span class="kc">True</span><span class="p">,</span>
+</span><span id="__span-0-7"><a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a>    <span class="n"><a class="autorefs autorefs-internal" title="keep (dt_ducklake_manager.schema.persistence.DuckLakeTablesBuilder.build_schema(keep))" href="#dt_ducklake_manager.schema.persistence.DuckLakeTablesBuilder.build_schema(keep)">keep</a></span><span class="p">:</span> <span class="n"><span title="typing.Literal">Literal</span></span><span class="p">[</span><span class="s2">&quot;any&quot;</span><span class="p">,</span> <span class="s2">&quot;none&quot;</span><span class="p">,</span> <span class="s2">&quot;first&quot;</span><span class="p">,</span> <span class="s2">&quot;last&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="s2">&quot;none&quot;</span><span class="p">,</span>
+</span><span id="__span-0-8"><a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a>    <span class="n"><a class="autorefs autorefs-internal" title="partition_by (dt_ducklake_manager.schema.persistence.DuckLakeTablesBuilder.build_schema(partition_by))" href="#dt_ducklake_manager.schema.persistence.DuckLakeTablesBuilder.build_schema(partition_by)">partition_by</a></span><span class="p">:</span> <span class="n"><span title="list">list</span></span><span class="p">[</span><span class="n"><span title="str">str</span></span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
 </span><span id="__span-0-9"><a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span>
 </span></code></pre></div>
 
@@ -2924,7 +2924,7 @@ tables.</p>
 <h3 id="dt_ducklake_manager.schema.persistence.DuckLakeTablesBuilder.build_schema(metadata_table)" class="doc doc-heading doc-heading-parameter">                  <code>metadata_table</code>
 </h3>            </td>
             <td>
-                  <code><span title="Optional">Optional</span>[<a class="autorefs autorefs-external" href="https://docs.python.org/3/library/stdtypes.html#str">str</a>]</code>
+                  <code><span title="Optional">Optional</span>[<span title="str">str</span>]</code>
             </td>
             <td>
               <div class="doc-md-description">
@@ -2941,7 +2941,7 @@ tables.</p>
 <h3 id="dt_ducklake_manager.schema.persistence.DuckLakeTablesBuilder.build_schema(fact_table)" class="doc doc-heading doc-heading-parameter">                  <code>fact_table</code>
 </h3>            </td>
             <td>
-                  <code><span title="Optional">Optional</span>[<a class="autorefs autorefs-external" href="https://docs.python.org/3/library/stdtypes.html#str">str</a>]</code>
+                  <code><span title="Optional">Optional</span>[<span title="str">str</span>]</code>
             </td>
             <td>
               <div class="doc-md-description">
@@ -2958,7 +2958,7 @@ tables.</p>
 <h3 id="dt_ducklake_manager.schema.persistence.DuckLakeTablesBuilder.build_schema(dim_table_prefix)" class="doc doc-heading doc-heading-parameter">                  <code>dim_table_prefix</code>
 </h3>            </td>
             <td>
-                  <code><span title="Optional">Optional</span>[<a class="autorefs autorefs-external" href="https://docs.python.org/3/library/stdtypes.html#str">str</a>]</code>
+                  <code><span title="Optional">Optional</span>[<span title="str">str</span>]</code>
             </td>
             <td>
               <div class="doc-md-description">
@@ -2975,7 +2975,7 @@ tables.</p>
 <h3 id="dt_ducklake_manager.schema.persistence.DuckLakeTablesBuilder.build_schema(column_labels)" class="doc doc-heading doc-heading-parameter">                  <code>column_labels</code>
 </h3>            </td>
             <td>
-                  <code><span title="Optional">Optional</span>[<span title="Dict">Dict</span>[<a class="autorefs autorefs-external" href="https://docs.python.org/3/library/stdtypes.html#str">str</a>, <a class="autorefs autorefs-external" href="https://docs.python.org/3/library/stdtypes.html#str">str</a>]]</code>
+                  <code><span title="Optional">Optional</span>[<span title="Dict">Dict</span>[<span title="str">str</span>, <span title="str">str</span>]]</code>
             </td>
             <td>
               <div class="doc-md-description">
@@ -2992,7 +2992,7 @@ to labels.</p>
 <h3 id="dt_ducklake_manager.schema.persistence.DuckLakeTablesBuilder.build_schema(check_duplicates)" class="doc doc-heading doc-heading-parameter">                  <code>check_duplicates</code>
 </h3>            </td>
             <td>
-                  <code><a class="autorefs autorefs-external" href="https://docs.python.org/3/library/functions.html#bool">bool</a></code>
+                  <code><span title="bool">bool</span></code>
             </td>
             <td>
               <div class="doc-md-description">
@@ -3009,7 +3009,7 @@ True.</p>
 <h3 id="dt_ducklake_manager.schema.persistence.DuckLakeTablesBuilder.build_schema(keep)" class="doc doc-heading doc-heading-parameter">                  <code>keep</code>
 </h3>            </td>
             <td>
-                  <code><a class="autorefs autorefs-external" title="typing.Literal" href="https://docs.python.org/3/library/typing.html#typing.Literal">Literal</a>[&#39;any&#39;, &#39;none&#39;, &#39;first&#39;, &#39;last&#39;]</code>
+                  <code><span title="typing.Literal">Literal</span>[&#39;any&#39;, &#39;none&#39;, &#39;first&#39;, &#39;last&#39;]</code>
             </td>
             <td>
               <div class="doc-md-description">
@@ -3026,7 +3026,7 @@ Defaults to 'none'.</p>
 <h3 id="dt_ducklake_manager.schema.persistence.DuckLakeTablesBuilder.build_schema(partition_by)" class="doc doc-heading doc-heading-parameter">                  <code>partition_by</code>
 </h3>            </td>
             <td>
-                  <code><span title="Optional">Optional</span>[<span title="List">List</span>[<a class="autorefs autorefs-external" href="https://docs.python.org/3/library/stdtypes.html#str">str</a>]]</code>
+                  <code><span title="Optional">Optional</span>[<span title="List">List</span>[<span title="str">str</span>]]</code>
             </td>
             <td>
               <div class="doc-md-description">
@@ -3225,8 +3225,8 @@ Passed through to <code>create_duckdb_fact_table()</code>. Defaults to None.</p>
 
 </h2>
 <div class="language-python doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nf">create_duckdb_dimension_tables</span><span class="p">(</span>
-</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>    <span class="n"><a class="autorefs autorefs-internal" title="table_prefix (dt_ducklake_manager.schema.persistence.DuckLakeTablesBuilder.create_duckdb_dimension_tables(table_prefix))" href="#dt_ducklake_manager.schema.persistence.DuckLakeTablesBuilder.create_duckdb_dimension_tables(table_prefix)">table_prefix</a></span><span class="p">:</span> <span class="n"><a class="autorefs autorefs-external" href="https://docs.python.org/3/library/stdtypes.html#str">str</a></span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="s2">&quot;dim_&quot;</span><span class="p">,</span>
-</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>    <span class="n"><a class="autorefs autorefs-internal" title="column_labels (dt_ducklake_manager.schema.persistence.DuckLakeTablesBuilder.create_duckdb_dimension_tables(column_labels))" href="#dt_ducklake_manager.schema.persistence.DuckLakeTablesBuilder.create_duckdb_dimension_tables(column_labels)">column_labels</a></span><span class="p">:</span> <span class="n"><a class="autorefs autorefs-external" href="https://docs.python.org/3/library/stdtypes.html#dict">dict</a></span><span class="p">[</span><span class="n"><a class="autorefs autorefs-external" href="https://docs.python.org/3/library/stdtypes.html#str">str</a></span><span class="p">,</span> <span class="n"><a class="autorefs autorefs-external" href="https://docs.python.org/3/library/stdtypes.html#str">str</a></span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>    <span class="n"><a class="autorefs autorefs-internal" title="table_prefix (dt_ducklake_manager.schema.persistence.DuckLakeTablesBuilder.create_duckdb_dimension_tables(table_prefix))" href="#dt_ducklake_manager.schema.persistence.DuckLakeTablesBuilder.create_duckdb_dimension_tables(table_prefix)">table_prefix</a></span><span class="p">:</span> <span class="n"><span title="str">str</span></span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="s2">&quot;dim_&quot;</span><span class="p">,</span>
+</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>    <span class="n"><a class="autorefs autorefs-internal" title="column_labels (dt_ducklake_manager.schema.persistence.DuckLakeTablesBuilder.create_duckdb_dimension_tables(column_labels))" href="#dt_ducklake_manager.schema.persistence.DuckLakeTablesBuilder.create_duckdb_dimension_tables(column_labels)">column_labels</a></span><span class="p">:</span> <span class="n"><span title="dict">dict</span></span><span class="p">[</span><span class="n"><span title="str">str</span></span><span class="p">,</span> <span class="n"><span title="str">str</span></span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
 </span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span>
 </span></code></pre></div>
 
@@ -3251,7 +3251,7 @@ Passed through to <code>create_duckdb_fact_table()</code>. Defaults to None.</p>
 <h3 id="dt_ducklake_manager.schema.persistence.DuckLakeTablesBuilder.create_duckdb_dimension_tables(table_prefix)" class="doc doc-heading doc-heading-parameter">                  <code>table_prefix</code>
 </h3>            </td>
             <td>
-                  <code><span title="Optional">Optional</span>[<a class="autorefs autorefs-external" href="https://docs.python.org/3/library/stdtypes.html#str">str</a>]</code>
+                  <code><span title="Optional">Optional</span>[<span title="str">str</span>]</code>
             </td>
             <td>
               <div class="doc-md-description">
@@ -3268,7 +3268,7 @@ Passed through to <code>create_duckdb_fact_table()</code>. Defaults to None.</p>
 <h3 id="dt_ducklake_manager.schema.persistence.DuckLakeTablesBuilder.create_duckdb_dimension_tables(column_labels)" class="doc doc-heading doc-heading-parameter">                  <code>column_labels</code>
 </h3>            </td>
             <td>
-                  <code><span title="Optional">Optional</span>[<span title="Dict">Dict</span>[<a class="autorefs autorefs-external" href="https://docs.python.org/3/library/stdtypes.html#str">str</a>, <a class="autorefs autorefs-external" href="https://docs.python.org/3/library/stdtypes.html#str">str</a>]]</code>
+                  <code><span title="Optional">Optional</span>[<span title="Dict">Dict</span>[<span title="str">str</span>, <span title="str">str</span>]]</code>
             </td>
             <td>
               <div class="doc-md-description">
@@ -3410,10 +3410,10 @@ to labels.</p>
 
 </h2>
 <div class="language-python doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nf">create_duckdb_fact_table</span><span class="p">(</span>
-</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>    <span class="n"><a class="autorefs autorefs-internal" title="table_name (dt_ducklake_manager.schema.persistence.DuckLakeTablesBuilder.create_duckdb_fact_table(table_name))" href="#dt_ducklake_manager.schema.persistence.DuckLakeTablesBuilder.create_duckdb_fact_table(table_name)">table_name</a></span><span class="p">:</span> <span class="n"><a class="autorefs autorefs-external" href="https://docs.python.org/3/library/stdtypes.html#str">str</a></span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="s2">&quot;fact_table&quot;</span><span class="p">,</span>
-</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>    <span class="n"><a class="autorefs autorefs-internal" title="table_prefix (dt_ducklake_manager.schema.persistence.DuckLakeTablesBuilder.create_duckdb_fact_table(table_prefix))" href="#dt_ducklake_manager.schema.persistence.DuckLakeTablesBuilder.create_duckdb_fact_table(table_prefix)">table_prefix</a></span><span class="p">:</span> <span class="n"><a class="autorefs autorefs-external" href="https://docs.python.org/3/library/stdtypes.html#str">str</a></span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="s2">&quot;dim_&quot;</span><span class="p">,</span>
-</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>    <span class="n"><a class="autorefs autorefs-internal" title="column_labels (dt_ducklake_manager.schema.persistence.DuckLakeTablesBuilder.create_duckdb_fact_table(column_labels))" href="#dt_ducklake_manager.schema.persistence.DuckLakeTablesBuilder.create_duckdb_fact_table(column_labels)">column_labels</a></span><span class="p">:</span> <span class="n"><a class="autorefs autorefs-external" href="https://docs.python.org/3/library/stdtypes.html#dict">dict</a></span><span class="p">[</span><span class="n"><a class="autorefs autorefs-external" href="https://docs.python.org/3/library/stdtypes.html#str">str</a></span><span class="p">,</span> <span class="n"><a class="autorefs autorefs-external" href="https://docs.python.org/3/library/stdtypes.html#str">str</a></span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
-</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>    <span class="n"><a class="autorefs autorefs-internal" title="partition_by (dt_ducklake_manager.schema.persistence.DuckLakeTablesBuilder.create_duckdb_fact_table(partition_by))" href="#dt_ducklake_manager.schema.persistence.DuckLakeTablesBuilder.create_duckdb_fact_table(partition_by)">partition_by</a></span><span class="p">:</span> <span class="n"><a class="autorefs autorefs-external" href="https://docs.python.org/3/library/stdtypes.html#list">list</a></span><span class="p">[</span><span class="n"><a class="autorefs autorefs-external" href="https://docs.python.org/3/library/stdtypes.html#str">str</a></span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>    <span class="n"><a class="autorefs autorefs-internal" title="table_name (dt_ducklake_manager.schema.persistence.DuckLakeTablesBuilder.create_duckdb_fact_table(table_name))" href="#dt_ducklake_manager.schema.persistence.DuckLakeTablesBuilder.create_duckdb_fact_table(table_name)">table_name</a></span><span class="p">:</span> <span class="n"><span title="str">str</span></span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="s2">&quot;fact_table&quot;</span><span class="p">,</span>
+</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>    <span class="n"><a class="autorefs autorefs-internal" title="table_prefix (dt_ducklake_manager.schema.persistence.DuckLakeTablesBuilder.create_duckdb_fact_table(table_prefix))" href="#dt_ducklake_manager.schema.persistence.DuckLakeTablesBuilder.create_duckdb_fact_table(table_prefix)">table_prefix</a></span><span class="p">:</span> <span class="n"><span title="str">str</span></span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="s2">&quot;dim_&quot;</span><span class="p">,</span>
+</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>    <span class="n"><a class="autorefs autorefs-internal" title="column_labels (dt_ducklake_manager.schema.persistence.DuckLakeTablesBuilder.create_duckdb_fact_table(column_labels))" href="#dt_ducklake_manager.schema.persistence.DuckLakeTablesBuilder.create_duckdb_fact_table(column_labels)">column_labels</a></span><span class="p">:</span> <span class="n"><span title="dict">dict</span></span><span class="p">[</span><span class="n"><span title="str">str</span></span><span class="p">,</span> <span class="n"><span title="str">str</span></span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>    <span class="n"><a class="autorefs autorefs-internal" title="partition_by (dt_ducklake_manager.schema.persistence.DuckLakeTablesBuilder.create_duckdb_fact_table(partition_by))" href="#dt_ducklake_manager.schema.persistence.DuckLakeTablesBuilder.create_duckdb_fact_table(partition_by)">partition_by</a></span><span class="p">:</span> <span class="n"><span title="list">list</span></span><span class="p">[</span><span class="n"><span title="str">str</span></span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
 </span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span>
 </span></code></pre></div>
 
@@ -3438,7 +3438,7 @@ to labels.</p>
 <h3 id="dt_ducklake_manager.schema.persistence.DuckLakeTablesBuilder.create_duckdb_fact_table(table_name)" class="doc doc-heading doc-heading-parameter">                  <code>table_name</code>
 </h3>            </td>
             <td>
-                  <code><span title="Optional">Optional</span>[<a class="autorefs autorefs-external" href="https://docs.python.org/3/library/stdtypes.html#str">str</a>]</code>
+                  <code><span title="Optional">Optional</span>[<span title="str">str</span>]</code>
             </td>
             <td>
               <div class="doc-md-description">
@@ -3455,7 +3455,7 @@ to labels.</p>
 <h3 id="dt_ducklake_manager.schema.persistence.DuckLakeTablesBuilder.create_duckdb_fact_table(table_prefix)" class="doc doc-heading doc-heading-parameter">                  <code>table_prefix</code>
 </h3>            </td>
             <td>
-                  <code><span title="Optional">Optional</span>[<a class="autorefs autorefs-external" href="https://docs.python.org/3/library/stdtypes.html#str">str</a>]</code>
+                  <code><span title="Optional">Optional</span>[<span title="str">str</span>]</code>
             </td>
             <td>
               <div class="doc-md-description">
@@ -3472,7 +3472,7 @@ to labels.</p>
 <h3 id="dt_ducklake_manager.schema.persistence.DuckLakeTablesBuilder.create_duckdb_fact_table(column_labels)" class="doc doc-heading doc-heading-parameter">                  <code>column_labels</code>
 </h3>            </td>
             <td>
-                  <code><span title="Optional">Optional</span>[<span title="Dict">Dict</span>[<a class="autorefs autorefs-external" href="https://docs.python.org/3/library/stdtypes.html#str">str</a>, <a class="autorefs autorefs-external" href="https://docs.python.org/3/library/stdtypes.html#str">str</a>]]</code>
+                  <code><span title="Optional">Optional</span>[<span title="Dict">Dict</span>[<span title="str">str</span>, <span title="str">str</span>]]</code>
             </td>
             <td>
               <div class="doc-md-description">
@@ -3489,7 +3489,7 @@ to labels.</p>
 <h3 id="dt_ducklake_manager.schema.persistence.DuckLakeTablesBuilder.create_duckdb_fact_table(partition_by)" class="doc doc-heading doc-heading-parameter">                  <code>partition_by</code>
 </h3>            </td>
             <td>
-                  <code><span title="Optional">Optional</span>[<span title="List">List</span>[<a class="autorefs autorefs-external" href="https://docs.python.org/3/library/stdtypes.html#str">str</a>]]</code>
+                  <code><span title="Optional">Optional</span>[<span title="List">List</span>[<span title="str">str</span>]]</code>
             </td>
             <td>
               <div class="doc-md-description">
@@ -3762,8 +3762,8 @@ partitioning).</p>
 
 </h2>
 <div class="language-python doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nf">create_duckdb_metadata_table</span><span class="p">(</span>
-</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>    <span class="n"><a class="autorefs autorefs-internal" title="table_name (dt_ducklake_manager.schema.persistence.DuckLakeTablesBuilder.create_duckdb_metadata_table(table_name))" href="#dt_ducklake_manager.schema.persistence.DuckLakeTablesBuilder.create_duckdb_metadata_table(table_name)">table_name</a></span><span class="p">:</span> <span class="n"><a class="autorefs autorefs-external" href="https://docs.python.org/3/library/stdtypes.html#str">str</a></span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="s2">&quot;metadata&quot;</span><span class="p">,</span>
-</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>    <span class="n"><a class="autorefs autorefs-internal" title="column_labels (dt_ducklake_manager.schema.persistence.DuckLakeTablesBuilder.create_duckdb_metadata_table(column_labels))" href="#dt_ducklake_manager.schema.persistence.DuckLakeTablesBuilder.create_duckdb_metadata_table(column_labels)">column_labels</a></span><span class="p">:</span> <span class="n"><a class="autorefs autorefs-external" href="https://docs.python.org/3/library/stdtypes.html#dict">dict</a></span><span class="p">[</span><span class="n"><a class="autorefs autorefs-external" href="https://docs.python.org/3/library/stdtypes.html#str">str</a></span><span class="p">,</span> <span class="n"><a class="autorefs autorefs-external" href="https://docs.python.org/3/library/stdtypes.html#str">str</a></span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>    <span class="n"><a class="autorefs autorefs-internal" title="table_name (dt_ducklake_manager.schema.persistence.DuckLakeTablesBuilder.create_duckdb_metadata_table(table_name))" href="#dt_ducklake_manager.schema.persistence.DuckLakeTablesBuilder.create_duckdb_metadata_table(table_name)">table_name</a></span><span class="p">:</span> <span class="n"><span title="str">str</span></span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="s2">&quot;metadata&quot;</span><span class="p">,</span>
+</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>    <span class="n"><a class="autorefs autorefs-internal" title="column_labels (dt_ducklake_manager.schema.persistence.DuckLakeTablesBuilder.create_duckdb_metadata_table(column_labels))" href="#dt_ducklake_manager.schema.persistence.DuckLakeTablesBuilder.create_duckdb_metadata_table(column_labels)">column_labels</a></span><span class="p">:</span> <span class="n"><span title="dict">dict</span></span><span class="p">[</span><span class="n"><span title="str">str</span></span><span class="p">,</span> <span class="n"><span title="str">str</span></span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
 </span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span>
 </span></code></pre></div>
 
@@ -3788,7 +3788,7 @@ partitioning).</p>
 <h3 id="dt_ducklake_manager.schema.persistence.DuckLakeTablesBuilder.create_duckdb_metadata_table(table_name)" class="doc doc-heading doc-heading-parameter">                  <code>table_name</code>
 </h3>            </td>
             <td>
-                  <code><span title="Optional">Optional</span>[<a class="autorefs autorefs-external" href="https://docs.python.org/3/library/stdtypes.html#str">str</a>]</code>
+                  <code><span title="Optional">Optional</span>[<span title="str">str</span>]</code>
             </td>
             <td>
               <div class="doc-md-description">
@@ -3805,7 +3805,7 @@ to 'metadata'.</p>
 <h3 id="dt_ducklake_manager.schema.persistence.DuckLakeTablesBuilder.create_duckdb_metadata_table(column_labels)" class="doc doc-heading doc-heading-parameter">                  <code>column_labels</code>
 </h3>            </td>
             <td>
-                  <code><span title="Optional">Optional</span>[<span title="Dict">Dict</span>[<a class="autorefs autorefs-external" href="https://docs.python.org/3/library/stdtypes.html#str">str</a>, <a class="autorefs autorefs-external" href="https://docs.python.org/3/library/stdtypes.html#str">str</a>]]</code>
+                  <code><span title="Optional">Optional</span>[<span title="Dict">Dict</span>[<span title="str">str</span>, <span title="str">str</span>]]</code>
             </td>
             <td>
               <div class="doc-md-description">
