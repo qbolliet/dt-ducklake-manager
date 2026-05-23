@@ -84,6 +84,7 @@ nav:
 - API Documentation:
   - connection:
     - DuckLakeConnector: api\connection\DuckLakeConnector.md
+    - CatalogType: api\connection\CatalogType.md
   - maintenance:
     - ValidationLevel: api\maintenance\ValidationLevel.md
     - IssueType: api\maintenance\IssueType.md

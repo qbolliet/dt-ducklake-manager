@@ -1,5 +1,6 @@
 # Importation des modules
 # Modules de base
+import logging
 import os
 
 # DuckDB
@@ -9,7 +10,7 @@ import duckdb
 import pytest
 
 # Module à tester
-from dt_ducklake_manager.connection import DuckLakeConnector
+from dt_ducklake_manager.connection import CatalogType, DuckLakeConnector
 
 # ---------------------------------------------------------------------------
 # Fonctions auxiliaires
@@ -246,3 +247,220 @@ def test_build_attach_sql_snapshot_time(ducklake_paths):
     )
     sql = connector._build_attach_sql()
     assert "SNAPSHOT_TIME '2025-01-01 00:00:00'" in sql
+
+
+# ---------------------------------------------------------------------------
+# Tests du backend PostgreSQL (construction, sans serveur Postgres requis)
+# ---------------------------------------------------------------------------
+
+
+# Connexion factice enregistrant le SQL exécuté (test de non-fuite du mot de passe)
+class _RecordingConn:
+    """Minimal stand-in for a DuckDB connection capturing executed statements."""
+
+    def __init__(self) -> None:
+        self.executed: list[str] = []
+
+    def execute(self, sql: str) -> "_RecordingConn":
+        self.executed.append(sql)
+        return self
+
+
+# Test que le backend par défaut est bien DuckDB (rétrocompatibilité)
+def test_default_catalog_type_is_duckdb(ducklake_paths):
+    """Test that the default constructor uses the DuckDB catalog backend.
+
+    Args:
+        ducklake_paths: Fixture providing (catalog_path, data_path).
+    """
+    catalog, data_dir = ducklake_paths
+    connector = DuckLakeConnector(catalog, data_dir)
+    assert connector.catalog_type == CatalogType.DUCKDB
+    assert connector.meta_secret is None
+    # Aucun secret n'est préparé pour le backend fichier
+    assert connector._secret_sql is None
+
+
+# Test que from_postgres configure correctement les attributs du connecteur
+def test_from_postgres_sets_attributes():
+    """Test that from_postgres configures the connector for the Postgres backend."""
+    connector = DuckLakeConnector.from_postgres(
+        "data/", dbname="ducklake", host="localhost", user="app", password="secret"
+    )
+    assert connector.catalog_type == CatalogType.POSTGRES
+    # Le nom de la base figure dans la cible ATTACH (non sensible)
+    assert connector.catalog_path == "postgres:dbname=ducklake"
+    assert connector.meta_secret == "ducklake_pg_secret"
+
+
+# Test que from_postgres avec identifiants prépare un secret de session
+def test_from_postgres_with_credentials_builds_secret_sql():
+    """Test that inline credentials produce a CREATE SECRET statement."""
+    connector = DuckLakeConnector.from_postgres(
+        "data/", dbname="ducklake", host="localhost", user="app", password="secret"
+    )
+    assert connector._secret_sql is not None
+    assert "CREATE OR REPLACE SECRET ducklake_pg_secret" in connector._secret_sql
+    assert "TYPE postgres" in connector._secret_sql
+    assert "DATABASE 'ducklake'" in connector._secret_sql
+    assert "HOST 'localhost'" in connector._secret_sql
+    assert "USER 'app'" in connector._secret_sql
+    assert "PASSWORD 'secret'" in connector._secret_sql
+
+
+# Test que from_postgres avec meta_secret ne crée pas de secret
+def test_from_postgres_with_meta_secret_skips_secret_creation():
+    """Test that referencing an external secret avoids any CREATE SECRET."""
+    connector = DuckLakeConnector.from_postgres(
+        "data/", dbname="ducklake", meta_secret="external_secret"
+    )
+    assert connector.meta_secret == "external_secret"
+    # Aucun identifiant ne transite par Python : pas de SQL de création de secret
+    assert connector._secret_sql is None
+
+
+# Test que les champs d'identifiants non fournis sont omis du secret
+def test_from_postgres_omits_missing_credential_fields():
+    """Test that None credential fields are omitted (libpq env fallback)."""
+    connector = DuckLakeConnector.from_postgres("data/", dbname="ducklake")
+    assert connector._secret_sql is not None
+    # Seuls TYPE et DATABASE sont présents ; le reste retombe sur l'environnement
+    assert "DATABASE 'ducklake'" in connector._secret_sql
+    assert "HOST" not in connector._secret_sql
+    assert "USER" not in connector._secret_sql
+    assert "PASSWORD" not in connector._secret_sql
+
+
+# Test de l'échappement des apostrophes dans les valeurs du secret
+def test_build_postgres_secret_sql_escapes_quotes():
+    """Test that single quotes in credentials are escaped in the secret SQL."""
+    connector = DuckLakeConnector.from_postgres(
+        "data/", dbname="ducklake", user="o'brien", password="pa'ss"
+    )
+    assert connector._secret_sql is not None
+    assert "USER 'o''brien'" in connector._secret_sql
+    assert "PASSWORD 'pa''ss'" in connector._secret_sql
+
+
+# Test de la construction de la clause ATTACH pour le backend Postgres
+def test_build_attach_sql_postgres():
+    """Test that the Postgres ATTACH SQL targets postgres and references the secret."""
+    connector = DuckLakeConnector.from_postgres(
+        "data/files/", dbname="ducklake", host="localhost"
+    )
+    sql = connector._build_attach_sql()
+    assert "ducklake:postgres:dbname=ducklake" in sql
+    assert "META_SECRET 'ducklake_pg_secret'" in sql
+    assert "DATA_PATH 'data/files/'" in sql
+    assert "READ_ONLY" not in sql
+
+
+# Test de la clause ATTACH Postgres en lecture seule
+def test_build_attach_sql_postgres_read_only():
+    """Test that read_only=True adds READ_ONLY to the Postgres ATTACH SQL."""
+    connector = DuckLakeConnector.from_postgres(
+        "data/", dbname="ducklake", meta_secret="external_secret", read_only=True
+    )
+    sql = connector._build_attach_sql()
+    assert "ducklake:postgres:dbname=ducklake" in sql
+    assert "META_SECRET 'external_secret'" in sql
+    assert "READ_ONLY" in sql
+
+
+# Test que la création du secret ne divulgue jamais le mot de passe dans les logs
+def test_apply_secret_does_not_log_password(caplog):
+    """Test that _apply_secret executes the secret SQL but never logs the password.
+
+    Args:
+        caplog: pytest fixture capturing log records.
+    """
+    connector = DuckLakeConnector.from_postgres(
+        "data/",
+        dbname="ducklake",
+        host="localhost",
+        user="app",
+        password="sup3rs3cret",
+    )
+    recording_conn = _RecordingConn()
+    with caplog.at_level(logging.INFO):
+        connector._apply_secret(recording_conn)
+
+    # Le mot de passe figure bien dans le SQL exécuté (création du secret)...
+    assert any("sup3rs3cret" in stmt for stmt in recording_conn.executed)
+    # ... mais ne doit jamais apparaître dans les logs ; seul le nom est journalisé.
+    assert "sup3rs3cret" not in caplog.text
+    assert "ducklake_pg_secret" in caplog.text
+
+
+# ---------------------------------------------------------------------------
+# Test d'intégration de concurrence PostgreSQL (serveur réel requis)
+# ---------------------------------------------------------------------------
+
+
+# Lecture des paramètres de connexion Postgres depuis l'environnement de test
+def _postgres_test_params() -> dict | None:
+    """Read PostgreSQL test connection parameters from environment variables.
+
+    Returns:
+        Optional[dict]: Connection parameters, or None when host/dbname are unset.
+    """
+    host = os.environ.get("DUCKLAKE_TEST_PG_HOST")
+    dbname = os.environ.get("DUCKLAKE_TEST_PG_DB")
+    if not host or not dbname:
+        return None
+    port = os.environ.get("DUCKLAKE_TEST_PG_PORT")
+    return {
+        "host": host,
+        "dbname": dbname,
+        "port": int(port) if port else None,
+        "user": os.environ.get("DUCKLAKE_TEST_PG_USER"),
+        "password": os.environ.get("DUCKLAKE_TEST_PG_PASSWORD"),
+    }
+
+
+# Test que lecture et écriture concurrentes coexistent sur un catalogue Postgres
+@pytest.mark.integration
+@pytest.mark.skipif(
+    _postgres_test_params() is None,
+    reason="Paramètres de connexion PostgreSQL absents (DUCKLAKE_TEST_PG_*)",
+)
+def test_postgres_concurrent_read_write(tmp_path):
+    """Test that a read-only connection coexists with a writer on a Postgres catalog.
+
+    Requires a running PostgreSQL server with an empty catalog database, configured
+    via the ``DUCKLAKE_TEST_PG_*`` environment variables.
+
+    Args:
+        tmp_path: pytest temporary directory used as DATA_PATH.
+    """
+    import uuid
+
+    params = _postgres_test_params()
+    data_dir = str(tmp_path / "data")
+    os.makedirs(data_dir)
+    # Nom de table unique pour éviter les collisions entre exécutions
+    table = f"concurrency_check_{uuid.uuid4().hex[:8]}"
+
+    # Connexion lecture-écriture : création et insertion
+    rw_conn = DuckLakeConnector.from_postgres(data_dir, **params).connect()
+    try:
+        rw_conn.execute(f"CREATE TABLE {table} (id INTEGER)")
+        rw_conn.execute(f"INSERT INTO {table} VALUES (1)")
+
+        # Connexion lecture seule ouverte pendant que l'écrivain est actif :
+        # impossible avec un catalogue fichier (verrou processus), permis ici.
+        ro_conn = DuckLakeConnector.from_postgres(
+            data_dir, read_only=True, **params
+        ).connect()
+        try:
+            count = ro_conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+            assert count == 1
+            # Toute écriture côté lecture seule doit être refusée
+            with pytest.raises(duckdb.Error):
+                ro_conn.execute(f"INSERT INTO {table} VALUES (2)")
+        finally:
+            ro_conn.close()
+    finally:
+        # Nettoyage du catalogue partagé
+        rw_conn.execute(f"DROP TABLE IF EXISTS {table}")
+        rw_conn.close()
