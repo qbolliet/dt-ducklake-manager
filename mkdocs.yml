@@ -81,6 +81,7 @@ extra_javascript:
 - https://cdnjs.cloudflare.com/ajax/libs/mathjax/2.7.4/MathJax.js?config=TeX-AMS-MML_HTMLorMML
 nav:
 - Package description: index.md
+- Architecture & trade-offs: architecture.md
 - API Documentation:
   - connection:
     - DuckLakeConnector: api\connection\DuckLakeConnector.md
