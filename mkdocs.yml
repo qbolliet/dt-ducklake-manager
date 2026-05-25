@@ -39,17 +39,17 @@ plugins:
 - search
 - autorefs
 - mkdocstrings:
-    import:
-    - https://docs.python.org/3/objects.inv
-    - https://mkdocstrings.github.io/objects.inv
-    - https://mkdocstrings.github.io/autorefs/objects.inv
-    - https://mkdocstrings.github.io/griffe/objects.inv
-    - https://python-markdown.github.io/objects.inv
     handlers:
       python:
         paths:
         - src
         - docs/snippets
+        import:
+        - https://docs.python.org/3/objects.inv
+        - https://mkdocstrings.github.io/objects.inv
+        - https://mkdocstrings.github.io/autorefs/objects.inv
+        - https://mkdocstrings.github.io/griffe/objects.inv
+        - https://python-markdown.github.io/objects.inv
         options:
           docstring_options:
             ignore_init_summary: true
@@ -84,41 +84,41 @@ nav:
 - Architecture & trade-offs: architecture.md
 - API Documentation:
   - connection:
-    - DuckLakeConnector: api\connection\DuckLakeConnector.md
-    - CatalogType: api\connection\CatalogType.md
+    - DuckLakeConnector: api/connection/DuckLakeConnector.md
+    - CatalogType: api/connection/CatalogType.md
   - maintenance:
-    - ValidationLevel: api\maintenance\ValidationLevel.md
-    - IssueType: api\maintenance\IssueType.md
-    - IssueSeverity: api\maintenance\IssueSeverity.md
-    - ValidationIssue: api\maintenance\ValidationIssue.md
-    - ValidationReport: api\maintenance\ValidationReport.md
-    - DatabaseAuditor: api\maintenance\DatabaseAuditor.md
-    - DuckLakeMaintenance: api\maintenance\DuckLakeMaintenance.md
-    - RecoveryStrategy: api\maintenance\RecoveryStrategy.md
-    - RecoveryPoint: api\maintenance\RecoveryPoint.md
-    - RecoveryOperation: api\maintenance\RecoveryOperation.md
-    - RecoveryResult: api\maintenance\RecoveryResult.md
-    - DatabaseRecoveryManager: api\maintenance\DatabaseRecoveryManager.md
+    - ValidationLevel: api/maintenance/ValidationLevel.md
+    - IssueType: api/maintenance/IssueType.md
+    - IssueSeverity: api/maintenance/IssueSeverity.md
+    - ValidationIssue: api/maintenance/ValidationIssue.md
+    - ValidationReport: api/maintenance/ValidationReport.md
+    - DatabaseAuditor: api/maintenance/DatabaseAuditor.md
+    - DuckLakeMaintenance: api/maintenance/DuckLakeMaintenance.md
+    - RecoveryStrategy: api/maintenance/RecoveryStrategy.md
+    - RecoveryPoint: api/maintenance/RecoveryPoint.md
+    - RecoveryOperation: api/maintenance/RecoveryOperation.md
+    - RecoveryResult: api/maintenance/RecoveryResult.md
+    - DatabaseRecoveryManager: api/maintenance/DatabaseRecoveryManager.md
   - operations:
-    - AtomicOperationType: api\operations\AtomicOperationType.md
-    - AtomicOperationConfig: api\operations\AtomicOperationConfig.md
-    - AtomicOperationResult: api\operations\AtomicOperationResult.md
-    - AtomicDatabaseOperations: api\operations\AtomicDatabaseOperations.md
-    - DatabaseDeleter: api\operations\DatabaseDeleter.md
-    - DatabaseUpdater: api\operations\DatabaseUpdater.md
+    - AtomicOperationType: api/operations/AtomicOperationType.md
+    - AtomicOperationConfig: api/operations/AtomicOperationConfig.md
+    - AtomicOperationResult: api/operations/AtomicOperationResult.md
+    - AtomicDatabaseOperations: api/operations/AtomicDatabaseOperations.md
+    - DatabaseDeleter: api/operations/DatabaseDeleter.md
+    - DatabaseUpdater: api/operations/DatabaseUpdater.md
   - schema:
-    - SchemaBuilder: api\schema\SchemaBuilder.md
-    - DuckLakeTablesBuilder: api\schema\DuckLakeTablesBuilder.md
+    - SchemaBuilder: api/schema/SchemaBuilder.md
+    - DuckLakeTablesBuilder: api/schema/DuckLakeTablesBuilder.md
   - utils:
-    - remove_dataframe_duplicates: api\utils\remove_dataframe_duplicates.md
-    - build_database_duplicate_removal_query: api\utils\build_database_duplicate_removal_query.md
-    - map_python_to_sql_type: api\utils\map_python_to_sql_type.md
+    - remove_dataframe_duplicates: api/utils/remove_dataframe_duplicates.md
+    - build_database_duplicate_removal_query: api/utils/build_database_duplicate_removal_query.md
+    - map_python_to_sql_type: api/utils/map_python_to_sql_type.md
   - _internal:
     - managers:
-      - BaseSchemaManager: api\_internal\managers\BaseSchemaManager.md
-      - DataManager: api\_internal\managers\DataManager.md
-      - DimensionManager: api\_internal\managers\DimensionManager.md
-      - TransactionState: api\_internal\managers\TransactionState.md
-      - TransactionOperation: api\_internal\managers\TransactionOperation.md
-      - TransactionContext: api\_internal\managers\TransactionContext.md
-      - TransactionManager: api\_internal\managers\TransactionManager.md
+      - BaseSchemaManager: api/_internal/managers/BaseSchemaManager.md
+      - DataManager: api/_internal/managers/DataManager.md
+      - DimensionManager: api/_internal/managers/DimensionManager.md
+      - TransactionState: api/_internal/managers/TransactionState.md
+      - TransactionOperation: api/_internal/managers/TransactionOperation.md
+      - TransactionContext: api/_internal/managers/TransactionContext.md
+      - TransactionManager: api/_internal/managers/TransactionManager.md
