@@ -44,7 +44,7 @@ plugins:
         paths:
         - src
         - docs/snippets
-        import:
+        inventories:
         - https://docs.python.org/3/objects.inv
         - https://mkdocstrings.github.io/objects.inv
         - https://mkdocstrings.github.io/autorefs/objects.inv
