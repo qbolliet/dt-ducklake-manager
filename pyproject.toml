@@ -7,7 +7,7 @@ requires-python = ">=3.13,<4"
 readme = "README.md"
 license = "MIT"
 dependencies = [
-    "duckdb>=1.5.2,<2",
+    "duckdb>=1.5.3,<2",
     "narwhals>=1.48.1,<2",
     "polars>=1.39.3,<2",
     "pyarrow>=23.0.1",
