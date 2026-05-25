@@ -1708,8 +1708,7 @@ catalog without touching the snapshot history.</p>
 
               <details class="mkdocstrings-source">
                 <summary>Source code in <code>dt_ducklake_manager/maintenance/recovery.py</code></summary>
-                <div class="language-python highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-30">30</a></span>
-<span class="normal"><a href="#__codelineno-0-31">31</a></span>
+                <div class="language-python highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-31">31</a></span>
 <span class="normal"><a href="#__codelineno-0-32">32</a></span>
 <span class="normal"><a href="#__codelineno-0-33">33</a></span>
 <span class="normal"><a href="#__codelineno-0-34">34</a></span>
@@ -1727,26 +1726,27 @@ catalog without touching the snapshot history.</p>
 <span class="normal"><a href="#__codelineno-0-46">46</a></span>
 <span class="normal"><a href="#__codelineno-0-47">47</a></span>
 <span class="normal"><a href="#__codelineno-0-48">48</a></span>
-<span class="normal"><a href="#__codelineno-0-49">49</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-30"><a id="__codelineno-0-30" name="__codelineno-0-30"></a><span class="k">class</span><span class="w"> </span><span class="nc">RecoveryStrategy</span><span class="p">(</span><span class="n">Enum</span><span class="p">):</span>
-</span><span id="__span-0-31"><a id="__codelineno-0-31" name="__codelineno-0-31"></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Available recovery strategies for database restoration.</span>
-</span><span id="__span-0-32"><a id="__codelineno-0-32" name="__codelineno-0-32"></a>
-</span><span id="__span-0-33"><a id="__codelineno-0-33" name="__codelineno-0-33"></a><span class="sd">    DuckLake retains a complete snapshot history. The recommended strategy for</span>
-</span><span id="__span-0-34"><a id="__codelineno-0-34" name="__codelineno-0-34"></a><span class="sd">    handling data corruption is ``USE_SNAPSHOT_HISTORY``: it lists all available</span>
-</span><span id="__span-0-35"><a id="__codelineno-0-35" name="__codelineno-0-35"></a><span class="sd">    snapshots with their timestamps and returns step-by-step instructions to</span>
-</span><span id="__span-0-36"><a id="__codelineno-0-36" name="__codelineno-0-36"></a><span class="sd">    reopen a time-travel connection via</span>
-</span><span id="__span-0-37"><a id="__codelineno-0-37" name="__codelineno-0-37"></a><span class="sd">    ``DuckLakeConnector(..., snapshot_version=N)`` and reload the data.</span>
-</span><span id="__span-0-38"><a id="__codelineno-0-38" name="__codelineno-0-38"></a>
-</span><span id="__span-0-39"><a id="__codelineno-0-39" name="__codelineno-0-39"></a><span class="sd">    For structural or consistency issues that do not require rolling back data,</span>
-</span><span id="__span-0-40"><a id="__codelineno-0-40" name="__codelineno-0-40"></a><span class="sd">    the in-place repair strategies (``REPAIR_SCHEMA``, ``REBUILD_DIMENSIONS``,</span>
-</span><span id="__span-0-41"><a id="__codelineno-0-41" name="__codelineno-0-41"></a><span class="sd">    ``CLEAN_ORPHANED_DATA``, ``VALIDATE_AND_FIX``) operate directly on the live</span>
-</span><span id="__span-0-42"><a id="__codelineno-0-42" name="__codelineno-0-42"></a><span class="sd">    catalog without touching the snapshot history.</span>
-</span><span id="__span-0-43"><a id="__codelineno-0-43" name="__codelineno-0-43"></a><span class="sd">    &quot;&quot;&quot;</span>
-</span><span id="__span-0-44"><a id="__codelineno-0-44" name="__codelineno-0-44"></a>
-</span><span id="__span-0-45"><a id="__codelineno-0-45" name="__codelineno-0-45"></a>    <span class="n">USE_SNAPSHOT_HISTORY</span> <span class="o">=</span> <span class="s2">&quot;use_snapshot_history&quot;</span>
-</span><span id="__span-0-46"><a id="__codelineno-0-46" name="__codelineno-0-46"></a>    <span class="n">REPAIR_SCHEMA</span> <span class="o">=</span> <span class="s2">&quot;repair_schema&quot;</span>
-</span><span id="__span-0-47"><a id="__codelineno-0-47" name="__codelineno-0-47"></a>    <span class="n">REBUILD_DIMENSIONS</span> <span class="o">=</span> <span class="s2">&quot;rebuild_dimensions&quot;</span>
-</span><span id="__span-0-48"><a id="__codelineno-0-48" name="__codelineno-0-48"></a>    <span class="n">CLEAN_ORPHANED_DATA</span> <span class="o">=</span> <span class="s2">&quot;clean_orphaned_data&quot;</span>
-</span><span id="__span-0-49"><a id="__codelineno-0-49" name="__codelineno-0-49"></a>    <span class="n">VALIDATE_AND_FIX</span> <span class="o">=</span> <span class="s2">&quot;validate_and_fix&quot;</span>
+<span class="normal"><a href="#__codelineno-0-49">49</a></span>
+<span class="normal"><a href="#__codelineno-0-50">50</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-31"><a id="__codelineno-0-31" name="__codelineno-0-31"></a><span class="k">class</span><span class="w"> </span><span class="nc">RecoveryStrategy</span><span class="p">(</span><span class="n">Enum</span><span class="p">):</span>
+</span><span id="__span-0-32"><a id="__codelineno-0-32" name="__codelineno-0-32"></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Available recovery strategies for database restoration.</span>
+</span><span id="__span-0-33"><a id="__codelineno-0-33" name="__codelineno-0-33"></a>
+</span><span id="__span-0-34"><a id="__codelineno-0-34" name="__codelineno-0-34"></a><span class="sd">    DuckLake retains a complete snapshot history. The recommended strategy for</span>
+</span><span id="__span-0-35"><a id="__codelineno-0-35" name="__codelineno-0-35"></a><span class="sd">    handling data corruption is ``USE_SNAPSHOT_HISTORY``: it lists all available</span>
+</span><span id="__span-0-36"><a id="__codelineno-0-36" name="__codelineno-0-36"></a><span class="sd">    snapshots with their timestamps and returns step-by-step instructions to</span>
+</span><span id="__span-0-37"><a id="__codelineno-0-37" name="__codelineno-0-37"></a><span class="sd">    reopen a time-travel connection via</span>
+</span><span id="__span-0-38"><a id="__codelineno-0-38" name="__codelineno-0-38"></a><span class="sd">    ``DuckLakeConnector(..., snapshot_version=N)`` and reload the data.</span>
+</span><span id="__span-0-39"><a id="__codelineno-0-39" name="__codelineno-0-39"></a>
+</span><span id="__span-0-40"><a id="__codelineno-0-40" name="__codelineno-0-40"></a><span class="sd">    For structural or consistency issues that do not require rolling back data,</span>
+</span><span id="__span-0-41"><a id="__codelineno-0-41" name="__codelineno-0-41"></a><span class="sd">    the in-place repair strategies (``REPAIR_SCHEMA``, ``REBUILD_DIMENSIONS``,</span>
+</span><span id="__span-0-42"><a id="__codelineno-0-42" name="__codelineno-0-42"></a><span class="sd">    ``CLEAN_ORPHANED_DATA``, ``VALIDATE_AND_FIX``) operate directly on the live</span>
+</span><span id="__span-0-43"><a id="__codelineno-0-43" name="__codelineno-0-43"></a><span class="sd">    catalog without touching the snapshot history.</span>
+</span><span id="__span-0-44"><a id="__codelineno-0-44" name="__codelineno-0-44"></a><span class="sd">    &quot;&quot;&quot;</span>
+</span><span id="__span-0-45"><a id="__codelineno-0-45" name="__codelineno-0-45"></a>
+</span><span id="__span-0-46"><a id="__codelineno-0-46" name="__codelineno-0-46"></a>    <span class="n">USE_SNAPSHOT_HISTORY</span> <span class="o">=</span> <span class="s2">&quot;use_snapshot_history&quot;</span>
+</span><span id="__span-0-47"><a id="__codelineno-0-47" name="__codelineno-0-47"></a>    <span class="n">REPAIR_SCHEMA</span> <span class="o">=</span> <span class="s2">&quot;repair_schema&quot;</span>
+</span><span id="__span-0-48"><a id="__codelineno-0-48" name="__codelineno-0-48"></a>    <span class="n">REBUILD_DIMENSIONS</span> <span class="o">=</span> <span class="s2">&quot;rebuild_dimensions&quot;</span>
+</span><span id="__span-0-49"><a id="__codelineno-0-49" name="__codelineno-0-49"></a>    <span class="n">CLEAN_ORPHANED_DATA</span> <span class="o">=</span> <span class="s2">&quot;clean_orphaned_data&quot;</span>
+</span><span id="__span-0-50"><a id="__codelineno-0-50" name="__codelineno-0-50"></a>    <span class="n">VALIDATE_AND_FIX</span> <span class="o">=</span> <span class="s2">&quot;validate_and_fix&quot;</span>
 </span></code></pre></div></td></tr></table></div>
               </details>
 

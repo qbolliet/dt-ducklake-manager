@@ -1699,8 +1699,7 @@
 
               <details class="mkdocstrings-source">
                 <summary>Source code in <code>dt_ducklake_manager/maintenance/auditor.py</code></summary>
-                <div class="language-python highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-33">33</a></span>
-<span class="normal"><a href="#__codelineno-0-34">34</a></span>
+                <div class="language-python highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-34">34</a></span>
 <span class="normal"><a href="#__codelineno-0-35">35</a></span>
 <span class="normal"><a href="#__codelineno-0-36">36</a></span>
 <span class="normal"><a href="#__codelineno-0-37">37</a></span>
@@ -1709,17 +1708,18 @@
 <span class="normal"><a href="#__codelineno-0-40">40</a></span>
 <span class="normal"><a href="#__codelineno-0-41">41</a></span>
 <span class="normal"><a href="#__codelineno-0-42">42</a></span>
-<span class="normal"><a href="#__codelineno-0-43">43</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-33"><a id="__codelineno-0-33" name="__codelineno-0-33"></a><span class="k">class</span><span class="w"> </span><span class="nc">IssueType</span><span class="p">(</span><span class="n">Enum</span><span class="p">):</span>
-</span><span id="__span-0-34"><a id="__codelineno-0-34" name="__codelineno-0-34"></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Types of issues detected during audit.&quot;&quot;&quot;</span>
-</span><span id="__span-0-35"><a id="__codelineno-0-35" name="__codelineno-0-35"></a>
-</span><span id="__span-0-36"><a id="__codelineno-0-36" name="__codelineno-0-36"></a>    <span class="n">SCHEMA_INCONSISTENCY</span> <span class="o">=</span> <span class="s2">&quot;schema_inconsistency&quot;</span>
-</span><span id="__span-0-37"><a id="__codelineno-0-37" name="__codelineno-0-37"></a>    <span class="n">DATA_INTEGRITY</span> <span class="o">=</span> <span class="s2">&quot;data_integrity&quot;</span>
-</span><span id="__span-0-38"><a id="__codelineno-0-38" name="__codelineno-0-38"></a>    <span class="n">ORPHANED_REFERENCE</span> <span class="o">=</span> <span class="s2">&quot;orphaned_reference&quot;</span>
-</span><span id="__span-0-39"><a id="__codelineno-0-39" name="__codelineno-0-39"></a>    <span class="n">TYPE_MISMATCH</span> <span class="o">=</span> <span class="s2">&quot;type_mismatch&quot;</span>
-</span><span id="__span-0-40"><a id="__codelineno-0-40" name="__codelineno-0-40"></a>    <span class="n">MISSING_METADATA</span> <span class="o">=</span> <span class="s2">&quot;missing_metadata&quot;</span>
-</span><span id="__span-0-41"><a id="__codelineno-0-41" name="__codelineno-0-41"></a>    <span class="n">INVALID_DIMENSION</span> <span class="o">=</span> <span class="s2">&quot;invalid_dimension&quot;</span>
-</span><span id="__span-0-42"><a id="__codelineno-0-42" name="__codelineno-0-42"></a>    <span class="n">PERFORMANCE_ISSUE</span> <span class="o">=</span> <span class="s2">&quot;performance_issue&quot;</span>
-</span><span id="__span-0-43"><a id="__codelineno-0-43" name="__codelineno-0-43"></a>    <span class="n">CONSTRAINT_VIOLATION</span> <span class="o">=</span> <span class="s2">&quot;constraint_violation&quot;</span>
+<span class="normal"><a href="#__codelineno-0-43">43</a></span>
+<span class="normal"><a href="#__codelineno-0-44">44</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-34"><a id="__codelineno-0-34" name="__codelineno-0-34"></a><span class="k">class</span><span class="w"> </span><span class="nc">IssueType</span><span class="p">(</span><span class="n">Enum</span><span class="p">):</span>
+</span><span id="__span-0-35"><a id="__codelineno-0-35" name="__codelineno-0-35"></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Types of issues detected during audit.&quot;&quot;&quot;</span>
+</span><span id="__span-0-36"><a id="__codelineno-0-36" name="__codelineno-0-36"></a>
+</span><span id="__span-0-37"><a id="__codelineno-0-37" name="__codelineno-0-37"></a>    <span class="n">SCHEMA_INCONSISTENCY</span> <span class="o">=</span> <span class="s2">&quot;schema_inconsistency&quot;</span>
+</span><span id="__span-0-38"><a id="__codelineno-0-38" name="__codelineno-0-38"></a>    <span class="n">DATA_INTEGRITY</span> <span class="o">=</span> <span class="s2">&quot;data_integrity&quot;</span>
+</span><span id="__span-0-39"><a id="__codelineno-0-39" name="__codelineno-0-39"></a>    <span class="n">ORPHANED_REFERENCE</span> <span class="o">=</span> <span class="s2">&quot;orphaned_reference&quot;</span>
+</span><span id="__span-0-40"><a id="__codelineno-0-40" name="__codelineno-0-40"></a>    <span class="n">TYPE_MISMATCH</span> <span class="o">=</span> <span class="s2">&quot;type_mismatch&quot;</span>
+</span><span id="__span-0-41"><a id="__codelineno-0-41" name="__codelineno-0-41"></a>    <span class="n">MISSING_METADATA</span> <span class="o">=</span> <span class="s2">&quot;missing_metadata&quot;</span>
+</span><span id="__span-0-42"><a id="__codelineno-0-42" name="__codelineno-0-42"></a>    <span class="n">INVALID_DIMENSION</span> <span class="o">=</span> <span class="s2">&quot;invalid_dimension&quot;</span>
+</span><span id="__span-0-43"><a id="__codelineno-0-43" name="__codelineno-0-43"></a>    <span class="n">PERFORMANCE_ISSUE</span> <span class="o">=</span> <span class="s2">&quot;performance_issue&quot;</span>
+</span><span id="__span-0-44"><a id="__codelineno-0-44" name="__codelineno-0-44"></a>    <span class="n">CONSTRAINT_VIOLATION</span> <span class="o">=</span> <span class="s2">&quot;constraint_violation&quot;</span>
 </span></code></pre></div></td></tr></table></div>
               </details>
 

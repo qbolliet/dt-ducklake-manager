@@ -8,7 +8,7 @@
       
       
       
-        <link rel="canonical" href="https://qbolliet.github.io/dt-ducklake-manager/api/maintenance/IssueSeverity/">
+        <link rel="canonical" href="https://qbolliet.github.io/dt-ducklake-manager/architecture/">
       
       
       
@@ -16,19 +16,19 @@
         
       
       
-      <link rel="icon" href="../../../assets/logo.svg">
+      <link rel="icon" href="../assets/logo.svg">
       <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.6">
     
     
       
-        <title>IssueSeverity - Ducklake Manager</title>
+        <title>Architecture & design trade-offs - Ducklake Manager</title>
       
     
     
-      <link rel="stylesheet" href="../../../assets/stylesheets/main.484c7ddc.min.css">
+      <link rel="stylesheet" href="../assets/stylesheets/main.484c7ddc.min.css">
       
         
-        <link rel="stylesheet" href="../../../assets/stylesheets/palette.ab4e12ef.min.css">
+        <link rel="stylesheet" href="../assets/stylesheets/palette.ab4e12ef.min.css">
       
       
 
@@ -47,9 +47,9 @@
       
     
     
-      <link rel="stylesheet" href="../../../assets/_mkdocstrings.css">
+      <link rel="stylesheet" href="../assets/_mkdocstrings.css">
     
-    <script>__md_scope=new URL("../../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    <script>__md_scope=new URL("..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
     
       
 
@@ -74,7 +74,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#dt_ducklake_manager.maintenance.auditor.IssueSeverity" class="md-skip">
+        <a href="#architecture-design-trade-offs" class="md-skip">
           Skip to content
         </a>
       
@@ -90,9 +90,9 @@
 
 <header class="md-header md-header--shadow" data-md-component="header">
   <nav class="md-header__inner md-grid" aria-label="Header">
-    <a href="../../.." title="Ducklake Manager" class="md-header__button md-logo" aria-label="Ducklake Manager" data-md-component="logo">
+    <a href=".." title="Ducklake Manager" class="md-header__button md-logo" aria-label="Ducklake Manager" data-md-component="logo">
       
-  <img src="../../../assets/logo.svg" alt="logo">
+  <img src="../assets/logo.svg" alt="logo">
 
     </a>
     <label class="md-header__button md-icon" for="__drawer">
@@ -109,7 +109,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              IssueSeverity
+              Architecture &amp; design trade-offs
             
           </span>
         </div>
@@ -225,9 +225,9 @@
 
 <nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
   <label class="md-nav__title" for="__drawer">
-    <a href="../../.." title="Ducklake Manager" class="md-nav__button md-logo" aria-label="Ducklake Manager" data-md-component="logo">
+    <a href=".." title="Ducklake Manager" class="md-nav__button md-logo" aria-label="Ducklake Manager" data-md-component="logo">
       
-  <img src="../../../assets/logo.svg" alt="logo">
+  <img src="../assets/logo.svg" alt="logo">
 
     </a>
     Ducklake Manager
@@ -254,7 +254,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../.." class="md-nav__link">
+      <a href=".." class="md-nav__link">
         
   
   
@@ -382,7 +382,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../connection/DuckLakeConnector.md" class="md-nav__link">
+      <a href="../api/connection/DuckLakeConnector.md" class="md-nav__link">
         
   
   
@@ -467,7 +467,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../ValidationLevel.md" class="md-nav__link">
+      <a href="../api/maintenance/ValidationLevel.md" class="md-nav__link">
         
   
   
@@ -495,7 +495,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../IssueType.md" class="md-nav__link">
+      <a href="../api/maintenance/IssueType.md" class="md-nav__link">
         
   
   
@@ -523,7 +523,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../IssueSeverity.md" class="md-nav__link">
+      <a href="../api/maintenance/IssueSeverity.md" class="md-nav__link">
         
   
   
@@ -551,7 +551,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../ValidationIssue.md" class="md-nav__link">
+      <a href="../api/maintenance/ValidationIssue.md" class="md-nav__link">
         
   
   
@@ -579,7 +579,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../ValidationReport.md" class="md-nav__link">
+      <a href="../api/maintenance/ValidationReport.md" class="md-nav__link">
         
   
   
@@ -607,7 +607,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../DatabaseAuditor.md" class="md-nav__link">
+      <a href="../api/maintenance/DatabaseAuditor.md" class="md-nav__link">
         
   
   
@@ -635,7 +635,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../DuckLakeMaintenance.md" class="md-nav__link">
+      <a href="../api/maintenance/DuckLakeMaintenance.md" class="md-nav__link">
         
   
   
@@ -663,7 +663,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../RecoveryStrategy.md" class="md-nav__link">
+      <a href="../api/maintenance/RecoveryStrategy.md" class="md-nav__link">
         
   
   
@@ -691,7 +691,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../RecoveryPoint.md" class="md-nav__link">
+      <a href="../api/maintenance/RecoveryPoint.md" class="md-nav__link">
         
   
   
@@ -719,7 +719,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../RecoveryOperation.md" class="md-nav__link">
+      <a href="../api/maintenance/RecoveryOperation.md" class="md-nav__link">
         
   
   
@@ -747,7 +747,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../RecoveryResult.md" class="md-nav__link">
+      <a href="../api/maintenance/RecoveryResult.md" class="md-nav__link">
         
   
   
@@ -775,7 +775,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../DatabaseRecoveryManager.md" class="md-nav__link">
+      <a href="../api/maintenance/DatabaseRecoveryManager.md" class="md-nav__link">
         
   
   
@@ -860,7 +860,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../operations/AtomicOperationType.md" class="md-nav__link">
+      <a href="../api/operations/AtomicOperationType.md" class="md-nav__link">
         
   
   
@@ -888,7 +888,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../operations/AtomicOperationConfig.md" class="md-nav__link">
+      <a href="../api/operations/AtomicOperationConfig.md" class="md-nav__link">
         
   
   
@@ -916,7 +916,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../operations/AtomicOperationResult.md" class="md-nav__link">
+      <a href="../api/operations/AtomicOperationResult.md" class="md-nav__link">
         
   
   
@@ -944,7 +944,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../operations/AtomicDatabaseOperations.md" class="md-nav__link">
+      <a href="../api/operations/AtomicDatabaseOperations.md" class="md-nav__link">
         
   
   
@@ -972,7 +972,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../operations/DatabaseDeleter.md" class="md-nav__link">
+      <a href="../api/operations/DatabaseDeleter.md" class="md-nav__link">
         
   
   
@@ -1000,7 +1000,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../operations/DatabaseUpdater.md" class="md-nav__link">
+      <a href="../api/operations/DatabaseUpdater.md" class="md-nav__link">
         
   
   
@@ -1085,7 +1085,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../schema/SchemaBuilder.md" class="md-nav__link">
+      <a href="../api/schema/SchemaBuilder.md" class="md-nav__link">
         
   
   
@@ -1113,7 +1113,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../schema/DuckLakeTablesBuilder.md" class="md-nav__link">
+      <a href="../api/schema/DuckLakeTablesBuilder.md" class="md-nav__link">
         
   
   
@@ -1198,7 +1198,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../utils/remove_dataframe_duplicates.md" class="md-nav__link">
+      <a href="../api/utils/remove_dataframe_duplicates.md" class="md-nav__link">
         
   
   
@@ -1226,7 +1226,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../utils/build_database_duplicate_removal_query.md" class="md-nav__link">
+      <a href="../api/utils/build_database_duplicate_removal_query.md" class="md-nav__link">
         
   
   
@@ -1254,7 +1254,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../utils/map_python_to_sql_type.md" class="md-nav__link">
+      <a href="../api/utils/map_python_to_sql_type.md" class="md-nav__link">
         
   
   
@@ -1388,7 +1388,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../_internal/managers/BaseSchemaManager.md" class="md-nav__link">
+      <a href="../api/_internal/managers/BaseSchemaManager.md" class="md-nav__link">
         
   
   
@@ -1416,7 +1416,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../_internal/managers/DataManager.md" class="md-nav__link">
+      <a href="../api/_internal/managers/DataManager.md" class="md-nav__link">
         
   
   
@@ -1444,7 +1444,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../_internal/managers/DimensionManager.md" class="md-nav__link">
+      <a href="../api/_internal/managers/DimensionManager.md" class="md-nav__link">
         
   
   
@@ -1472,7 +1472,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../_internal/managers/TransactionState.md" class="md-nav__link">
+      <a href="../api/_internal/managers/TransactionState.md" class="md-nav__link">
         
   
   
@@ -1500,7 +1500,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../_internal/managers/TransactionOperation.md" class="md-nav__link">
+      <a href="../api/_internal/managers/TransactionOperation.md" class="md-nav__link">
         
   
   
@@ -1528,7 +1528,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../_internal/managers/TransactionContext.md" class="md-nav__link">
+      <a href="../api/_internal/managers/TransactionContext.md" class="md-nav__link">
         
   
   
@@ -1556,7 +1556,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../_internal/managers/TransactionManager.md" class="md-nav__link">
+      <a href="../api/_internal/managers/TransactionManager.md" class="md-nav__link">
         
   
   
@@ -1620,6 +1620,125 @@
     
   
   
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#1-fact-table-granularity-and-dimension-sharing" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        1. Fact table granularity and dimension sharing
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="1. Fact table granularity and dimension sharing">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#option-a-one-database-per-result-set-redundant-dimensions" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Option A — One database per result set (redundant dimensions)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#option-b-multiple-fact-tables-sharing-conformed-dimensions" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Option B — Multiple fact tables sharing conformed dimensions
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#summary" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Summary
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#2-schema-organization-within-a-catalog" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2. Schema organization within a catalog
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="2. Schema organization within a catalog">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#option-a-one-schema-per-catalog-main" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Option A — One schema per catalog (main)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#option-b-multiple-schemas-within-a-single-catalog" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Option B — Multiple schemas within a single catalog
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#summary_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Summary
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#retained-decisions" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Retained decisions
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
 </nav>
                   </div>
                 </div>
@@ -1646,95 +1765,238 @@
   
 
 
-<div class="doc doc-object doc-class">
-
-
-
-<h1 id="dt_ducklake_manager.maintenance.auditor.IssueSeverity" class="doc doc-heading">
-            <span class="doc doc-object-name doc-class-name">IssueSeverity</span>
-
-
-</h1>
-
-
-    <div class="doc doc-contents first">
-
-            <div style="display: none">
-              <a class="autorefs autorefs-internal" title="IssueSeverity (dt_ducklake_manager.maintenance.auditor.IssueSeverity)" href="#dt_ducklake_manager.maintenance.auditor.IssueSeverity" id="mermaid-link-dt_ducklake_manager.maintenance.auditor.IssueSeverity"></a>
-            </div>
-            <pre class="mermaid"><code id="mermaid-diagram-dt_ducklake_manager.maintenance.auditor.IssueSeverity">
-              flowchart TD
-              dt_ducklake_manager.maintenance.auditor.IssueSeverity[IssueSeverity]
-
-              
-
-              click dt_ducklake_manager.maintenance.auditor.IssueSeverity href "" "dt_ducklake_manager.maintenance.auditor.IssueSeverity"
-            </code></pre>
-            <script>
-              var diagram = document.getElementById('mermaid-diagram-dt_ducklake_manager.maintenance.auditor.IssueSeverity');
-              diagram.innerHTML = diagram.innerHTML.replace(/click ([\w.]+) href "" "\1"/g, function(match, nodeID, offset) {
-                try {
-                  const link = document.getElementById("mermaid-link-" + nodeID).href;
-                  return `click ${nodeID} href "${link}" "${nodeID}"`
-                } catch (e) {
-                  return '';
-                }
-              });
-            </script>
-
-
-        <p>Issue severity levels.</p>
-
-
-
-
-
-
-
-
-
-
-
-
-
-              <details class="mkdocstrings-source">
-                <summary>Source code in <code>dt_ducklake_manager/maintenance/auditor.py</code></summary>
-                <div class="language-python highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-48">48</a></span>
-<span class="normal"><a href="#__codelineno-0-49">49</a></span>
-<span class="normal"><a href="#__codelineno-0-50">50</a></span>
-<span class="normal"><a href="#__codelineno-0-51">51</a></span>
-<span class="normal"><a href="#__codelineno-0-52">52</a></span>
-<span class="normal"><a href="#__codelineno-0-53">53</a></span>
-<span class="normal"><a href="#__codelineno-0-54">54</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-48"><a id="__codelineno-0-48" name="__codelineno-0-48"></a><span class="k">class</span><span class="w"> </span><span class="nc">IssueSeverity</span><span class="p">(</span><span class="n">Enum</span><span class="p">):</span>
-</span><span id="__span-0-49"><a id="__codelineno-0-49" name="__codelineno-0-49"></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Issue severity levels.&quot;&quot;&quot;</span>
-</span><span id="__span-0-50"><a id="__codelineno-0-50" name="__codelineno-0-50"></a>
-</span><span id="__span-0-51"><a id="__codelineno-0-51" name="__codelineno-0-51"></a>    <span class="n">LOW</span> <span class="o">=</span> <span class="s2">&quot;low&quot;</span>
-</span><span id="__span-0-52"><a id="__codelineno-0-52" name="__codelineno-0-52"></a>    <span class="n">MEDIUM</span> <span class="o">=</span> <span class="s2">&quot;medium&quot;</span>
-</span><span id="__span-0-53"><a id="__codelineno-0-53" name="__codelineno-0-53"></a>    <span class="n">HIGH</span> <span class="o">=</span> <span class="s2">&quot;high&quot;</span>
-</span><span id="__span-0-54"><a id="__codelineno-0-54" name="__codelineno-0-54"></a>    <span class="n">CRITICAL</span> <span class="o">=</span> <span class="s2">&quot;critical&quot;</span>
-</span></code></pre></div></td></tr></table></div>
-              </details>
-
-
-
-<div class="doc doc-children">
-
-
-
-
-
-
-
-
-
-
-
-
-  </div>
-
-    </div>
-
-</div>
+<h1 id="architecture-design-trade-offs">Architecture &amp; design trade-offs</h1>
+<p>This page documents the structural decisions behind the storage model, the
+alternatives that were considered, and the trade-offs of each. It is intended as
+an architectural documentation of the current implementation and a potential reference for future evolutions.</p>
+<p>The design space is organized around <strong>two independent axes</strong>, often conflated:</p>
+<ul>
+<li><strong>Logical axis — dimension sharing</strong>: are the dimension tables <em>conformed</em>
+  (a single shared source of truth) or <em>redundant</em> (recreated per database)?</li>
+<li><strong>Physical axis — catalog layout</strong>: how many DuckLake catalogs and schemas
+  hold the result sets?</li>
+</ul>
+<p>These axes are independent: one can have several fact tables with redundant
+dimensions, or a single multi-schema catalog whose dimensions are still
+redundant. Each axis is treated as its own section below, and each candidate is
+a subsection.</p>
+<blockquote>
+<p><strong>Comparison criterion.</strong> The options are compared on their <strong>intrinsic
+complexity</strong> and operational properties (encoding coherence, snapshot
+granularity, locking).</p>
+</blockquote>
+<p>For context, the storage model (see the <a href="../">package description</a>) is made
+of three layers per result set:</p>
+<ul>
+<li>a <code>fact_table</code> holding the observations ;</li>
+<li><code>dim_&lt;col&gt;</code> tables mapping each modality of a low-cardinality categorical
+  variable to an integer <code>id</code>, where ids are assigned by order of appearance ;</li>
+<li>a <code>metadata</code> table describing each column (label, type, categorical status,
+  primary key).</li>
+</ul>
+<hr />
+<h2 id="1-fact-table-granularity-and-dimension-sharing">1. Fact table granularity and dimension sharing</h2>
+<p>Each result set produced by a model — for instance predictions on one side and
+Shapley values on the other — may share categorical variables (<code>country</code>,
+<code>city</code>, …) while differing in granularity and in the value columns it carries.
+The question is whether each result set should be a self-contained database with
+its own dimension tables, or whether several fact tables should coexist and
+share their dimension tables.</p>
+<h3 id="option-a-one-database-per-result-set-redundant-dimensions">Option A — One database per result set (redundant dimensions)</h3>
+<p><strong>Status: ✅ Retained in the current implementation.</strong></p>
+<p>Each result set is a self-contained DuckLake catalog with its own <code>fact_table</code>,
+<code>metadata</code>, and <code>dim_*</code> tables. A categorical variable common to several result
+sets is stored as an independent dimension table in each database.</p>
+<p><strong>Advantages</strong></p>
+<ul>
+<li><strong>Full isolation</strong>: building, updating, or deleting one result set cannot
+  affect another.</li>
+<li><strong>Local categorical decisions</strong>: when a column's modality count crosses the
+  threshold, the conversion between categorical and non-categorical status is
+  self-contained within a single fact table. The divergence problem (a column
+  whose cardinality grows in one result set but not another) cannot arise,
+  because no structure is shared.</li>
+<li><strong>Independent lifecycle and snapshots</strong>: DuckLake time-travel is scoped to a
+  catalog, so each result set keeps its own snapshot history — well suited to
+  auditing a specific model run.</li>
+<li><strong>Independent concurrency</strong>: separate catalogs can be written in parallel,
+  which matters for the file-based DuckDB backend that locks the catalog at the
+  process level.</li>
+<li><strong>Simple model</strong>: a single fact table per catalog, and <code>metadata</code> keyed by
+  column name alone.</li>
+</ul>
+<p><strong>Disadvantages (complexity)</strong></p>
+<ul>
+<li><strong>Dimension redundancy</strong>: a shared categorical variable is stored once per
+  database. The storage cost is negligible, since dimension tables are bounded
+  by the categorical threshold.</li>
+<li><strong>Dimension-encoding drift across databases</strong>: integer ids are assigned
+  independently in each database (by order of appearance of the modalities), so
+  the same label can map to different ids in two databases. Cross-database joins
+  must therefore resolve labels through each database's dimension table rather
+  than join on the raw integer id. Joining directly on ids is only correct when
+  identical encoding is guaranteed.</li>
+<li><strong>No single source of truth for labels</strong>: a label correction has to be applied
+  in every database that carries the variable.</li>
+</ul>
+<h3 id="option-b-multiple-fact-tables-sharing-conformed-dimensions">Option B — Multiple fact tables sharing conformed dimensions</h3>
+<p>A single database holds several fact tables (one per result set) at different
+granularities, all referencing a shared set of dimension tables (<em>conformed
+dimensions</em> in the Kimball sense).</p>
+<p><strong>Advantages</strong></p>
+<ul>
+<li><strong>Coherent encoding by construction</strong>: a shared dimension has a single
+  id↔label mapping, so cross-fact joins on dimension ids are correct without
+  resolving labels.</li>
+<li><strong>Single source of truth for labels</strong> across all result sets.</li>
+<li>Marginal storage gain (dimensions are small by construction).</li>
+</ul>
+<p><strong>Disadvantages (complexity)</strong></p>
+<ul>
+<li><strong>Metadata must be keyed by <code>(fact table, column)</code></strong> instead of by column
+  alone: the same logical column can be categorical in one fact table and not in
+  another, depending on its cardinality in each.</li>
+<li><strong>The categorical status of a shared variable can diverge</strong> between fact tables
+  (e.g. 30 modalities in predictions, 60 in Shapley). Two reconciliation
+  policies exist, each adding complexity:<ul>
+<li><em>Independent encoding per fact table</em>: the column may be id-encoded in one
+  fact and stored raw in another. The dimension is then shared only as a
+  label space, not as an encoding, and the join-on-id benefit is lost for
+  that column.</li>
+<li><em>Strict conformed dimension</em>: the categorical status is decided on the
+  <strong>union</strong> of modalities across all fact tables; a column may then exceed
+  the threshold on the union while remaining small in each individual table.</li>
+</ul>
+</li>
+<li><strong>Shared dimensions require reference counting</strong>: a dimension may only be
+  dropped (on conversion to non-categorical) once no fact table still references
+  it, and orphan-entry cleanup must be computed over the union of ids referenced
+  by all fact tables rather than a single one.</li>
+<li><strong>Cross-table coupling of conversions</strong>: a categorical ↔ non-categorical
+  conversion triggered by one fact table must not rewrite or drop structures
+  relied upon by another.</li>
+</ul>
+<h3 id="summary">Summary</h3>
+<table>
+<thead>
+<tr>
+<th>Option</th>
+<th>Key advantage</th>
+<th>Main complexity cost</th>
+<th>Retained</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>A — One database per result set</td>
+<td>Full isolation; local categorical decisions; per-run snapshots</td>
+<td>Redundant dimensions; id-drift across databases on cross-database joins</td>
+<td>✅</td>
+</tr>
+<tr>
+<td>B — Shared conformed dimensions</td>
+<td>Coherent encoding; single source of truth for labels</td>
+<td><code>(table, column)</code> metadata; divergent categorical status; reference counting of shared dimensions</td>
+<td></td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="2-schema-organization-within-a-catalog">2. Schema organization within a catalog</h2>
+<p>A DuckLake catalog can hold several schemas. Both layouts are supported (see
+<a href="../api/connection/DuckLakeConnector/"><code>DuckLakeConnector</code></a>): every schema-aware
+class accepts a <code>schema</code> argument (default <code>main</code>) and qualifies its table
+references accordingly, so several result sets can live as separate schemas of one
+catalog. The question is whether to keep one schema per catalog or to consolidate
+several result sets as separate schemas within one catalog.</p>
+<p>This axis is <strong>orthogonal to dimension sharing</strong>: separate schemas do not share
+dimension tables (each schema carries its own <code>dim_*</code>), so multiple schemas
+address catalog proliferation, not dimension redundancy.</p>
+<h3 id="option-a-one-schema-per-catalog-main">Option A — One schema per catalog (<code>main</code>)</h3>
+<p><strong>Status: ✅ Default layout.</strong></p>
+<p>Each catalog contains exactly one schema, holding one fact table and its
+companion tables.</p>
+<p><strong>Advantages</strong></p>
+<ul>
+<li><strong>Snapshot isolation</strong>: DuckLake snapshots are per catalog, so each result set
+  has an independent time-travel history — updating one result set does not
+  advance the snapshot version seen by readers of another.</li>
+<li><strong>Concurrency isolation</strong>: with the file-based DuckDB backend, the catalog file
+  is locked at the process level; separate catalogs let result sets be written
+  in parallel.</li>
+<li><strong>Simple routing</strong>: a connection targets a single schema (<code>USE db.main</code>), with
+  no schema-selection logic.</li>
+</ul>
+<p><strong>Disadvantages (complexity)</strong></p>
+<ul>
+<li><strong>Catalog proliferation</strong>: each result set is a separate catalog to attach and
+  administer.</li>
+<li><strong>Cross-result-set joins</strong> require attaching several catalogs within the same
+  connection.</li>
+</ul>
+<h3 id="option-b-multiple-schemas-within-a-single-catalog">Option B — Multiple schemas within a single catalog</h3>
+<p><strong>Status: ✅ Supported (opt-in via the <code>schema</code> argument).</strong></p>
+<p>Result sets are stored as separate schemas in one catalog (e.g.
+<code>predictions.fact_table</code>, <code>shapley.fact_table</code>), sharing one catalog backend. A
+single shared connection drives all schemas: each builder/manager qualifies its
+tables by its <code>schema</code>, and <code>DuckLakeConnector</code> creates the schema on first use.</p>
+<p><strong>Advantages</strong></p>
+<ul>
+<li><strong>Single catalog</strong> to attach and administer; cross-schema joins are
+  first-class on a single connection.</li>
+<li><strong>Coherent transactions</strong> across schemas.</li>
+<li>Pairs naturally with a server-based catalog backend (PostgreSQL), which
+  supports concurrent readers and writers.</li>
+</ul>
+<p><strong>Disadvantages (complexity)</strong></p>
+<ul>
+<li><strong>Snapshot granularity is the whole catalog</strong>, not the schema: time-travel to a
+  specific result set becomes ambiguous, since updating one schema advances the
+  catalog version for all of them.</li>
+<li><strong>With the file-based backend, a single catalog file serializes writes</strong> across
+  all schemas (process-level lock).</li>
+<li><strong>Does not reduce dimension redundancy</strong>: dimension tables are not shared
+  across schemas, so the id-drift consideration of section 1 still applies.</li>
+<li><strong>Requires schema routing</strong> in the connection and management layer.</li>
+</ul>
+<h3 id="summary_1">Summary</h3>
+<table>
+<thead>
+<tr>
+<th>Option</th>
+<th>Key advantage</th>
+<th>Main complexity cost</th>
+<th>Status</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>A — One schema per catalog</td>
+<td>Per-result-set snapshots and locking; simple routing</td>
+<td>Catalog proliferation; multi-catalog attach for cross joins</td>
+<td>✅ default</td>
+</tr>
+<tr>
+<td>B — Multiple schemas per catalog</td>
+<td>Single catalog; first-class cross-schema joins; fits a server backend</td>
+<td>Catalog-level snapshots; serialized writes on the file backend; schema routing</td>
+<td>✅ supported</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="retained-decisions">Retained decisions</h2>
+<p>On the <strong>logical axis</strong> (section 1), the implementation keeps <strong>isolation over
+consolidation</strong>: dimension tables are redundant per result set rather than
+conformed, so each result set keeps local categorical-status decisions, at the
+cost of resolving labels (rather than raw ids) when joining across result sets.</p>
+<p>On the <strong>physical axis</strong> (section 2), both layouts are now available. <code>main</code> per
+catalog remains the <strong>default</strong>, preserving per-result-set snapshots and
+file-backend locking. Consolidating several result sets as separate schemas of a
+single catalog (Option B) is opt-in through the <code>schema</code> argument and pairs
+naturally with the PostgreSQL backend, which supports concurrent readers and
+writers; the trade-off is that DuckLake snapshots become catalog-wide rather than
+per result set.</p>
 
 
 
@@ -1786,10 +2048,10 @@
     
       
       
-      <script id="__config" type="application/json">{"annotate": null, "base": "../../..", "features": ["content.tabs.link", "content.code.annotate", "content.code.copy", "navigation.sections", "navigation.path"], "search": "../../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+      <script id="__config" type="application/json">{"annotate": null, "base": "..", "features": ["content.tabs.link", "content.code.annotate", "content.code.copy", "navigation.sections", "navigation.path"], "search": "../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
     
     
-      <script src="../../../assets/javascripts/bundle.79ae519e.min.js"></script>
+      <script src="../assets/javascripts/bundle.79ae519e.min.js"></script>
       
         <script src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/2.7.4/MathJax.js?config=TeX-AMS-MML_HTMLorMML"></script>
       
