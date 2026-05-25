@@ -28,14 +28,12 @@ uv run mypy dt_ducklake_manager/       # vérification des types
 
 # Documentation
 uv run mkdocs serve                    # aperçu local sur http://127.0.0.1:8000
-
-# Versioning & release
-uv run git-cliff --output CHANGELOG.md # régénérer le CHANGELOG complet
-uv run bump-my-version bump patch      # bumper la version patch (0.1.0 → 0.1.1)
-uv run bump-my-version bump minor      # bumper la version mineure (0.1.0 → 0.2.0)
-uv run bump-my-version bump major      # bumper la version majeure (0.1.0 → 1.0.0)
-uv run bump-my-version bump patch --dry-run  # simulation sans modification
 ```
+
+> Le versioning et le CHANGELOG sont entièrement automatisés par
+> [release-please](https://github.com/googleapis/release-please) (cf. *Workflow
+> de release*). Aucune commande manuelle de bump ou de génération de changelog
+> n'est nécessaire.
 
 ## Format des commits (Conventional Commits)
 
@@ -77,22 +75,20 @@ feat!: remove support for Python 3.12
 
 ## Workflow de release
 
-```bash
-# 1. S'assurer que tous les tests passent sur main
-git checkout main && git pull
+Les releases sont automatisées par [release-please](https://github.com/googleapis/release-please).
+Aucune action manuelle de versioning n'est requise : il suffit de merger des
+commits conventionnels sur `main`.
 
-# 2. Bumper la version (met à jour pyproject.toml ET crée le tag git)
-uv run task bump-my-version bump minor   # ou patch / major
+1. **Merge sur `main`** de commits conventionnels (`feat:`, `fix:`, etc.).
+2. release-please ouvre (ou met à jour) automatiquement une **PR « release »**
+   qui agrège les changements, calcule la prochaine version selon le SemVer
+   (`feat` → minor, `fix` → patch, `!`/`BREAKING CHANGE` → major) et met à jour
+   `CHANGELOG.md` ainsi que la version dans `pyproject.toml`.
+3. **Merge de la PR « release »** → release-please crée le tag `vX.Y.Z` et la
+   release GitHub correspondante.
 
-# 3. Régénérer le CHANGELOG
-uv run git-cliff --output CHANGELOG.md
-
-# 4. Committer le CHANGELOG et pusher avec le tag
-git add CHANGELOG.md
-git commit -m "chore(release): prepare for v$(uv run bump-my-version show current_version)"
-git push origin main --tags
-# → GitHub Actions crée automatiquement la release GitHub
-```
+> La version dans `pyproject.toml` et le `CHANGELOG.md` sont gérés par le bot ;
+> ne les éditez pas à la main.
 
 ## Utiliser le package depuis un autre projet
 

@@ -1,0 +1,13 @@
+{
+  "$schema": "https://raw.githubusercontent.com/googleapis/release-please/main/schemas/config.json",
+  "include-v-in-tag": true,
+  "include-component-in-tag": false,
+  "bootstrap-sha": "639b22a1c39794cfe186bd048082ff38ed58cae0",
+  "packages": {
+    ".": {
+      "release-type": "python",
+      "package-name": "dt-ducklake-manager",
+      "changelog-path": "CHANGELOG.md"
+    }
+  }
+}

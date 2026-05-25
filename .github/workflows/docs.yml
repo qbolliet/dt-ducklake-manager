@@ -4,9 +4,17 @@ on:
   push:
     branches:
       - main
+  workflow_dispatch:
 
 permissions:
   contents: write
+
+# Un seul déploiement de documentation à la fois ; on ne coupe pas un
+# déploiement en cours (cancel-in-progress: false) pour éviter de publier
+# un site partiellement construit.
+concurrency:
+  group: docs-pages
+  cancel-in-progress: false
 
 jobs:
   deploy:
