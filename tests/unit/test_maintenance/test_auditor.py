@@ -1,6 +1,8 @@
 # Importation des modules
 # Modules de base
 # Module de tests
+from typing import Any
+
 import pytest
 
 # Modules du package à tester
@@ -18,7 +20,7 @@ from dt_ducklake_manager.maintenance.auditor import IssueSeverity, IssueType
 
 
 # Test de l'initialisation d'un ValidationIssue
-def test_validation_issue_initialization():
+def test_validation_issue_initialization() -> None:
     """Test that ValidationIssue is correctly initialized with all fields.
 
     Examples:
@@ -50,7 +52,7 @@ def test_validation_issue_initialization():
 
 # Initialisation d'un rapport d'audit utilisé dans les tests de ValidationReport
 @pytest.fixture
-def empty_report():
+def empty_report() -> ValidationReport:
     """Create an empty ValidationReport for testing.
 
     Returns:
@@ -60,7 +62,7 @@ def empty_report():
 
 
 # Test de l'ajout d'un problème au rapport
-def test_validation_report_add_issue(empty_report):
+def test_validation_report_add_issue(empty_report: Any) -> None:
     """Test that add_issue appends an issue to the report's issue list.
 
     Args:
@@ -81,7 +83,7 @@ def test_validation_report_add_issue(empty_report):
 
 
 # Test du filtrage des problèmes par sévérité
-def test_validation_report_get_issues_by_severity(empty_report):
+def test_validation_report_get_issues_by_severity(empty_report: Any) -> None:
     """Test that get_issues_by_severity returns only matching issues.
 
     Args:
@@ -109,7 +111,7 @@ def test_validation_report_get_issues_by_severity(empty_report):
 
 
 # Test du filtrage des problèmes par type
-def test_validation_report_get_issues_by_type(empty_report):
+def test_validation_report_get_issues_by_type(empty_report: Any) -> None:
     """Test that get_issues_by_type returns only matching issues.
 
     Args:
@@ -135,7 +137,7 @@ def test_validation_report_get_issues_by_type(empty_report):
 
 
 # Test du comptage des problèmes critiques
-def test_validation_report_get_critical_issues_count(empty_report):
+def test_validation_report_get_critical_issues_count(empty_report: Any) -> None:
     """Test that get_critical_issues_count returns the exact count of CRITICAL issues.
 
     Args:
@@ -154,7 +156,7 @@ def test_validation_report_get_critical_issues_count(empty_report):
 
 
 # Test de la finalisation du rapport
-def test_validation_report_finalize(empty_report):
+def test_validation_report_finalize(empty_report: Any) -> None:
     """Test that finalize() sets end_time and populates validation_summary.
 
     Args:
@@ -181,8 +183,8 @@ def test_validation_report_finalize(empty_report):
 # Test que finalize génère la bonne recommandation de performance pour Ducklake (pas
 # d'index)
 def test_validation_report_finalize_generates_ducklake_performance_recommendation(
-    empty_report,
-):
+    empty_report: ValidationReport,
+) -> None:
     """Test that finalize generates a Ducklake-specific performance recommendation.
 
     The recommendation must not reference 'indexes' and must instead reference
@@ -214,7 +216,9 @@ def test_validation_report_finalize_generates_ducklake_performance_recommendatio
 
 
 # Test que finalize génère des recommandations pour les issues d'intégrité de schéma
-def test_validation_report_finalize_generates_schema_recommendation(empty_report):
+def test_validation_report_finalize_generates_schema_recommendation(
+    empty_report: Any,
+) -> None:
     """Test that finalize generates a recommendation when schema issues are present.
 
     Args:
@@ -237,7 +241,7 @@ def test_validation_report_finalize_generates_schema_recommendation(empty_report
 
 
 # Test de l'initialisation de DatabaseAuditor sans connexion
-def test_database_auditor_initialization_without_connection():
+def test_database_auditor_initialization_without_connection() -> None:
     """Test that DatabaseAuditor can be initialized without a connection.
 
     Examples:
@@ -251,7 +255,9 @@ def test_database_auditor_initialization_without_connection():
 
 
 # Test de l'initialisation de DatabaseAuditor avec une connexion fournie
-def test_database_auditor_initialization_with_connection(built_ducklake_schema):
+def test_database_auditor_initialization_with_connection(
+    built_ducklake_schema: Any,
+) -> None:
     """Test that DatabaseAuditor stores the provided connection.
 
     Args:
@@ -265,7 +271,7 @@ def test_database_auditor_initialization_with_connection(built_ducklake_schema):
 
 
 # Test de validate_database au niveau BASIC
-def test_validate_database_basic_level(built_ducklake_schema):
+def test_validate_database_basic_level(built_ducklake_schema: Any) -> None:
     """Test that validate_database with BASIC level returns a ValidationReport.
 
     Args:
@@ -283,7 +289,7 @@ def test_validate_database_basic_level(built_ducklake_schema):
 
 
 # Test de validate_database au niveau STANDARD
-def test_validate_database_standard_level(built_ducklake_schema):
+def test_validate_database_standard_level(built_ducklake_schema: Any) -> None:
     """Test that validate_database with STANDARD level returns a ValidationReport.
 
     Args:
@@ -300,7 +306,7 @@ def test_validate_database_standard_level(built_ducklake_schema):
 
 
 # Test de validate_database au niveau COMPREHENSIVE
-def test_validate_database_comprehensive_level(built_ducklake_schema):
+def test_validate_database_comprehensive_level(built_ducklake_schema: Any) -> None:
     """Test that validate_database with COMPREHENSIVE level returns a valid report.
 
     On a healthy in-memory schema there should be no critical issues.
@@ -322,7 +328,7 @@ def test_validate_database_comprehensive_level(built_ducklake_schema):
 
 
 # Test de get_quick_health_check
-def test_get_quick_health_check(built_ducklake_schema):
+def test_get_quick_health_check(built_ducklake_schema: Any) -> None:
     """Test that get_quick_health_check returns a dict with expected keys.
 
     Args:
@@ -341,7 +347,9 @@ def test_get_quick_health_check(built_ducklake_schema):
 
 
 # Test de validate_operation_preconditions pour une opération d'insertion
-def test_validate_operation_preconditions_insert(built_ducklake_schema, sample_df):
+def test_validate_operation_preconditions_insert(
+    built_ducklake_schema: Any, sample_df: Any
+) -> None:
     """Test that validate_operation_preconditions for 'insert' returns
     a ValidationReport.
 
@@ -369,7 +377,7 @@ def test_validate_operation_preconditions_insert(built_ducklake_schema, sample_d
 
 
 # Test de validate_operation_preconditions pour une opération de suppression
-def test_validate_operation_preconditions_delete(built_ducklake_schema):
+def test_validate_operation_preconditions_delete(built_ducklake_schema: Any) -> None:
     """Test that validate_operation_preconditions for 'delete' returns
     a ValidationReport.
 
@@ -392,8 +400,8 @@ def test_validate_operation_preconditions_delete(built_ducklake_schema):
 
 # Test de _validate_partition_configuration sur connexion in-memory
 def test_validate_partition_configuration_reports_missing_partition(
-    built_ducklake_schema,
-):
+    built_ducklake_schema: Any,
+) -> None:
     """Test that _validate_partition_configuration reports a LOW PERFORMANCE_ISSUE
     when no partition key is configured (case for all in-memory connections).
 
@@ -417,7 +425,9 @@ def test_validate_partition_configuration_reports_missing_partition(
 
 
 # Test de _validate_ducklake_maintenance silencieux sur connexion in-memory
-def test_validate_ducklake_maintenance_silent_on_in_memory(built_ducklake_schema):
+def test_validate_ducklake_maintenance_silent_on_in_memory(
+    built_ducklake_schema: Any,
+) -> None:
     """Test that _validate_ducklake_maintenance adds no issues on in-memory connections.
 
     Ducklake catalog functions (ducklake_snapshots, ducklake_data_files) are not
@@ -440,8 +450,8 @@ def test_validate_ducklake_maintenance_silent_on_in_memory(built_ducklake_schema
 
 # Test de la correction du filtre python_type dans _validate_categorical_thresholds
 def test_validate_categorical_thresholds_detects_string_columns_with_low_cardinality(
-    built_ducklake_schema,
-):
+    built_ducklake_schema: Any,
+) -> None:
     """Test that _validate_categorical_thresholds correctly identifies non-categorical
     String columns using the Narwhals type name 'String' (not pandas 'object').
 

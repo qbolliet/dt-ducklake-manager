@@ -1,5 +1,7 @@
 # Importation des modules
 # Module de tests
+from typing import Any
+
 import pytest
 
 # Modules du package à tester
@@ -16,7 +18,7 @@ from dt_ducklake_manager.operations.atomic import AtomicOperationType
 
 
 # Test que tous les types d'opérations atomiques sont définis
-def test_atomic_operation_type_values():
+def test_atomic_operation_type_values() -> None:
     """Test that all expected AtomicOperationType values are defined.
 
     Examples:
@@ -36,7 +38,7 @@ def test_atomic_operation_type_values():
 
 
 # Test de l'initialisation de AtomicOperationConfig avec les valeurs par défaut
-def test_atomic_operation_config_defaults():
+def test_atomic_operation_config_defaults() -> None:
     """Test that AtomicOperationConfig has correct default values.
 
     Examples:
@@ -57,7 +59,7 @@ def test_atomic_operation_config_defaults():
 
 
 # Test de l'instanciation de AtomicOperationConfig avec des paramètres personnalisés
-def test_atomic_operation_config_custom():
+def test_atomic_operation_config_custom() -> None:
     """Test that AtomicOperationConfig stores custom parameter values.
 
     Examples:
@@ -88,7 +90,7 @@ def test_atomic_operation_config_custom():
 
 
 # Test de l'instanciation de AtomicOperationResult avec succès
-def test_atomic_operation_result_success():
+def test_atomic_operation_result_success() -> None:
     """Test that AtomicOperationResult can be initialized with success=True.
 
     Examples:
@@ -104,7 +106,7 @@ def test_atomic_operation_result_success():
         success=True,
         operation_type=AtomicOperationType.BATCH_UPDATE,
         execution_time=1.5,
-        backup_created=False,
+        backup_created=None,
         validation_passed=True,
         operations_performed=["insert"],
     )
@@ -114,7 +116,7 @@ def test_atomic_operation_result_success():
 
 
 # Test de l'instanciation de AtomicOperationResult avec échec
-def test_atomic_operation_result_failure():
+def test_atomic_operation_result_failure() -> None:
     """Test that AtomicOperationResult can be initialized with success=False.
 
     Examples:
@@ -130,7 +132,7 @@ def test_atomic_operation_result_failure():
         success=False,
         operation_type=AtomicOperationType.BATCH_UPDATE,
         execution_time=0.1,
-        backup_created=False,
+        backup_created=None,
         validation_passed=False,
         operations_performed=[],
         error_message="Something went wrong",
@@ -148,7 +150,7 @@ def test_atomic_operation_result_failure():
 
 # Initialisation d'une instance de AtomicDatabaseOperations pour les tests
 @pytest.fixture
-def atomic_ops(built_ducklake_schema, tmp_path):
+def atomic_ops(built_ducklake_schema: Any, tmp_path: Any) -> AtomicDatabaseOperations:
     """Create an AtomicDatabaseOperations instance for testing.
 
     Args:
@@ -169,7 +171,7 @@ def atomic_ops(built_ducklake_schema, tmp_path):
 
 
 # Test de l'initialisation de AtomicDatabaseOperations
-def test_atomic_operations_initialization(atomic_ops):
+def test_atomic_operations_initialization(atomic_ops: Any) -> None:
     """Test that AtomicDatabaseOperations initializes without errors.
 
     Args:
@@ -179,7 +181,7 @@ def test_atomic_operations_initialization(atomic_ops):
 
 
 # Test de get_operation_status
-def test_get_operation_status_returns_dict(atomic_ops):
+def test_get_operation_status_returns_dict(atomic_ops: Any) -> None:
     """Test that get_operation_status returns a dict with expected structure.
 
     Args:
@@ -191,7 +193,7 @@ def test_get_operation_status_returns_dict(atomic_ops):
 
 
 # Test de validate_system_integrity
-def test_validate_system_integrity_returns_dict(atomic_ops):
+def test_validate_system_integrity_returns_dict(atomic_ops: Any) -> None:
     """Test that validate_system_integrity returns a dict with integrity information.
 
     Args:

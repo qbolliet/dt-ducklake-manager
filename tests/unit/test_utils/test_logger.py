@@ -8,7 +8,7 @@ from dt_ducklake_manager.utils.logger import _init_logger
 
 
 # Test de la création automatique du dossier de logs
-def test_init_logger_creates_directory():
+def test_init_logger_creates_directory() -> None:
     # Test avec un nouveau dossier
     test_log_dir = "test_logs"
     test_log_file = os.path.join(test_log_dir, "test.log")
@@ -30,7 +30,7 @@ def test_init_logger_creates_directory():
 
 
 # Test des éléments retournés par le logger
-def test_init_logger_returns_logger():
+def test_init_logger_returns_logger() -> None:
     # Test avec un fichier temporaire
     test_log_file = "temp_test.log"
 
@@ -54,7 +54,7 @@ def test_init_logger_returns_logger():
 
 
 # Test de la configuration du file handler
-def test_init_logger_file_handler_configuration():
+def test_init_logger_file_handler_configuration() -> None:
     # Initialisation du logger avec un fichier de tests
     test_log_file = "test_config.log"
     logger = _init_logger(test_log_file)

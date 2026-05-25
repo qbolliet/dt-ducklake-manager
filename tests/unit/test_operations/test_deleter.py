@@ -1,5 +1,7 @@
 # Importation des modules
 # Module de tests
+from typing import Any
+
 # Modules du package à tester
 from dt_ducklake_manager.operations import DatabaseDeleter
 
@@ -9,7 +11,7 @@ from dt_ducklake_manager.operations import DatabaseDeleter
 
 
 # Test de l'initialisation correcte de DatabaseDeleter
-def test_deleter_initialization(built_ducklake_schema):
+def test_deleter_initialization(built_ducklake_schema: Any) -> None:
     """Test that DatabaseDeleter initializes without errors.
 
     Args:
@@ -22,7 +24,7 @@ def test_deleter_initialization(built_ducklake_schema):
 
 
 # Test de l'initialisation avec enable_validation=False
-def test_deleter_initialization_without_validation(built_ducklake_schema):
+def test_deleter_initialization_without_validation(built_ducklake_schema: Any) -> None:
     """Test that DatabaseDeleter can be initialized with validation disabled.
 
     Args:
@@ -40,7 +42,7 @@ def test_deleter_initialization_without_validation(built_ducklake_schema):
 
 
 # Test que validate_operation retourne un booléen pour une suppression valide
-def test_validate_operation_delete_returns_bool(deleter):
+def test_validate_operation_delete_returns_bool(deleter: DatabaseDeleter) -> None:
     """Test that validate_operation returns a boolean for a delete operation.
 
     Args:
@@ -56,7 +58,9 @@ def test_validate_operation_delete_returns_bool(deleter):
 
 
 # Test de la suppression de lignes avec un filtre simple
-def test_delete_rows_with_filter(deleter, built_ducklake_schema):
+def test_delete_rows_with_filter(
+    deleter: DatabaseDeleter, built_ducklake_schema: Any
+) -> None:
     """Test that delete_rows removes rows matching the given filter.
 
     Args:
@@ -87,7 +91,9 @@ def test_delete_rows_with_filter(deleter, built_ducklake_schema):
 
 
 # Test de la suppression de lignes avec un filtre OR (liste de listes de tuples)
-def test_delete_rows_with_or_filter(deleter, built_ducklake_schema):
+def test_delete_rows_with_or_filter(
+    deleter: DatabaseDeleter, built_ducklake_schema: Any
+) -> None:
     """Test that delete_rows handles OR filters (list of lists of tuples).
 
     Args:
@@ -114,7 +120,7 @@ def test_delete_rows_with_or_filter(deleter, built_ducklake_schema):
 
 
 # Test de la suppression de toutes les lignes avec filters=None
-def test_delete_rows_all(deleter, built_ducklake_schema):
+def test_delete_rows_all(deleter: DatabaseDeleter, built_ducklake_schema: Any) -> None:
     """Test that delete_rows with filters=None removes all rows.
 
     Args:
@@ -144,7 +150,9 @@ def test_delete_rows_all(deleter, built_ducklake_schema):
 
 
 # Test de la suppression d'une colonne non-clé primaire
-def test_delete_columns_single_column(deleter, built_ducklake_schema):
+def test_delete_columns_single_column(
+    deleter: DatabaseDeleter, built_ducklake_schema: Any
+) -> None:
     """Test that delete_columns removes a non-primary-key column from the fact table.
 
     Args:
@@ -178,8 +186,8 @@ def test_delete_columns_single_column(deleter, built_ducklake_schema):
 
 # Test de conversion non-catégorielle → catégorielle après suppression de lignes
 def test_delete_rows_non_categorical_becomes_categorical(
-    deleter, built_ducklake_schema
-):
+    deleter: DatabaseDeleter, built_ducklake_schema: Any
+) -> None:
     """Test that a non-categorical column becomes categorical when its
     unique value count drops to or below the threshold after rows are deleted.
 

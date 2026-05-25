@@ -1,6 +1,7 @@
 # Importation des modules
 # Modules de base
 from datetime import datetime
+from typing import Any
 
 import polars as pl
 
@@ -14,7 +15,7 @@ from dt_ducklake_manager.operations import DatabaseUpdater
 
 
 # Test de l'initialisation correcte de DatabaseUpdater
-def test_updater_initialization(built_ducklake_schema):
+def test_updater_initialization(built_ducklake_schema: Any) -> None:
     """Test that DatabaseUpdater initializes without errors.
 
     Args:
@@ -28,7 +29,7 @@ def test_updater_initialization(built_ducklake_schema):
 
 
 # Test de l'initialisation avec enable_validation=False
-def test_updater_initialization_without_validation(built_ducklake_schema):
+def test_updater_initialization_without_validation(built_ducklake_schema: Any) -> None:
     """Test that DatabaseUpdater can be initialized with validation disabled.
 
     Args:
@@ -45,7 +46,9 @@ def test_updater_initialization_without_validation(built_ducklake_schema):
 
 
 # Test que validate_operation retourne True pour une insertion valide
-def test_validate_operation_insert_returns_bool(updater, update_df):
+def test_validate_operation_insert_returns_bool(
+    updater: DatabaseUpdater, update_df: pl.DataFrame
+) -> None:
     """Test that validate_operation returns a boolean for an insert operation.
 
     Args:
@@ -57,7 +60,9 @@ def test_validate_operation_insert_returns_bool(updater, update_df):
 
 
 # Test que validate_operation retourne True quand la validation est désactivée
-def test_validate_operation_disabled_returns_true(built_ducklake_schema, update_df):
+def test_validate_operation_disabled_returns_true(
+    built_ducklake_schema: Any, update_df: pl.DataFrame
+) -> None:
     """Test that validate_operation always returns True when validation is disabled.
 
     Args:
@@ -76,7 +81,9 @@ def test_validate_operation_disabled_returns_true(built_ducklake_schema, update_
 
 
 # Test d'insertion de nouvelles lignes sans transaction
-def test_update_database_insert_new_rows(updater, built_ducklake_schema, update_df):
+def test_update_database_insert_new_rows(
+    updater: DatabaseUpdater, built_ducklake_schema: Any, update_df: pl.DataFrame
+) -> None:
     """Test that update_database inserts new rows into the fact table.
 
     Args:
@@ -110,7 +117,9 @@ def test_update_database_insert_new_rows(updater, built_ducklake_schema, update_
 
 
 # Test d'insertion avec déduplication sur les doublons du DataFrame d'entrée
-def test_update_database_with_dedup_on_update(updater, built_ducklake_schema):
+def test_update_database_with_dedup_on_update(
+    updater: DatabaseUpdater, built_ducklake_schema: Any
+) -> None:
     """Test that update_database removes duplicates from the update
     DataFrame when requested.
 
@@ -164,8 +173,8 @@ def test_update_database_with_dedup_on_update(updater, built_ducklake_schema):
 
 # Test de conversion non-catégorielle → catégorielle après remplacement de lignes
 def test_update_database_non_categorical_becomes_categorical(
-    updater, built_ducklake_schema
-):
+    updater: DatabaseUpdater, built_ducklake_schema: Any
+) -> None:
     """Test that a non-categorical column becomes categorical when its
     unique value count drops to or below the threshold after an update.
 
@@ -235,8 +244,8 @@ def test_update_database_non_categorical_becomes_categorical(
 
 # Test de conversion catégorielle → non-catégorielle après ajout de nouvelles modalités
 def test_update_database_categorical_becomes_non_categorical(
-    updater, built_ducklake_schema
-):
+    updater: DatabaseUpdater, built_ducklake_schema: Any
+) -> None:
     """Test that a categorical column loses its categorical status when the number of
     distinct values exceeds the threshold after inserting new rows.
 

@@ -5,6 +5,7 @@ import polars as pl
 
 # Module de tests
 import pytest
+from narwhals.dtypes import DType
 
 # Module du package à tester
 from dt_ducklake_manager.utils.types import map_python_to_sql_type
@@ -15,7 +16,7 @@ from dt_ducklake_manager.utils.types import map_python_to_sql_type
 
 
 # Test de l'association des types textuels vers VARCHAR
-def test_string_maps_to_varchar():
+def test_string_maps_to_varchar() -> None:
     """Test that String type maps to VARCHAR.
 
     Examples:
@@ -26,7 +27,7 @@ def test_string_maps_to_varchar():
 
 
 # Test de l'association des types catégoriels et enum vers VARCHAR
-def test_categorical_and_enum_map_to_varchar():
+def test_categorical_and_enum_map_to_varchar() -> None:
     """Test that Categorical and Enum types map to VARCHAR.
 
     Examples:
@@ -43,7 +44,7 @@ def test_categorical_and_enum_map_to_varchar():
 
 # Test de l'association des entiers signés 8 à 64 bits vers INTEGER
 @pytest.mark.parametrize("dtype", [nw.Int8(), nw.Int16(), nw.Int32(), nw.Int64()])
-def test_signed_int_maps_to_integer(dtype):
+def test_signed_int_maps_to_integer(dtype: DType) -> None:
     """Test that signed integer types (8 to 64 bits) map to INTEGER.
 
     Args:
@@ -57,7 +58,7 @@ def test_signed_int_maps_to_integer(dtype):
 
 
 # Test de l'association de l'entier signé 128 bits vers HUGEINT
-def test_int128_maps_to_hugeint():
+def test_int128_maps_to_hugeint() -> None:
     """Test that Int128 maps to HUGEINT.
 
     Examples:
@@ -82,7 +83,7 @@ def test_int128_maps_to_hugeint():
         (nw.UInt64(), "UBIGINT"),
     ],
 )
-def test_unsigned_int_maps_to_correct_type(dtype, expected):
+def test_unsigned_int_maps_to_correct_type(dtype: DType, expected: str) -> None:
     """Test that unsigned integer types map to their dedicated DuckDB types.
 
     Args:
@@ -97,7 +98,7 @@ def test_unsigned_int_maps_to_correct_type(dtype, expected):
 
 
 # Test de l'association de l'entier non signé 128 bits vers UHUGEINT
-def test_uint128_maps_to_uhugeint():
+def test_uint128_maps_to_uhugeint() -> None:
     """Test that UInt128 maps to UHUGEINT.
 
     Examples:
@@ -114,7 +115,7 @@ def test_uint128_maps_to_uhugeint():
 
 # Test de l'association des types flottants vers DOUBLE
 @pytest.mark.parametrize("dtype", [nw.Float32(), nw.Float64()])
-def test_float_maps_to_double(dtype):
+def test_float_maps_to_double(dtype: DType) -> None:
     """Test that Float32 and Float64 map to DOUBLE.
 
     Args:
@@ -128,7 +129,7 @@ def test_float_maps_to_double(dtype):
 
 
 # Test de l'association du type décimal vers DECIMAL
-def test_decimal_maps_to_decimal():
+def test_decimal_maps_to_decimal() -> None:
     """Test that Decimal maps to DECIMAL.
 
     Examples:
@@ -153,7 +154,7 @@ def test_decimal_maps_to_decimal():
         (nw.Time(), "TIME"),
     ],
 )
-def test_temporal_types_mapping(dtype, expected):
+def test_temporal_types_mapping(dtype: DType, expected: str) -> None:
     """Test that temporal types map to their SQL equivalents.
 
     Args:
@@ -173,7 +174,7 @@ def test_temporal_types_mapping(dtype, expected):
 
 
 # Test de l'association du type booléen vers BOOLEAN
-def test_boolean_maps_to_boolean():
+def test_boolean_maps_to_boolean() -> None:
     """Test that Boolean maps to BOOLEAN.
 
     Examples:
@@ -184,7 +185,7 @@ def test_boolean_maps_to_boolean():
 
 
 # Test de l'association du type binaire vers BLOB
-def test_binary_maps_to_blob():
+def test_binary_maps_to_blob() -> None:
     """Test that Binary maps to BLOB.
 
     Examples:
@@ -200,7 +201,7 @@ def test_binary_maps_to_blob():
 
 
 # Test de l'association des types composites vers VARCHAR (repli)
-def test_list_maps_to_varchar():
+def test_list_maps_to_varchar() -> None:
     """Test that List type falls back to VARCHAR.
 
     Examples:
@@ -210,7 +211,7 @@ def test_list_maps_to_varchar():
     assert map_python_to_sql_type(nw.List(nw.String())) == "VARCHAR"
 
 
-def test_array_maps_to_varchar():
+def test_array_maps_to_varchar() -> None:
     """Test that Array type falls back to VARCHAR.
 
     Examples:
@@ -220,7 +221,7 @@ def test_array_maps_to_varchar():
     assert map_python_to_sql_type(nw.Array(nw.Int32(), 3)) == "VARCHAR"
 
 
-def test_struct_maps_to_varchar():
+def test_struct_maps_to_varchar() -> None:
     """Test that Struct type falls back to VARCHAR.
 
     Examples:
@@ -236,7 +237,7 @@ def test_struct_maps_to_varchar():
 
 
 # Test de l'inférence de type à partir d'un schéma polars réel
-def test_map_via_polars_integer_schema():
+def test_map_via_polars_integer_schema() -> None:
     """Test type mapping via a real polars schema for integer columns.
 
     Examples:
@@ -250,7 +251,7 @@ def test_map_via_polars_integer_schema():
 
 
 # Test de l'inférence de type à partir d'un schéma polars pour les chaînes
-def test_map_via_polars_string_schema():
+def test_map_via_polars_string_schema() -> None:
     """Test type mapping via a real polars schema for string columns.
 
     Examples:
@@ -264,7 +265,7 @@ def test_map_via_polars_string_schema():
 
 
 # Test de l'inférence de type à partir d'un schéma polars pour les flottants
-def test_map_via_polars_float_schema():
+def test_map_via_polars_float_schema() -> None:
     """Test type mapping via a real polars schema for float columns.
 
     Examples:

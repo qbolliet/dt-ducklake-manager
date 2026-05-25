@@ -1,6 +1,7 @@
 # Importation des modules
 # Modules de base
 from datetime import datetime
+from typing import Any
 
 import polars as pl
 
@@ -17,7 +18,7 @@ from dt_ducklake_manager.operations import DatabaseDeleter, DatabaseUpdater
 
 # Initialisation d'un DatabaseUpdater pour les tests
 @pytest.fixture
-def updater(built_ducklake_schema):
+def updater(built_ducklake_schema: Any) -> DatabaseUpdater:
     """Create a DatabaseUpdater instance for testing.
 
     Args:
@@ -37,7 +38,7 @@ def updater(built_ducklake_schema):
 
 # Initialisation d'un DatabaseDeleter pour les tests
 @pytest.fixture
-def deleter(built_ducklake_schema):
+def deleter(built_ducklake_schema: Any) -> DatabaseDeleter:
     """Create a DatabaseDeleter instance for testing.
 
     Args:
@@ -58,7 +59,7 @@ def deleter(built_ducklake_schema):
 
 # Initialisation d'un DataFrame de mise à jour avec de nouvelles lignes (ids inédits)
 @pytest.fixture
-def update_df():
+def update_df() -> pl.DataFrame:
     """Create a DataFrame with new rows for update testing.
 
     Returns:
