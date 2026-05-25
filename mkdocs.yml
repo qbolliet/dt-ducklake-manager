@@ -39,17 +39,17 @@ plugins:
 - search
 - autorefs
 - mkdocstrings:
+    import:
+    - https://docs.python.org/3/objects.inv
+    - https://mkdocstrings.github.io/objects.inv
+    - https://mkdocstrings.github.io/autorefs/objects.inv
+    - https://mkdocstrings.github.io/griffe/objects.inv
+    - https://python-markdown.github.io/objects.inv
     handlers:
       python:
         paths:
         - src
         - docs/snippets
-        import:
-        - https://docs.python.org/3/objects.inv
-        - https://mkdocstrings.github.io/objects.inv
-        - https://mkdocstrings.github.io/autorefs/objects.inv
-        - https://mkdocstrings.github.io/griffe/objects.inv
-        - https://python-markdown.github.io/objects.inv
         options:
           docstring_options:
             ignore_init_summary: true
@@ -81,11 +81,9 @@ extra_javascript:
 - https://cdnjs.cloudflare.com/ajax/libs/mathjax/2.7.4/MathJax.js?config=TeX-AMS-MML_HTMLorMML
 nav:
 - Package description: index.md
-- Architecture & trade-offs: architecture.md
 - API Documentation:
   - connection:
     - DuckLakeConnector: api\connection\DuckLakeConnector.md
-    - CatalogType: api\connection\CatalogType.md
   - maintenance:
     - ValidationLevel: api\maintenance\ValidationLevel.md
     - IssueType: api\maintenance\IssueType.md
