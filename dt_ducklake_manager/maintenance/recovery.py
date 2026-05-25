@@ -18,6 +18,7 @@ from .._internal.managers.dimension import DimensionManager
 
 # Import des utilitaires
 from ..utils.logger import _init_logger
+from ..utils.sql import qualify_table
 
 # Import des gestionnaires
 from .auditor import DatabaseAuditor, ValidationIssue, ValidationLevel
@@ -147,7 +148,7 @@ class DatabaseRecoveryManager:
         max_backup_age_days: int = 30,
         auto_backup_on_changes: bool = True,
         catalog_alias: str = "db",
-        ducklake_schema: str = "main",
+        schema: str = "main",
     ):
         """
         Initialize the database recovery manager.
@@ -166,7 +167,8 @@ class DatabaseRecoveryManager:
                 before destructive in-place operations (e.g. REPAIR_SCHEMA).
             catalog_alias: Alias of the attached DuckLake catalog, used to query
                 available snapshots via ``ducklake_snapshots()``. Defaults to ``'db'``.
-            ducklake_schema: DuckLake schema name used for snapshot queries.
+            schema: DuckLake schema to recover. Used for snapshot queries and to
+                qualify the result set's tables. A catalog can host several schemas.
                 Defaults to ``'main'``.
 
         Example:
@@ -177,7 +179,7 @@ class DatabaseRecoveryManager:
         # Initialisation de la connexion DuckLake.
         self.conn = connection if connection is not None else duckdb.connect(":memory:")
         self.catalog_alias = catalog_alias
-        self.ducklake_schema = ducklake_schema
+        self.schema = schema
 
         # Configuration des répertoires
         if backup_dir is None:
@@ -187,7 +189,9 @@ class DatabaseRecoveryManager:
         self.backup_dir.mkdir(parents=True, exist_ok=True)
 
         # Initialisation des composants
-        self.auditor = DatabaseAuditor(connection, categorical_threshold, log_filename)
+        self.auditor = DatabaseAuditor(
+            connection, categorical_threshold, log_filename, schema=schema
+        )
 
         # Initialisation du logger
         if log_filename is None:
@@ -204,6 +208,19 @@ class DatabaseRecoveryManager:
         # État interne
         self._recovery_points: dict[str, RecoveryPoint] = {}
         self._load_existing_recovery_points()
+
+    # Méthode de qualification d'un nom de table par le schéma cible
+    def _qualified(self, table: str) -> str:
+        """Return a table name qualified by this manager's schema.
+
+        Args:
+            table: Bare table name (e.g. ``'fact_table'``).
+
+        Returns:
+            The ``'<schema>.<table>'`` identifier.
+        """
+        # Délégation à l'utilitaire central de qualification
+        return qualify_table(table, self.schema)
 
     # Méthodes de gestion des points de récupération
     # Méthode de création d'un point de récupération
@@ -583,7 +600,8 @@ class DatabaseRecoveryManager:
             if self._table_exists("metadata"):
                 metadata_file = backup_path / "metadata.csv"
                 export_query = (
-                    f"COPY metadata TO '{metadata_file}' (FORMAT CSV, HEADER)"
+                    f"COPY {self._qualified('metadata')} TO '{metadata_file}'"
+                    f" (FORMAT CSV, HEADER)"
                 )
                 self.conn.execute(export_query)
 
@@ -640,7 +658,7 @@ class DatabaseRecoveryManager:
             try:
                 snapshots_df = self.conn.execute(
                     f"SELECT * FROM {self.catalog_alias}.ducklake_snapshots"
-                    f"('{self.ducklake_schema}') ORDER BY snapshot_id DESC"
+                    f"('{self.schema}') ORDER BY snapshot_id DESC"
                 ).pl()
             except Exception as e:
                 return RecoveryResult(
@@ -654,7 +672,7 @@ class DatabaseRecoveryManager:
             snapshot_count = len(snapshots_df)
             operations_performed.append(
                 f"{snapshot_count} snapshot(s) disponible(s) dans le catalogue "
-                f"'{self.catalog_alias}.{self.ducklake_schema}'"
+                f"'{self.catalog_alias}.{self.schema}'"
             )
 
             # Présentation structurée de chaque snapshot avec horodatage lisible
@@ -713,7 +731,8 @@ class DatabaseRecoveryManager:
                 "Étape 1 — Ouvrir une connexion en lecture seule sur le snapshot cible"
                 ":",
                 f"  conn_old = DuckLakeConnector(catalog_path, data_path,"
-                f"snapshot_version={suggested_id}).connect()",
+                f" schema='{self.schema}',"
+                f" snapshot_version={suggested_id}).connect()",
                 "",
                 "Étape 2 — Lire les tables depuis cette connexion :",
                 "  fact_df = conn_old.execute('SELECT * FROM fact_table').pl()",
@@ -730,7 +749,7 @@ class DatabaseRecoveryManager:
                 "  # Répéter pour metadata et chaque table de dimension",
                 "",
                 "Étape 4 — Valider l'intégrité après restauration :",
-                "  auditor = DatabaseAuditor(conn)",
+                f"  auditor = DatabaseAuditor(conn, schema='{self.schema}')",
                 "  report  = auditor.validate_database(ValidationLevel.COMPREHENSIVE)",
                 "  print(report)",
             ]
@@ -772,7 +791,7 @@ class DatabaseRecoveryManager:
         try:
             return self.conn.execute(
                 f"SELECT * FROM {self.catalog_alias}.ducklake_snapshots"
-                f"('{self.ducklake_schema}') ORDER BY snapshot_id DESC"
+                f"('{self.schema}') ORDER BY snapshot_id DESC"
             ).pl()
         except Exception as e:
             self.logger.error(f"Impossible de lister les snapshots DuckLake : {e}")
@@ -855,8 +874,8 @@ class DatabaseRecoveryManager:
                 "missing" in issue.description.lower()
                 and issue.table_name == "metadata"
             ):
-                self.conn.execute("""
-                    CREATE TABLE IF NOT EXISTS metadata (
+                self.conn.execute(f"""
+                    CREATE TABLE IF NOT EXISTS {self._qualified("metadata")} (
                         name VARCHAR,
                         label VARCHAR,
                         python_type VARCHAR,
@@ -882,10 +901,13 @@ class DatabaseRecoveryManager:
                     # Récupération des valeurs distinctes de la fact_table puis
                     # création/mise à jour de la table de dimension.
                     # update_dimension_values crée la table si elle n'existe pas encore.
-                    dim_mgr = DimensionManager(self.conn, self.categorical_threshold)
+                    dim_mgr = DimensionManager(
+                        self.conn, self.categorical_threshold, schema=self.schema
+                    )
+                    fact_table = self._qualified("fact_table")
                     values_pl = self.conn.execute(
-                        f"SELECT DISTINCT {col_name} FROM fact_table WHERE {col_name}"
-                        f" IS NOT NULL"
+                        f"SELECT DISTINCT {col_name} FROM {fact_table}"
+                        f" WHERE {col_name} IS NOT NULL"
                     ).pl()[col_name]
                     values_nw = nw.from_native(values_pl, series_only=True)
                     dim_mgr.update_dimension_values(col_name, values_nw)
@@ -921,10 +943,13 @@ class DatabaseRecoveryManager:
                 "is_primary_key": "BOOLEAN DEFAULT FALSE",
             }
 
+            # Nom qualifié de la table de métadonnées
+            metadata_table = self._qualified("metadata")
+
             # Récupération des colonnes existantes
             existing_columns = set()
             try:
-                result = self.conn.execute("DESCRIBE metadata").fetchall()
+                result = self.conn.execute(f"DESCRIBE {metadata_table}").fetchall()
                 existing_columns = {row[0] for row in result}
             except Exception:
                 pass
@@ -933,7 +958,7 @@ class DatabaseRecoveryManager:
             for col_name, col_type in required_columns.items():
                 if col_name not in existing_columns:
                     self.conn.execute(
-                        f"ALTER TABLE metadata ADD COLUMN {col_name} {col_type}"
+                        f"ALTER TABLE {metadata_table} ADD COLUMN {col_name} {col_type}"
                     )
                     self.logger.info(
                         f"Added missing column {col_name} to metadata table"
@@ -966,7 +991,9 @@ class DatabaseRecoveryManager:
 
             # Reconstruction des tables de dimension corrompues
             # Initialisation du gestionnaire des dimensions
-            dim_mgr = DimensionManager(self.conn, self.categorical_threshold)
+            dim_mgr = DimensionManager(
+                self.conn, self.categorical_threshold, schema=self.schema
+            )
 
             # Étape 1: Nettoyage des entrées orphelines
             cleaned = dim_mgr.cleanup_orphaned_dimension_entries()
@@ -980,7 +1007,7 @@ class DatabaseRecoveryManager:
             # Étape 2: Reconstruction des tables de dimension manquantes
             try:
                 metadata = self.conn.execute(
-                    "SELECT name, is_categorical FROM metadata"
+                    f"SELECT name, is_categorical FROM {self._qualified('metadata')}"
                 ).pl()
                 categorical_cols = metadata.filter(pl.col("is_categorical"))[
                     "name"
@@ -992,7 +1019,8 @@ class DatabaseRecoveryManager:
                         # Recréation de la table de dimension à partir de la fact_table.
                         # update_dimension_values crée la table si elle n'existe pas.
                         values_pl = self.conn.execute(
-                            f"SELECT DISTINCT {col_name} FROM fact_table WHERE"
+                            f"SELECT DISTINCT {col_name} FROM"
+                            f" {self._qualified('fact_table')} WHERE"
                             f" {col_name} IS NOT NULL"
                         ).pl()[col_name]
                         values_nw = nw.from_native(values_pl, series_only=True)
@@ -1010,7 +1038,8 @@ class DatabaseRecoveryManager:
                     if self._table_exists(dim_table):
                         # Ajout des valeurs de fact_table manquantes dans dimension
                         fact_values = self.conn.execute(
-                            f"SELECT DISTINCT {col_name} FROM fact_table WHERE"
+                            f"SELECT DISTINCT {col_name} FROM"
+                            f" {self._qualified('fact_table')} WHERE"
                             f" {col_name} IS NOT NULL"
                         ).pl()[col_name]
                         added = dim_mgr.update_dimension_values(col_name, fact_values)
@@ -1064,6 +1093,7 @@ class DatabaseRecoveryManager:
                 self.categorical_threshold,
                 enable_validation=False,
                 auto_cleanup=True,
+                schema=self.schema,
             )
             # Nettoyage de la base de données
             cleanup_results = deleter.cleanup_database(comprehensive=True)
@@ -1365,8 +1395,12 @@ class DatabaseRecoveryManager:
             List of table names, empty list on error.
         """
         try:
-            # Exécution de la requête
-            result = self.conn.execute("SHOW TABLES").fetchall()
+            # Exécution de la requête, filtrée sur le schéma cible
+            result = self.conn.execute(
+                "SELECT table_name FROM information_schema.tables "
+                "WHERE table_schema = ?",
+                [self.schema],
+            ).fetchall()
             return [row[0] for row in result]
         except Exception:
             return []
@@ -1374,17 +1408,17 @@ class DatabaseRecoveryManager:
     # Méthode auxiliaire de vérification de l'existence d'une table dans la base de
     # données
     def _table_exists(self, table_name: str) -> bool:
-        """Check if a table exists in the database.
+        """Check if a (bare-named) table exists in the recovered schema.
 
         Args:
-            table_name: Name of the table to check.
+            table_name: Bare name of the table to check.
 
         Returns:
             True if table exists, False otherwise.
         """
         try:
-            # Exécution de la requête
-            self.conn.execute(f"SELECT 1 FROM {table_name} LIMIT 1")
+            # Exécution de la requête (table qualifiée par le schéma)
+            self.conn.execute(f"SELECT 1 FROM {self._qualified(table_name)} LIMIT 1")
             return True
         except Exception:
             return False
@@ -1515,20 +1549,22 @@ class DatabaseRecoveryManager:
             if not col_name:
                 return False
 
-            dim_table = f"dim_{col_name}"
+            # Noms qualifiés par le schéma
+            fact_table = self._qualified("fact_table")
+            dim_table = self._qualified(f"dim_{col_name}")
 
             if issue.table_name == "fact_table":
                 # Références orphelines dans fact_table → mettre à NULL
                 self.conn.execute(f"""
-                    UPDATE fact_table SET {col_name} = NULL
+                    UPDATE {fact_table} SET {col_name} = NULL
                     WHERE {col_name} NOT IN (SELECT value FROM {dim_table})
                 """)
             else:
                 # Entrées orphelines dans dimension → supprimer
                 self.conn.execute(f"""
                     DELETE FROM {dim_table}
-                    WHERE value NOT IN (SELECT DISTINCT {col_name} FROM fact_table WHERE
-                    {col_name} IS NOT NULL)
+                    WHERE value NOT IN (SELECT DISTINCT {col_name} FROM {fact_table}
+                    WHERE {col_name} IS NOT NULL)
                 """)
 
             return True
@@ -1554,15 +1590,18 @@ class DatabaseRecoveryManager:
             if not col_name or table_name != "fact_table":
                 return False
 
+            # Nom qualifié de la table des faits
+            fact_table = self._qualified("fact_table")
+
             # Comptage des lignes avant suppression
-            _r1 = self.conn.execute("SELECT COUNT(*) FROM fact_table").fetchone()
+            _r1 = self.conn.execute(f"SELECT COUNT(*) FROM {fact_table}").fetchone()
             initial_count = _r1[0] if _r1 is not None else 0
 
             # Suppression des lignes contenant des valeurs nulles
-            self.conn.execute(f"DELETE FROM fact_table WHERE {col_name} IS NULL")
+            self.conn.execute(f"DELETE FROM {fact_table} WHERE {col_name} IS NULL")
 
             # Comptage des lignes après suppression
-            _r2 = self.conn.execute("SELECT COUNT(*) FROM fact_table").fetchone()
+            _r2 = self.conn.execute(f"SELECT COUNT(*) FROM {fact_table}").fetchone()
             final_count = _r2[0] if _r2 is not None else 0
             deleted_count = initial_count - final_count
 
@@ -1592,14 +1631,16 @@ class DatabaseRecoveryManager:
             if issue.table_name == "fact_table" and issue.column_name:
                 col_name = issue.column_name
                 # Inférence du type depuis la colonne
-                result = self.conn.execute("DESCRIBE fact_table").fetchall()
+                result = self.conn.execute(
+                    f"DESCRIBE {self._qualified('fact_table')}"
+                ).fetchall()
                 col_info = next((row for row in result if row[0] == col_name), None)
                 if col_info:
                     sql_type = col_info[1]
                     self.conn.execute(
-                        """
-                        INSERT INTO metadata (name, label, python_type, sql_type,
-                        is_categorical, is_primary_key)
+                        f"""
+                        INSERT INTO {self._qualified("metadata")} (name, label,
+                        python_type, sql_type, is_categorical, is_primary_key)
                         VALUES (?, ?, ?, ?, FALSE, FALSE)
                     """,
                         [
@@ -1616,7 +1657,8 @@ class DatabaseRecoveryManager:
             # métadonnées
             if issue.table_name == "metadata" and issue.column_name:
                 self.conn.execute(
-                    "DELETE FROM metadata WHERE name = ?", [issue.column_name]
+                    f"DELETE FROM {self._qualified('metadata')} WHERE name = ?",
+                    [issue.column_name],
                 )
                 self.logger.info(
                     f"Removed orphaned metadata for column {issue.column_name}"
@@ -1644,14 +1686,19 @@ class DatabaseRecoveryManager:
             if not col_name:
                 return False
 
-            dim_table = f"dim_{col_name}"
-            dim_mgr = DimensionManager(self.conn, self.categorical_threshold)
+            # Nom nu (pour _table_exists) et nom qualifié (pour le SQL)
+            dim_name = f"dim_{col_name}"
+            dim_table = self._qualified(dim_name)
+            fact_table = self._qualified("fact_table")
+            dim_mgr = DimensionManager(
+                self.conn, self.categorical_threshold, schema=self.schema
+            )
 
             # Cas 1: Table de dimension manquante → création
             # update_dimension_values crée la table si elle n'existe pas.
             if "missing" in issue.description.lower():
                 values_pl = self.conn.execute(
-                    f"SELECT DISTINCT {col_name} FROM fact_table WHERE {col_name} IS"
+                    f"SELECT DISTINCT {col_name} FROM {fact_table} WHERE {col_name} IS"
                     f" NOT NULL"
                 ).pl()[col_name]
                 dim_mgr.update_dimension_values(
@@ -1661,10 +1708,10 @@ class DatabaseRecoveryManager:
                 return True
 
             # Cas 2: Table de dimension corrompue → reconstruction
-            if self._table_exists(dim_table):
+            if self._table_exists(dim_name):
                 self.conn.execute(f"DROP TABLE {dim_table}")
                 values_pl = self.conn.execute(
-                    f"SELECT DISTINCT {col_name} FROM fact_table WHERE {col_name} IS"
+                    f"SELECT DISTINCT {col_name} FROM {fact_table} WHERE {col_name} IS"
                     f" NOT NULL"
                 ).pl()[col_name]
                 dim_mgr.update_dimension_values(
@@ -1699,8 +1746,9 @@ class DatabaseRecoveryManager:
             # Note: DuckDB ne supporte pas ALTER COLUMN TYPE directement, donc
             # recréation nécessaire
             self.conn.execute(
-                """
-                UPDATE metadata SET sql_type = 'VARCHAR', python_type = 'object'
+                f"""
+                UPDATE {self._qualified("metadata")}
+                SET sql_type = 'VARCHAR', python_type = 'object'
                 WHERE name = ?
             """,
                 [col_name],
@@ -1727,16 +1775,18 @@ class DatabaseRecoveryManager:
             # Traitement des violations de contraintes (doublons, valeurs invalides,
             # etc.)
             if "duplicate" in issue.description.lower():
+                # Nom qualifié de la table des faits
+                fact_table = self._qualified("fact_table")
                 # Suppression des doublons en gardant la première occurrence
-                self.conn.execute("""
-                    CREATE OR REPLACE TABLE fact_table AS
+                self.conn.execute(f"""
+                    CREATE OR REPLACE TABLE {fact_table} AS
                     SELECT * FROM (
                         SELECT *, ROW_NUMBER() OVER (PARTITION BY * ORDER BY 1) as rn
-                        FROM fact_table
+                        FROM {fact_table}
                     ) WHERE rn = 1
                 """)
                 # Suppression de la colonne temporaire
-                self.conn.execute("ALTER TABLE fact_table DROP COLUMN rn")
+                self.conn.execute(f"ALTER TABLE {fact_table} DROP COLUMN rn")
                 self.logger.info("Removed duplicate rows from fact_table")
                 return True
 

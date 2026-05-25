@@ -14,13 +14,14 @@ from narwhals.typing import IntoDataFrame
 
 # Import des utilitaires
 from ...utils.logger import _init_logger
+from ...utils.sql import qualify_table
 from ...utils.types import map_python_to_sql_type
 
 # Emplacement du fichier
 FILE_PATH = Path(os.path.abspath(__file__))
 
 
-# Classe contennat des opérations utilitaires de base sur la base de données au schéma
+# Classe contenant des opérations utilitaires de base sur la base de données au schéma
 # métadonnées - table des faits - tables de dimensions
 class BaseSchemaManager(ABC):
     """
@@ -32,6 +33,7 @@ class BaseSchemaManager(ABC):
     Attributes:
         conn (duckdb.DuckDBPyConnection): Database connection
         categorical_threshold (int): Threshold for categorical determination
+        schema (str): DuckLake schema holding this result set's tables
         logger: Logger instance for operation tracking
     """
 
@@ -41,6 +43,7 @@ class BaseSchemaManager(ABC):
         connection: duckdb.DuckDBPyConnection | None = None,
         categorical_threshold: int | None = 50,
         log_filename: str | os.PathLike[str] | None = None,
+        schema: str = "main",
     ):
         """
         Initialize the base schema manager.
@@ -51,10 +54,15 @@ class BaseSchemaManager(ABC):
                 connection is created (useful for unit tests only).
             categorical_threshold: Threshold for determining categorical variables.
             log_filename: Path to log file.
+            schema: DuckLake schema holding the ``fact_table``, ``metadata`` and
+                ``dim_*`` tables to operate on. A single catalog can host several
+                schemas (one per result set). Defaults to ``'main'``.
 
         Example:
             >>> conn = DuckLakeConnector('catalog.ducklake', 'data/').connect()
             >>> manager = ConcreteManager(conn, categorical_threshold=30)
+            >>> # Cibler un schéma dédié dans le même catalogue
+            >>> manager = ConcreteManager(conn, schema='predictions')
         """
         # Initialisation de la connexion DuckLake.
         # Le fallback :memory: est réservé aux tests unitaires ; en production la
@@ -63,6 +71,11 @@ class BaseSchemaManager(ABC):
 
         # Seuil pour déterminer si une variable est catégorielle
         self.categorical_threshold = categorical_threshold
+
+        # Schéma DuckLake cible : toutes les requêtes qualifient les tables par ce
+        # schéma, permettant à plusieurs jeux de résultats de coexister dans un même
+        # catalogue.
+        self.schema = schema
 
         # Initialisation du logger pour traçabilité des opérations
         if log_filename is None:
@@ -74,6 +87,25 @@ class BaseSchemaManager(ABC):
         # Cache thread-safe pour optimiser les accès aux métadonnées
         self._metadata_cache: nw.DataFrame[Any] | None = None
         self._cache_lock = threading.RLock()
+
+    # Méthode de qualification d'un nom de table par le schéma du gestionnaire
+    def _qualified(self, table: str) -> str:
+        """
+        Return a table name qualified by this manager's schema.
+
+        Args:
+            table: Bare table name (e.g. ``'fact_table'``, ``'dim_country'``).
+
+        Returns:
+            The ``'<schema>.<table>'`` identifier targeting :attr:`schema`.
+
+        Example:
+            >>> manager.schema = 'predictions'
+            >>> manager._qualified('fact_table')
+            'predictions.fact_table'
+        """
+        # Délégation à l'utilitaire central de qualification
+        return qualify_table(table, self.schema)
 
     # Méthodes de gestion du cache des métadonnées
     # Méthode de chargement des méta-données
@@ -91,7 +123,9 @@ class BaseSchemaManager(ABC):
                     # Chargement via polars (backend interne) puis encapsulation
                     # narwhals
                     self._metadata_cache = nw.from_native(
-                        self.conn.execute("SELECT * FROM metadata").pl(),
+                        self.conn.execute(
+                            f"SELECT * FROM {self._qualified('metadata')}"
+                        ).pl(),
                         eager_only=True,
                     )
                 except Exception:
@@ -130,7 +164,9 @@ class BaseSchemaManager(ABC):
             List of column names
         """
         # Exécution de la requête
-        result = self.conn.execute("DESCRIBE fact_table").fetchall()
+        result = self.conn.execute(
+            f"DESCRIBE {self._qualified('fact_table')}"
+        ).fetchall()
         return [row[0] for row in result]
 
     # Méthode d'extraction des colonnes catégorielles
@@ -143,7 +179,8 @@ class BaseSchemaManager(ABC):
         """
         # Exécution de la requête
         result = self.conn.execute(
-            "SELECT name FROM metadata WHERE is_categorical IS TRUE"
+            f"SELECT name FROM {self._qualified('metadata')} "
+            "WHERE is_categorical IS TRUE"
         ).fetchall()
         return [row[0] for row in result]
 
@@ -158,10 +195,14 @@ class BaseSchemaManager(ABC):
         Returns:
             True if table exists
         """
-        # Exécution de la requête
+        # Exécution de la requête.
+        # Filtrage par schéma indispensable : la même table (ex. 'fact_table') peut
+        # exister dans plusieurs schémas du catalogue ; sans ce filtre, un schéma
+        # voisin produirait un faux positif.
         row = self.conn.execute(
-            "SELECT COUNT(*) FROM information_schema.tables WHERE table_name = ?",
-            [table_name],
+            "SELECT COUNT(*) FROM information_schema.tables "
+            "WHERE table_name = ? AND table_schema = ?",
+            [table_name, self.schema],
         ).fetchone()
         return row[0] > 0 if row is not None else False
 
@@ -177,8 +218,13 @@ class BaseSchemaManager(ABC):
         Returns:
             True if column exists
         """
-        # Extraction des colonnes de la table
-        columns = [row[0] for row in self.conn.execute(f"DESCRIBE {table}").fetchall()]
+        # Extraction des colonnes de la table (qualifiée par le schéma)
+        columns = [
+            row[0]
+            for row in self.conn.execute(
+                f"DESCRIBE {self._qualified(table)}"
+            ).fetchall()
+        ]
         return column in columns
 
     # Méthode de vérification si une colonne a une table de dimension (équivalent à
@@ -195,7 +241,8 @@ class BaseSchemaManager(ABC):
         """
         # Recherche du statut catégoriel
         result = self.conn.execute(
-            "SELECT is_categorical FROM metadata WHERE name = ?", [column]
+            f"SELECT is_categorical FROM {self._qualified('metadata')} WHERE name = ?",
+            [column],
         ).fetchone()
         return result[0] if result else False
 
@@ -216,7 +263,8 @@ class BaseSchemaManager(ABC):
         """
         # Recherche du statut de clé primaire dans les méta-données
         result = self.conn.execute(
-            "SELECT is_primary_key FROM metadata WHERE name = ?", [column]
+            f"SELECT is_primary_key FROM {self._qualified('metadata')} WHERE name = ?",
+            [column],
         ).fetchone()
         return result[0] if result else False
 
@@ -234,7 +282,8 @@ class BaseSchemaManager(ABC):
         """
         # Requête pour récupérer les noms des colonnes marquées comme clés primaires
         result = self.conn.execute(
-            "SELECT name FROM metadata WHERE is_primary_key IS TRUE"
+            f"SELECT name FROM {self._qualified('metadata')} "
+            "WHERE is_primary_key IS TRUE"
         ).fetchall()
         return [row[0] for row in result]
 
@@ -264,9 +313,12 @@ class BaseSchemaManager(ABC):
             column
         ].n_unique() <= (self.categorical_threshold or 0)
 
+        # Nom qualifié de la table de métadonnées
+        metadata_table = self._qualified("metadata")
+
         # Création de la table metadata si elle n'existe pas.
-        self.conn.execute("""
-            CREATE TABLE IF NOT EXISTS metadata (
+        self.conn.execute(f"""
+            CREATE TABLE IF NOT EXISTS {metadata_table} (
                 name VARCHAR,
                 label VARCHAR,
                 python_type VARCHAR,
@@ -283,15 +335,15 @@ class BaseSchemaManager(ABC):
         # Upsert manuel
         # Vérification de l'existence de la colonne avant d'insérer ou de mettre à jour.
         _row = self.conn.execute(
-            "SELECT COUNT(*) FROM metadata WHERE name = ?", [column]
+            f"SELECT COUNT(*) FROM {metadata_table} WHERE name = ?", [column]
         ).fetchone()
         existing_count = _row[0] if _row is not None else 0
 
         if existing_count == 0:
             # Colonne absente : insertion
             self.conn.execute(
-                """
-                INSERT INTO metadata (name, label, python_type, sql_type,
+                f"""
+                INSERT INTO {metadata_table} (name, label, python_type, sql_type,
                 is_categorical, is_primary_key)
                 VALUES (?, ?, ?, ?, ?, FALSE)
                 """,
@@ -300,8 +352,8 @@ class BaseSchemaManager(ABC):
         else:
             # Colonne déjà présente : mise à jour des champs variables
             self.conn.execute(
-                """
-                UPDATE metadata
+                f"""
+                UPDATE {metadata_table}
                 SET label = ?, python_type = ?, sql_type = ?, is_categorical = ?
                 WHERE name = ?
                 """,
@@ -325,7 +377,8 @@ class BaseSchemaManager(ABC):
         """
         # Exécution de la requête de mise à jour
         self.conn.execute(
-            "UPDATE metadata SET is_categorical = ? WHERE name = ?",
+            f"UPDATE {self._qualified('metadata')} "
+            "SET is_categorical = ? WHERE name = ?",
             [is_categorical, col_name],
         )
 
@@ -345,7 +398,7 @@ class BaseSchemaManager(ABC):
         """
         try:
             # Requête de suppression des méta-données
-            delete_query = "DELETE FROM metadata WHERE name = ?"
+            delete_query = f"DELETE FROM {self._qualified('metadata')} WHERE name = ?"
             # Exécution de la requête
             self.conn.execute(delete_query, [column_name])
 
@@ -419,8 +472,8 @@ class BaseSchemaManager(ABC):
             sql_type = map_python_to_sql_type(df.schema[column])
             # Mise à jour des métadonnées
             self.conn.execute(
-                """
-                UPDATE metadata
+                f"""
+                UPDATE {self._qualified("metadata")}
                 SET python_type = ?, sql_type = ?
                 WHERE name = ?
             """,
@@ -452,7 +505,10 @@ class BaseSchemaManager(ABC):
             # Parcours des données
             for column in columns:
                 # Vérification si la colonne ne contient que des valeurs nulles
-                query = f"SELECT COUNT(*) FROM fact_table WHERE {column} IS NOT NULL"
+                query = (
+                    f"SELECT COUNT(*) FROM {self._qualified('fact_table')} "
+                    f"WHERE {column} IS NOT NULL"
+                )
                 _row = self.conn.execute(query).fetchone()
                 non_null_count = _row[0] if _row is not None else 0
                 # Ajout à la liste si ne contient que des colonnes nulles

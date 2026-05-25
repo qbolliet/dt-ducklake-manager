@@ -10,7 +10,7 @@ import narwhals as nw
 from narwhals.typing import IntoDataFrame
 
 # Utilitaires de traitement des données
-from ..utils.sql import remove_dataframe_duplicates
+from ..utils.sql import qualify_table, remove_dataframe_duplicates
 
 # Modules ad hoc
 from .inference import SchemaBuilder
@@ -36,9 +36,15 @@ class DuckLakeTablesBuilder:
     The connection must be obtained from ``DuckLakeConnector.connect()`` before
     instantiating this class.
 
+    A single catalog can hold several schemas (one per result set). The ``schema``
+    argument selects the target schema; ``build_schema`` creates it if needed, so
+    several result sets (e.g. ``predictions`` and ``shapley``) can be built on the
+    same connection.
+
     Attributes:
         schema_builder (SchemaBuilder): Instance used for schema inference.
         conn (duckdb.DuckDBPyConnection): DuckLake-attached DuckDB connection.
+        schema (str): DuckLake schema into which the tables are written.
         logger (logging.Logger): Logger shared with the SchemaBuilder.
 
     Examples:
@@ -46,6 +52,9 @@ class DuckLakeTablesBuilder:
         >>> builder = DuckLakeTablesBuilder(df, categorical_threshold=10,
         connection=conn)
         >>> builder.build_schema()
+        >>> # Build a second result set as a separate schema of the same catalog
+        >>> DuckLakeTablesBuilder(df2, connection=conn,
+        schema='shapley').build_schema()
     """
 
     # Initialisation
@@ -55,6 +64,7 @@ class DuckLakeTablesBuilder:
         categorical_threshold: int | None = None,
         primary_keys: list[str] | None = None,
         connection: duckdb.DuckDBPyConnection | None = None,
+        schema: str = "main",
         log_filename: str | os.PathLike[str] | None = os.path.join(
             FILE_PATH.parents[2], "logs/ducklake_tables_builder.log"
         ),
@@ -73,6 +83,9 @@ class DuckLakeTablesBuilder:
             connection (Optional[duckdb.DuckDBPyConnection]): DuckLake-attached DuckDB
                 connection obtained from ``DuckLakeConnector.connect()``. If None, an
                 in-memory DuckDB connection is used (for unit tests only).
+            schema (str): DuckLake schema into which the metadata, dimension and fact
+                tables are written. A single catalog can host several schemas.
+                Defaults to ``'main'``.
             log_filename (Optional[os.PathLike]): Path to the log file.
 
         Examples:
@@ -80,6 +93,8 @@ class DuckLakeTablesBuilder:
             >>> conn = DuckLakeConnector('catalog.ducklake', 'data/').connect()
             >>> df = pl.DataFrame({'col': [1, 2, 3]})
             >>> builder = DuckLakeTablesBuilder(df, connection=conn)
+            >>> builder = DuckLakeTablesBuilder(df, connection=conn,
+            schema='predictions')
         """
         # Délégation de l'inférence du schéma à un SchemaBuilder (composition).
         # DuckLakeTablesBuilder n'est pas un SchemaBuilder : il utilise un SchemaBuilder
@@ -98,6 +113,10 @@ class DuckLakeTablesBuilder:
         # Le fallback :memory: est réservé aux tests unitaires ; en production la
         # connexion doit toujours être fournie via DuckLakeConnector.connect().
         self.conn = connection if connection is not None else duckdb.connect(":memory:")
+
+        # Schéma DuckLake cible : les tables sont qualifiées par ce schéma, permettant
+        # à plusieurs jeux de résultats de coexister dans un même catalogue.
+        self.schema = schema
 
     # Méthode de création de la table des méta-données
     def create_duckdb_metadata_table(
@@ -130,11 +149,13 @@ class DuckLakeTablesBuilder:
         # (ex. après un .sort()). On filtre explicitement sur les colonnes nommées du
         # DataFrame.
         df_meta = self.schema_builder.df_metadata
+        # Nom qualifié par le schéma cible
+        qualified_name = qualify_table(table_name or "metadata", self.schema)
         self.conn.register(
             "temp_metadata", df_meta.to_arrow().select(list(df_meta.columns))
         )
         self.conn.execute(f"""
-            CREATE TABLE {table_name} (
+            CREATE TABLE {qualified_name} (
                 name VARCHAR,
                 label VARCHAR,
                 python_type VARCHAR,
@@ -146,7 +167,7 @@ class DuckLakeTablesBuilder:
 
         # Insertion des données depuis la vue temporaire
         self.conn.execute(f"""
-            INSERT INTO {table_name}
+            INSERT INTO {qualified_name}
             SELECT * FROM temp_metadata
         """)
         self.conn.execute("DROP VIEW temp_metadata")
@@ -176,8 +197,8 @@ class DuckLakeTablesBuilder:
 
         # Création de chaque table de dimension dans DuckDB
         for dim_name, dim_df in self.schema_builder.dimension_tables.items():
-            # Initialisation du nom de la table
-            table_name = f"{table_prefix}{dim_name}"
+            # Initialisation du nom de la table, qualifié par le schéma cible
+            table_name = qualify_table(f"{table_prefix}{dim_name}", self.schema)
             # Conversion vers Arrow pour garantir la compatibilité DuckDB quel que soit
             # le backend narwhals.
             # Note : .select() filtre l'index pandas éventuel (cf.
@@ -245,6 +266,9 @@ class DuckLakeTablesBuilder:
         df_metadata = self.schema_builder.df_metadata
         primary_keys = self.schema_builder.primary_keys
 
+        # Nom qualifié de la table des faits par le schéma cible
+        qualified_name = qualify_table(table_name or "fact_table", self.schema)
+
         # Conversion vers Arrow pour garantir la compatibilité DuckDB quel que soit le
         # backend narwhals.
         # Note : .select() filtre l'index pandas éventuel (cf.
@@ -272,7 +296,7 @@ class DuckLakeTablesBuilder:
 
             # Création de la table avec DDL explicite
             query = f"""
-                CREATE TABLE {table_name} (
+                CREATE TABLE {qualified_name} (
                     {", ".join(column_definitions)}
                 )
             """
@@ -283,7 +307,7 @@ class DuckLakeTablesBuilder:
             # les données soient écrites dans des fichiers partitionnés.
             if partition_by:
                 self.conn.execute(
-                    f"ALTER TABLE {table_name} SET PARTITIONED BY"
+                    f"ALTER TABLE {qualified_name} SET PARTITIONED BY"
                     f" ({', '.join(partition_by)})"
                 )
 
@@ -295,7 +319,7 @@ class DuckLakeTablesBuilder:
 
             # Insertion des données depuis la vue temporaire
             self.conn.execute(f"""
-                INSERT INTO {table_name}
+                INSERT INTO {qualified_name}
                 SELECT {", ".join(df_fact.columns)}
                 FROM temp_fact
             """)
@@ -311,7 +335,7 @@ class DuckLakeTablesBuilder:
             # Chemin CTAS (sans partition ni clés primaires) : plus performant, pas de
             # DDL intermédiaire
             query = f"""
-                CREATE TABLE {table_name} AS
+                CREATE TABLE {qualified_name} AS
                 SELECT {", ".join(df_fact.columns)}
                 FROM temp_fact
             """
@@ -321,10 +345,11 @@ class DuckLakeTablesBuilder:
         self.conn.execute("DROP VIEW temp_fact")
 
         # Logging des clés étrangères créées (pour information)
+        dim_prefix = qualify_table(table_prefix or "dim_", self.schema)
         for dim_name in self.schema_builder.dimension_tables.keys():
             self.logger.info(
                 f"Foreign key created for dimension '{dim_name}' - can be joined on"
-                f" {table_name}.{dim_name} = {table_prefix}{dim_name}.value"
+                f" {qualified_name}.{dim_name} = {dim_prefix}{dim_name}.value"
             )
 
         # Logging
@@ -366,6 +391,12 @@ class DuckLakeTablesBuilder:
             >>> builder.build_schema()
             >>> builder.build_schema(partition_by=['country'])
         """
+        # Création défensive du schéma cible s'il n'existe pas encore.
+        # Utile lorsque la connexion n'a pas été préparée par DuckLakeConnector
+        # (ex. connexion in-memory de test) ou pour ajouter un nouveau schéma à un
+        # catalogue existant. CREATE SCHEMA IF NOT EXISTS est idempotent.
+        self.conn.execute(f"CREATE SCHEMA IF NOT EXISTS {self.schema}")
+
         # Vérification et suppression des doublons sur le DataFrame du SchemaBuilder.
         # Les clés primaires sont transmises à la fonction de déduplication afin que
         # la détection des doublons porte uniquement sur ces colonnes identifiantes,
@@ -417,16 +448,28 @@ class DuckLakeTablesBuilder:
         """
         Display the structure of all tables in the DuckDB schema.
         """
-        # Extraction des tables
-        tables = self.conn.execute("SHOW TABLES").fetchall()
+        # Extraction des tables du schéma cible.
+        # Filtrage par schéma : SHOW TABLES ne liste que le schéma actif de la
+        # connexion, qui n'est pas nécessairement le schéma de ce builder.
+        # On exlcut les tables internes de ducklake
+        tables = self.conn.execute(
+            "SELECT table_name FROM information_schema.tables"
+            " WHERE table_schema = ? AND table_name NOT LIKE 'ducklake_%'",
+            [self.schema],
+        ).fetchall()
+
+        print(tables)
+
         # Logging
         self.logger.info("\n Created Tables:")
         # Parcours des tables
         for table in tables:
             # Affichage de la structure
             self.logger.info(f"\n {table[0]} Structure:")
-            # Extraction des informations relatives à la table
-            table_info = self.conn.execute(f"DESCRIBE {table[0]}").fetchall()
+            # Extraction des informations relatives à la table (qualifiée)
+            table_info = self.conn.execute(
+                f"DESCRIBE {qualify_table(table[0], self.schema)}"
+            ).fetchall()
             # Affichage de chaque information
             for col in table_info:
                 self.logger.info(f"  {col[0]}: {col[1]}")

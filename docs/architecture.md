@@ -128,10 +128,12 @@ dimensions* in the Kimball sense).
 
 ## 2. Schema organization within a catalog
 
-A DuckLake catalog can hold several schemas. Today each catalog uses a single
-schema, `main` (see [`DuckLakeConnector`](api/connection/DuckLakeConnector.md)).
-The question is whether several result sets should be consolidated as separate
-schemas within one catalog.
+A DuckLake catalog can hold several schemas. Both layouts are supported (see
+[`DuckLakeConnector`](api/connection/DuckLakeConnector.md)): every schema-aware
+class accepts a `schema` argument (default `main`) and qualifies its table
+references accordingly, so several result sets can live as separate schemas of one
+catalog. The question is whether to keep one schema per catalog or to consolidate
+several result sets as separate schemas within one catalog.
 
 This axis is **orthogonal to dimension sharing**: separate schemas do not share
 dimension tables (each schema carries its own `dim_*`), so multiple schemas
@@ -139,7 +141,7 @@ address catalog proliferation, not dimension redundancy.
 
 ### Option A — One schema per catalog (`main`)
 
-**Status: ✅ Retained in the current implementation.**
+**Status: ✅ Default layout.**
 
 Each catalog contains exactly one schema, holding one fact table and its
 companion tables.
@@ -164,8 +166,12 @@ companion tables.
 
 ### Option B — Multiple schemas within a single catalog
 
+**Status: ✅ Supported (opt-in via the `schema` argument).**
+
 Result sets are stored as separate schemas in one catalog (e.g.
-`predictions.fact_table`, `shapley.fact_table`), sharing one catalog backend.
+`predictions.fact_table`, `shapley.fact_table`), sharing one catalog backend. A
+single shared connection drives all schemas: each builder/manager qualifies its
+tables by its `schema`, and `DuckLakeConnector` creates the schema on first use.
 
 **Advantages**
 
@@ -188,17 +194,24 @@ Result sets are stored as separate schemas in one catalog (e.g.
 
 ### Summary
 
-| Option | Key advantage | Main complexity cost | Retained |
+| Option | Key advantage | Main complexity cost | Status |
 | --- | --- | --- | --- |
-| A — One schema per catalog | Per-result-set snapshots and locking; simple routing | Catalog proliferation; multi-catalog attach for cross joins | ✅ |
-| B — Multiple schemas per catalog | Single catalog; first-class cross-schema joins; fits a server backend | Catalog-level snapshots; serialized writes on the file backend; schema routing | |
+| A — One schema per catalog | Per-result-set snapshots and locking; simple routing | Catalog proliferation; multi-catalog attach for cross joins | ✅ default |
+| B — Multiple schemas per catalog | Single catalog; first-class cross-schema joins; fits a server backend | Catalog-level snapshots; serialized writes on the file backend; schema routing | ✅ supported |
 
 ---
 
 ## Retained decisions
 
-Both axes currently favour **isolation over consolidation**: one self-contained
-catalog with a single `main` schema per result set (Option A in both sections).
-This keeps each result set independent in its lifecycle, snapshots, concurrency,
-and categorical-status decisions, at the cost of redundant dimension tables and
-of resolving labels (rather than raw ids) when joining across databases.
+On the **logical axis** (section 1), the implementation keeps **isolation over
+consolidation**: dimension tables are redundant per result set rather than
+conformed, so each result set keeps local categorical-status decisions, at the
+cost of resolving labels (rather than raw ids) when joining across result sets.
+
+On the **physical axis** (section 2), both layouts are now available. `main` per
+catalog remains the **default**, preserving per-result-set snapshots and
+file-backend locking. Consolidating several result sets as separate schemas of a
+single catalog (Option B) is opt-in through the `schema` argument and pairs
+naturally with the PostgreSQL backend, which supports concurrent readers and
+writers; the trade-off is that DuckLake snapshots become catalog-wide rather than
+per result set.

@@ -79,6 +79,13 @@ class DuckLakeConnector:
     such a connector ergonomically; PostgreSQL credentials are supplied through a
     DuckDB secret rather than embedded in the connection string.
 
+    A single catalog can host **several schemas** (one per result set, e.g.
+    ``predictions`` and ``shapley``), each carrying its own ``fact_table``,
+    ``metadata`` and ``dim_*`` tables. The ``schema`` argument selects which one this
+    connection activates; ``connect()`` creates it if needed (writable connections
+    only). Builders and managers also accept a ``schema`` argument, so a single shared
+    connection can drive several schemas of the same catalog.
+
     After calling ``connect()``, the returned ``duckdb.DuckDBPyConnection`` can be
     passed directly to ``DuckLakeTablesBuilder``, ``DatabaseUpdater``, or any other
     class that accepts a ``connection`` parameter.
@@ -110,6 +117,9 @@ class DuckLakeConnector:
         ...     'data/', dbname='ducklake', host='localhost',
         ...     user='app', password='***',
         ... ).connect()
+        >>> # Several schemas in a single catalog (one per result set)
+        >>> conn = DuckLakeConnector('catalog.ducklake', 'data/',
+        ...     schema='predictions').connect()
     """
 
     # Initialisation
@@ -248,9 +258,8 @@ class DuckLakeConnector:
             f"read_only={self.read_only})"
         )
 
-        # Activation du schéma cible pour que les requêtes non qualifiées fonctionnent
-        conn.execute(f"USE {self.catalog_alias}.{self.schema}")
-        self.logger.info(f"Activated scheme : {self.catalog_alias}.{self.schema}")
+        # Création éventuelle puis activation du schéma cible
+        self._activate_schema(conn)
 
         return conn
 
@@ -330,7 +339,8 @@ class DuckLakeConnector:
         # Attachement du catalogue sur la connexion existante
         attach_sql = self._build_attach_sql()
         conn.execute(attach_sql)
-        conn.execute(f"USE {self.catalog_alias}.{self.schema}")
+        # Création éventuelle puis activation du schéma cible
+        self._activate_schema(conn)
         self.logger.info(
             f"DuckLake catalog attached to the existing connection:"
             f"'{self.catalog_path}'"
@@ -547,6 +557,32 @@ class DuckLakeConnector:
 
         params_str = ", ".join(params)
         return f"CREATE OR REPLACE SECRET {secret_name} ({params_str})"
+
+    # Création éventuelle puis activation du schéma cible
+    def _activate_schema(self, conn: duckdb.DuckDBPyConnection) -> None:
+        """
+        Create the target schema if needed, then activate it with ``USE``.
+
+        A single DuckLake catalog can host several schemas (one per result set).
+        The ``main`` schema exists natively, but a named schema (e.g.
+        ``'predictions'``) must be created on first use. ``CREATE SCHEMA IF NOT
+        EXISTS`` is idempotent and only issued on writable connections; read-only
+        connections (dashboards, APIs) skip creation and simply activate the schema.
+
+        Args:
+            conn (duckdb.DuckDBPyConnection): Connection with the catalog attached.
+        """
+        # Création du schéma cible si la connexion est en écriture.
+        # Indispensable pour permettre de construire un nouveau schéma dans un
+        # catalogue existant ; sans cela, le USE échouerait sur un schéma absent.
+        if not self.read_only:
+            conn.execute(
+                f"CREATE SCHEMA IF NOT EXISTS {self.catalog_alias}.{self.schema}"
+            )
+
+        # Activation du schéma cible pour que les requêtes non qualifiées fonctionnent
+        conn.execute(f"USE {self.catalog_alias}.{self.schema}")
+        self.logger.info(f"Activated scheme : {self.catalog_alias}.{self.schema}")
 
     # Construction de la clause SQL ATTACH avec les options appropriées
     def _build_attach_sql(self) -> str:
