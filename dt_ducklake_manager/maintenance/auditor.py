@@ -15,6 +15,7 @@ from narwhals.typing import IntoDataFrame
 
 # Import des utilitaires
 from ..utils.logger import _init_logger
+from ..utils.sql import qualify_table
 
 # Emplacement du fichier
 FILE_PATH = Path(os.path.abspath(__file__))
@@ -189,6 +190,7 @@ class DatabaseAuditor:
     Attributes:
         conn (duckdb.DuckDBPyConnection): Database connection
         categorical_threshold (int): Threshold for categorical determination
+        schema (str): DuckLake schema audited by this instance
         logger: Logger instance for audit tracking
     """
 
@@ -198,6 +200,7 @@ class DatabaseAuditor:
         connection: duckdb.DuckDBPyConnection | None = None,
         categorical_threshold: int | None = 50,
         log_filename: str | os.PathLike[str] | None = None,
+        schema: str = "main",
     ):
         """
         Initialize the database auditor.
@@ -208,11 +211,15 @@ class DatabaseAuditor:
                 is created (for unit tests only).
             categorical_threshold: Threshold for determining categorical variables.
             log_filename: Path to log file.
+            schema: DuckLake schema to audit. A catalog can host several schemas;
+                each is audited independently. Defaults to ``'main'``.
 
         Example:
             >>> conn = DuckLakeConnector('catalog.ducklake', 'data/').connect()
             >>> auditor = DatabaseAuditor(conn)
             >>> report = auditor.validate_database(ValidationLevel.COMPREHENSIVE)
+            >>> # Auditer un schéma dédié dans le même catalogue
+            >>> auditor = DatabaseAuditor(conn, schema='predictions')
         """
         # Initialisation de la connexion DuckLake.
         self.conn = connection if connection is not None else duckdb.connect(":memory:")
@@ -220,12 +227,29 @@ class DatabaseAuditor:
         # Seuil pour déterminer si une variable est catégorielle
         self.categorical_threshold = categorical_threshold
 
+        # Schéma DuckLake audité : toutes les requêtes qualifient les tables par ce
+        # schéma pour cibler le bon jeu de résultats dans le catalogue.
+        self.schema = schema
+
         # Initialisation du logger pour traçabilité des audits
         if log_filename is None:
             log_filename = os.path.join(
                 FILE_PATH.parents[2], "logs/database_auditor.log"
             )
         self.logger = _init_logger(filename=log_filename)
+
+    # Méthode de qualification d'un nom de table par le schéma audité
+    def _qualified(self, table: str) -> str:
+        """Return a table name qualified by the audited schema.
+
+        Args:
+            table: Bare table name (e.g. ``'fact_table'``).
+
+        Returns:
+            The ``'<schema>.<table>'`` identifier.
+        """
+        # Délégation à l'utilitaire central de qualification
+        return qualify_table(table, self.schema)
 
     # Méthodes principales de validation
     # Méthode de validation de la base de données
@@ -639,12 +663,16 @@ class DatabaseAuditor:
     ) -> None:
         """Validate referential integrity between fact table and dimension."""
         try:
+            # Noms qualifiés par le schéma (dim_table_name est reçu sous forme nue)
+            fact_table = self._qualified("fact_table")
+            dim_table = self._qualified(dim_table_name)
+
             # Vérification des valeurs orphelines dans fact_table (ie qui ne sont pas
             # référencées dans la table de dimension)
             orphaned_query = f"""
                 SELECT COUNT(DISTINCT f.{col_name}) as orphaned_count
-                FROM fact_table f
-                LEFT JOIN {dim_table_name} d ON f.{col_name} = d.value
+                FROM {fact_table} f
+                LEFT JOIN {dim_table} d ON f.{col_name} = d.value
                 WHERE f.{col_name} IS NOT NULL AND d.value IS NULL
             """
 
@@ -668,8 +696,8 @@ class DatabaseAuditor:
             # Vérification des valeurs inutilisées dans dimension
             unused_query = f"""
                 SELECT COUNT(*) as unused_count
-                FROM {dim_table_name} d
-                LEFT JOIN fact_table f ON d.value = f.{col_name}
+                FROM {dim_table} d
+                LEFT JOIN {fact_table} f ON d.value = f.{col_name}
                 WHERE f.{col_name} IS NULL
             """
 
@@ -783,7 +811,7 @@ class DatabaseAuditor:
                 # Comptage des valeurs uniques
                 unique_count_query = (
                     f"SELECT COUNT(DISTINCT {col_name}) FROM"
-                    f" fact_table WHERE {col_name} IS NOT NULL"
+                    f" {self._qualified('fact_table')} WHERE {col_name} IS NOT NULL"
                 )
                 result = self.conn.execute(unique_count_query).fetchone()
                 unique_count = result[0] if result else 0
@@ -828,7 +856,7 @@ class DatabaseAuditor:
                 # Comptage des valeurs uniques
                 unique_count_query = (
                     f"SELECT COUNT(DISTINCT {col_name}) FROM"
-                    f" fact_table WHERE {col_name} IS NOT NULL"
+                    f" {self._qualified('fact_table')} WHERE {col_name} IS NOT NULL"
                 )
                 result = self.conn.execute(unique_count_query).fetchone()
                 unique_count = result[0] if result else 0
@@ -951,12 +979,14 @@ class DatabaseAuditor:
             if not self._table_exists("fact_table"):
                 return
 
-            # Tentative de récupération de la clé de partition via duckdb_tables()
+            # Tentative de récupération de la clé de partition via duckdb_tables().
+            # Filtrage par schéma : plusieurs schémas peuvent avoir une 'fact_table'.
             partition_key: str | None = None
             try:
                 result = self.conn.execute(
-                    "SELECT partition_key FROM duckdb_tables() WHERE table_name ="
-                    "'fact_table'"
+                    "SELECT partition_key FROM duckdb_tables() "
+                    "WHERE table_name = 'fact_table' AND schema_name = ?",
+                    [self.schema],
                 ).fetchone()
                 if result is not None:
                     partition_key = result[0]
@@ -970,7 +1000,7 @@ class DatabaseAuditor:
             if not partition_key:
                 try:
                     ddl_result = self.conn.execute(
-                        "SHOW CREATE TABLE fact_table"
+                        f"SHOW CREATE TABLE {self._qualified('fact_table')}"
                     ).fetchone()
                     ddl_text: str = ddl_result[0] if ddl_result else ""
                     if "PARTITION BY" in ddl_text.upper():
@@ -1102,7 +1132,9 @@ class DatabaseAuditor:
                 return
 
             # Comptage total des lignes
-            _r = self.conn.execute("SELECT COUNT(*) FROM fact_table").fetchone()
+            _r = self.conn.execute(
+                f"SELECT COUNT(*) FROM {self._qualified('fact_table')}"
+            ).fetchone()
             total_rows = _r[0] if _r is not None else 0
 
             # Vérification que la table des faits n'est pas vide
@@ -1124,7 +1156,8 @@ class DatabaseAuditor:
                 # Création de la requête de comptage du nombre de valeurs nulles dans la
                 # colonne
                 null_count_query = (
-                    f"SELECT COUNT(*) FROM fact_table WHERE {col_name} IS NULL"
+                    f"SELECT COUNT(*) FROM {self._qualified('fact_table')} "
+                    f"WHERE {col_name} IS NULL"
                 )
                 # Exécution de la requête
                 _rn = self.conn.execute(null_count_query).fetchone()
@@ -1188,7 +1221,7 @@ class DatabaseAuditor:
                 # Vérification des doublons dans la colonne 'value' (clé primaire)
                 duplicates_query = f"""
                     SELECT value, COUNT(*) as count
-                    FROM {dim_table}
+                    FROM {self._qualified(dim_table)}
                     GROUP BY value
                     HAVING COUNT(*) > 1
                 """
@@ -1374,9 +1407,15 @@ class DatabaseAuditor:
     # Méthodes utilitaires privées
     # Méthode auxiliaire d'obtention des tables de la base de données
     def _get_existing_tables(self) -> list[str]:
-        """Get the list of existing tables."""
+        """Get the list of existing tables in the audited schema."""
         try:
-            result = self.conn.execute("SHOW TABLES").fetchall()
+            # Filtrage par schéma : SHOW TABLES ne renvoie que le schéma actif de la
+            # connexion, qui n'est pas nécessairement le schéma audité.
+            result = self.conn.execute(
+                "SELECT table_name FROM information_schema.tables "
+                "WHERE table_schema = ?",
+                [self.schema],
+            ).fetchall()
             return [row[0] for row in result]
         except Exception:
             return []
@@ -1385,25 +1424,31 @@ class DatabaseAuditor:
     def _get_fact_table_columns(self) -> list[str]:
         """Get fact table columns."""
         try:
-            result = self.conn.execute("DESCRIBE fact_table").fetchall()
+            result = self.conn.execute(
+                f"DESCRIBE {self._qualified('fact_table')}"
+            ).fetchall()
             return [row[0] for row in result]
         except Exception:
             return []
 
     # Méthode auxiliaire d'extraction des coonnes d'une table spécifique
     def _get_table_columns(self, table_name: str) -> list[str]:
-        """Get columns from a specific table."""
+        """Get columns from a specific (bare-named) table in the audited schema."""
         try:
-            result = self.conn.execute(f"DESCRIBE {table_name}").fetchall()
+            result = self.conn.execute(
+                f"DESCRIBE {self._qualified(table_name)}"
+            ).fetchall()
             return [row[0] for row in result]
         except Exception:
             return []
 
     # Méthode auxiliaire de description d'une table
     def _get_table_structure(self, table_name: str) -> list[tuple[Any, ...]]:
-        """Get the complete structure of a table."""
+        """Get the complete structure of a (bare-named) table in the audited schema."""
         try:
-            return self.conn.execute(f"DESCRIBE {table_name}").fetchall()
+            return self.conn.execute(
+                f"DESCRIBE {self._qualified(table_name)}"
+            ).fetchall()
         except Exception:
             return []
 
@@ -1412,7 +1457,9 @@ class DatabaseAuditor:
         """Get metadata table content."""
         try:
             result = pl.from_arrow(
-                self.conn.execute("SELECT * FROM metadata").to_arrow_table()
+                self.conn.execute(
+                    f"SELECT * FROM {self._qualified('metadata')}"
+                ).to_arrow_table()
             )
             # pl.from_arrow() peut retourner DataFrame ou Series selon la forme
             # de l'entrée Arrow. On s'assure de retourner un DataFrame.
@@ -1423,9 +1470,9 @@ class DatabaseAuditor:
 
     # méthode auxiliaire de vérification de l'existence d'une table
     def _table_exists(self, table_name: str) -> bool:
-        """Check if a table exists."""
+        """Check if a (bare-named) table exists in the audited schema."""
         try:
-            self.conn.execute(f"SELECT 1 FROM {table_name} LIMIT 1")
+            self.conn.execute(f"SELECT 1 FROM {self._qualified(table_name)} LIMIT 1")
             return True
         except Exception:
             return False
@@ -1450,7 +1497,8 @@ class DatabaseAuditor:
         """
         try:
             result = self.conn.execute(
-                "SELECT name FROM metadata WHERE is_primary_key = true"
+                f"SELECT name FROM {self._qualified('metadata')} "
+                "WHERE is_primary_key = true"
             ).fetchall()
             return [row[0] for row in result]
         except Exception:
@@ -1516,7 +1564,9 @@ class DatabaseAuditor:
 
             # Comptage des lignes de fact_table
             if "fact_table" in tables:
-                result = self.conn.execute("SELECT COUNT(*) FROM fact_table").fetchone()
+                result = self.conn.execute(
+                    f"SELECT COUNT(*) FROM {self._qualified('fact_table')}"
+                ).fetchone()
                 health_info["fact_table_rows"] = result[0] if result else 0
 
             # Comptage des tables de dimension
@@ -1526,7 +1576,9 @@ class DatabaseAuditor:
 
             # Comptage des entrées de métadonnées
             if "metadata" in tables:
-                result = self.conn.execute("SELECT COUNT(*) FROM metadata").fetchone()
+                result = self.conn.execute(
+                    f"SELECT COUNT(*) FROM {self._qualified('metadata')}"
+                ).fetchone()
                 health_info["metadata_entries"] = result[0] if result else 0
 
             # Validation rapide pour les issues critiques

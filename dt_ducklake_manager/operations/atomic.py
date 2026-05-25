@@ -133,6 +133,7 @@ class AtomicDatabaseOperations:
         backup_dir: str | os.PathLike[str] | None = None,
         default_batch_size: int = 10000,
         default_max_workers: int = 4,
+        schema: str = "main",
     ):
         """
         Initialize the atomic operations manager.
@@ -146,16 +147,22 @@ class AtomicDatabaseOperations:
             backup_dir: Directory for CSV-based backups.
             default_batch_size: Default batch size for operations.
             default_max_workers: Default number of parallel workers.
+            schema: DuckLake schema targeted by all atomic operations. A single
+                catalog can host several schemas. Defaults to ``'main'``.
 
         Example:
             >>> conn = DuckLakeConnector('catalog.ducklake', 'data/').connect()
             >>> atomic_ops = AtomicDatabaseOperations(conn)
+            >>> atomic_ops = AtomicDatabaseOperations(conn, schema='predictions')
         """
         # Initialisation de la connexion DuckLake.
         self.conn = connection if connection is not None else duckdb.connect(":memory:")
 
         # Initialisation du seuil pour les variables catégorielles
         self.categorical_threshold = categorical_threshold
+
+        # Schéma DuckLake cible des opérations atomiques
+        self.schema = schema
 
         # Initialisation du logger
         if log_filename is None:
@@ -169,6 +176,7 @@ class AtomicDatabaseOperations:
             connection=connection,
             categorical_threshold=categorical_threshold,
             log_filename=log_filename,
+            schema=schema,
         )
 
         self.updater = DatabaseUpdater(
@@ -178,6 +186,7 @@ class AtomicDatabaseOperations:
             max_workers=default_max_workers,
             batch_size=default_batch_size,
             enable_validation=True,
+            schema=schema,
         )
 
         self.deleter = DatabaseDeleter(
@@ -186,13 +195,16 @@ class AtomicDatabaseOperations:
             log_filename=log_filename,
             enable_validation=True,
             auto_cleanup=True,
+            schema=schema,
         )
 
         self.recovery_mgr = DatabaseRecoveryManager(
-            connection, backup_dir, categorical_threshold, log_filename
+            connection, backup_dir, categorical_threshold, log_filename, schema=schema
         )
 
-        self.auditor = DatabaseAuditor(connection, categorical_threshold, log_filename)
+        self.auditor = DatabaseAuditor(
+            connection, categorical_threshold, log_filename, schema=schema
+        )
 
         # Configuration par défaut
         self.default_batch_size = default_batch_size
@@ -563,16 +575,16 @@ class AtomicDatabaseOperations:
             # Nettoyage complet
             cleanup_results = self.deleter.cleanup_database(comprehensive=True)
 
-            for category, result in cleanup_results.items():
-                if result:
-                    if isinstance(result, dict):
-                        total = sum(result.values())
+            for category, cleanup_result in cleanup_results.items():
+                if cleanup_result:
+                    if isinstance(cleanup_result, dict):
+                        total = sum(cleanup_result.values())
                         operations_performed.append(
                             f"Cleaned {category}: {total} items"
                         )
-                    elif isinstance(result, list):
+                    elif isinstance(cleanup_result, list):
                         operations_performed.append(
-                            f"Cleaned {category}: {len(result)} items"
+                            f"Cleaned {category}: {len(cleanup_result)} items"
                         )
                     else:
                         operations_performed.append(f"Cleaned {category}")

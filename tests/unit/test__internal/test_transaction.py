@@ -1,5 +1,7 @@
 # Importation des modules
 # Module de tests
+from typing import Any
+
 import pytest
 
 # Modules du package à tester
@@ -16,7 +18,7 @@ from dt_ducklake_manager._internal.managers.transaction import (
 
 
 # Test que TransactionState contient tous les états attendus
-def test_transaction_state_values():
+def test_transaction_state_values() -> None:
     """Test that TransactionState contains all expected state values.
 
     Examples:
@@ -31,7 +33,7 @@ def test_transaction_state_values():
 
 
 # Test de l'initialisation d'un TransactionOperation
-def test_transaction_operation_initialization():
+def test_transaction_operation_initialization() -> None:
     """Test that TransactionOperation can be initialized with all fields.
 
     Examples:
@@ -41,8 +43,8 @@ def test_transaction_operation_initialization():
         'insert'
     """
 
-    def dummy_func():
-        return True
+    def dummy_func() -> None:
+        pass
 
     op = TransactionOperation(
         operation_type="insert",
@@ -55,7 +57,7 @@ def test_transaction_operation_initialization():
 
 
 # Test de l'initialisation d'un TransactionContext
-def test_transaction_context_initialization():
+def test_transaction_context_initialization() -> None:
     """Test that TransactionContext is correctly initialized with default values.
 
     Examples:
@@ -77,7 +79,7 @@ def test_transaction_context_initialization():
 
 # Initialisation d'un TransactionManager pour les tests
 @pytest.fixture
-def tx_manager(built_ducklake_schema):
+def tx_manager(built_ducklake_schema: Any) -> TransactionManager:
     """Create a TransactionManager instance for testing.
 
     Args:
@@ -100,7 +102,7 @@ def tx_manager(built_ducklake_schema):
 
 
 # Test de l'initialisation correcte du gestionnaire de transactions
-def test_transaction_manager_initialization(built_ducklake_schema):
+def test_transaction_manager_initialization(built_ducklake_schema: Any) -> None:
     """Test that TransactionManager initializes without errors.
 
     Args:
@@ -118,7 +120,7 @@ def test_transaction_manager_initialization(built_ducklake_schema):
 
 
 # Test que begin_transaction retourne un identifiant de transaction valide
-def test_begin_transaction_returns_id(tx_manager):
+def test_begin_transaction_returns_id(tx_manager: Any) -> None:
     """Test that begin_transaction returns a non-empty transaction ID.
 
     Args:
@@ -132,7 +134,7 @@ def test_begin_transaction_returns_id(tx_manager):
 
 
 # Test que begin_transaction crée la transaction dans l'état RUNNING
-def test_begin_transaction_state_running(tx_manager):
+def test_begin_transaction_state_running(tx_manager: Any) -> None:
     """Test that a transaction is in RUNNING state after begin_transaction.
 
     Args:
@@ -150,7 +152,7 @@ def test_begin_transaction_state_running(tx_manager):
 
 
 # Test que add_operation ajoute une opération à la transaction active
-def test_add_operation_increments_count(tx_manager):
+def test_add_operation_increments_count(tx_manager: Any) -> None:
     """Test that add_operation increases the total_operations count.
 
     Args:
@@ -158,8 +160,8 @@ def test_add_operation_increments_count(tx_manager):
     """
     tx_id = tx_manager.begin_transaction()
 
-    def noop():
-        return True
+    def noop() -> None:
+        pass
 
     tx_manager.add_operation(
         transaction_id=tx_id,
@@ -178,7 +180,7 @@ def test_add_operation_increments_count(tx_manager):
 
 
 # Test que rollback_transaction passe l'état à ROLLED_BACK
-def test_rollback_transaction(tx_manager):
+def test_rollback_transaction(tx_manager: Any) -> None:
     """Test that rollback_transaction sets the transaction state to ROLLED_BACK.
 
     Args:
@@ -202,7 +204,7 @@ def test_rollback_transaction(tx_manager):
 
 
 # Test que list_active_transactions retourne une liste vide au départ
-def test_list_active_transactions_initially_empty(tx_manager):
+def test_list_active_transactions_initially_empty(tx_manager: Any) -> None:
     """Test that list_active_transactions returns an empty list before any transaction.
 
     Args:
@@ -215,7 +217,7 @@ def test_list_active_transactions_initially_empty(tx_manager):
 
 
 # Test que list_active_transactions retourne la transaction démarrée
-def test_list_active_transactions_contains_started(tx_manager):
+def test_list_active_transactions_contains_started(tx_manager: Any) -> None:
     """Test that list_active_transactions includes started transactions.
 
     Args:

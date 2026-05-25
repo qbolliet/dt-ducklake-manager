@@ -1,6 +1,8 @@
 # Importation des modules
 # Modules de base
 import os
+from collections.abc import Generator
+from typing import Any
 
 # DuckDB
 import duckdb
@@ -43,7 +45,7 @@ pytestmark = pytest.mark.skipif(
 
 # Initialisation d'un catalogue DuckLake temporaire avec une table de test
 @pytest.fixture
-def ducklake_conn(tmp_path):
+def ducklake_conn(tmp_path: Any) -> Generator[tuple[Any, str]]:
     """Create a temporary DuckLake catalog with a test table.
 
     Args:
@@ -66,7 +68,7 @@ def ducklake_conn(tmp_path):
 
 # Initialisation d'une instance DuckLakeMaintenance prête à l'emploi
 @pytest.fixture
-def maint(ducklake_conn):
+def maint(ducklake_conn: tuple[Any, str]) -> DuckLakeMaintenance:
     """Return a DuckLakeMaintenance instance ready for use.
 
     Args:
@@ -85,7 +87,7 @@ def maint(ducklake_conn):
 
 
 # Test de l'initialisation avec l'alias par défaut
-def test_init_default_alias(ducklake_conn):
+def test_init_default_alias(ducklake_conn: Any) -> None:
     """Test that the default catalog_alias is 'db'.
 
     Args:
@@ -97,7 +99,7 @@ def test_init_default_alias(ducklake_conn):
 
 
 # Test de l'initialisation avec un alias personnalisé
-def test_init_custom_catalog_alias(ducklake_conn):
+def test_init_custom_catalog_alias(ducklake_conn: Any) -> None:
     """Test that DuckLakeMaintenance stores a custom catalog alias.
 
     Args:
@@ -114,7 +116,7 @@ def test_init_custom_catalog_alias(ducklake_conn):
 
 
 # Test que merge_files s'exécute sans erreur
-def test_merge_files_executes_without_error(maint, ducklake_conn):
+def test_merge_files_executes_without_error(maint: Any, ducklake_conn: Any) -> None:
     """Test that merge_files completes without raising an exception.
 
     Args:
@@ -127,7 +129,9 @@ def test_merge_files_executes_without_error(maint, ducklake_conn):
 
 
 # Test que rewrite_data_files s'exécute sans erreur
-def test_rewrite_data_files_executes_without_error(maint, ducklake_conn):
+def test_rewrite_data_files_executes_without_error(
+    maint: Any, ducklake_conn: Any
+) -> None:
     """Test that rewrite_data_files completes without raising an exception.
 
     Args:
@@ -139,7 +143,7 @@ def test_rewrite_data_files_executes_without_error(maint, ducklake_conn):
 
 
 # Test que expire_snapshots s'exécute sans erreur avec la valeur par défaut
-def test_expire_snapshots_default_days(maint):
+def test_expire_snapshots_default_days(maint: Any) -> None:
     """Test that expire_snapshots with default older_than_days=30 does not raise.
 
     Args:
@@ -149,7 +153,7 @@ def test_expire_snapshots_default_days(maint):
 
 
 # Test que expire_snapshots accepte une valeur personnalisée de older_than_days
-def test_expire_snapshots_custom_days(maint):
+def test_expire_snapshots_custom_days(maint: Any) -> None:
     """Test that expire_snapshots accepts a custom older_than_days value.
 
     Args:
@@ -159,7 +163,7 @@ def test_expire_snapshots_custom_days(maint):
 
 
 # Test que cleanup_files s'exécute sans erreur
-def test_cleanup_files_executes_without_error(maint):
+def test_cleanup_files_executes_without_error(maint: Any) -> None:
     """Test that cleanup_files completes without raising an exception.
 
     Args:
@@ -174,7 +178,7 @@ def test_cleanup_files_executes_without_error(maint):
 
 
 # Test que full_maintenance exécute toutes les étapes sans erreur
-def test_full_maintenance_runs_all_steps(maint, ducklake_conn):
+def test_full_maintenance_runs_all_steps(maint: Any, ducklake_conn: Any) -> None:
     """Test that full_maintenance calls all four maintenance procedures.
 
     Args:
@@ -187,7 +191,9 @@ def test_full_maintenance_runs_all_steps(maint, ducklake_conn):
 
 
 # Test que full_maintenance continue après un échec partiel
-def test_full_maintenance_continues_on_step_failure(maint, ducklake_conn):
+def test_full_maintenance_continues_on_step_failure(
+    maint: Any, ducklake_conn: Any
+) -> None:
     """Test that full_maintenance logs a warning and continues if one step fails.
 
     Args:
@@ -197,26 +203,26 @@ def test_full_maintenance_continues_on_step_failure(maint, ducklake_conn):
     _, table = ducklake_conn
 
     # Compteur d'appels pour vérifier que les étapes suivantes ont bien été exécutées
-    call_log: list = []
+    call_log: list[str] = []
 
     original_rewrite = maint.rewrite_data_files
     original_expire = maint.expire_snapshots
     original_cleanup = maint.cleanup_files
 
-    def failing_merge(schema, tbl):
+    def failing_merge(schema: Any, tbl: Any) -> None:
         # Simulation d'un échec sur la première étape
         call_log.append("merge_files")
         raise RuntimeError("Échec simulé de merge_files")
 
-    def tracking_rewrite(schema, tbl):
+    def tracking_rewrite(schema: Any, tbl: Any) -> None:
         call_log.append("rewrite_data_files")
         original_rewrite(schema, tbl)
 
-    def tracking_expire(schema, older_than_days=30):
+    def tracking_expire(schema: Any, older_than_days: int = 30) -> None:
         call_log.append("expire_snapshots")
         original_expire(schema, older_than_days=older_than_days)
 
-    def tracking_cleanup(schema):
+    def tracking_cleanup(schema: Any) -> None:
         call_log.append("cleanup_files")
         original_cleanup(schema)
 
@@ -241,7 +247,7 @@ def test_full_maintenance_continues_on_step_failure(maint, ducklake_conn):
 
 
 # Test que set_partitioned_by applique le DDL sans erreur
-def test_set_partitioned_by_simple(maint, ducklake_conn):
+def test_set_partitioned_by_simple(maint: Any, ducklake_conn: Any) -> None:
     """Test that set_partitioned_by executes ALTER TABLE without raising.
 
     Args:
@@ -254,7 +260,7 @@ def test_set_partitioned_by_simple(maint, ducklake_conn):
 
 
 # Test que set_partitioned_by lève ValueError sur liste vide
-def test_set_partitioned_by_empty_raises(maint, ducklake_conn):
+def test_set_partitioned_by_empty_raises(maint: Any, ducklake_conn: Any) -> None:
     """Test that set_partitioned_by raises ValueError when partition_by is empty.
 
     Args:
@@ -267,7 +273,7 @@ def test_set_partitioned_by_empty_raises(maint, ducklake_conn):
 
 
 # Test que set_partitioned_by accepte plusieurs clés
-def test_set_partitioned_by_multiple_keys(maint, ducklake_conn):
+def test_set_partitioned_by_multiple_keys(maint: Any, ducklake_conn: Any) -> None:
     """Test that set_partitioned_by accepts a list with multiple partition keys.
 
     Args:
@@ -285,7 +291,7 @@ def test_set_partitioned_by_multiple_keys(maint, ducklake_conn):
 
 
 # Test que reset_partitioned_by supprime le partitionnement sans erreur
-def test_reset_partitioned_by(maint, ducklake_conn):
+def test_reset_partitioned_by(maint: Any, ducklake_conn: Any) -> None:
     """Test that reset_partitioned_by executes RESET PARTITIONED BY without raising.
 
     Args:
@@ -300,7 +306,9 @@ def test_reset_partitioned_by(maint, ducklake_conn):
 
 
 # Test que reset_partitioned_by fonctionne même sans partitionnement préalable
-def test_reset_partitioned_by_without_prior_partitioning(maint, ducklake_conn):
+def test_reset_partitioned_by_without_prior_partitioning(
+    maint: Any, ducklake_conn: Any
+) -> None:
     """Test that reset_partitioned_by succeeds even if no partitioning was defined.
 
     Args:
@@ -319,7 +327,7 @@ def test_reset_partitioned_by_without_prior_partitioning(maint, ducklake_conn):
 
 
 # Test de repartition avec changement de clé
-def test_repartition_change_key(maint, ducklake_conn):
+def test_repartition_change_key(maint: Any, ducklake_conn: Any) -> None:
     """Test that repartition resets and applies new partition keys.
 
     Args:
@@ -334,7 +342,7 @@ def test_repartition_change_key(maint, ducklake_conn):
 
 
 # Test de repartition avec suppression du partitionnement (partition_by=None)
-def test_repartition_remove_partitioning(maint, ducklake_conn):
+def test_repartition_remove_partitioning(maint: Any, ducklake_conn: Any) -> None:
     """Test that repartition with partition_by=None removes partitioning entirely.
 
     Args:
@@ -349,7 +357,7 @@ def test_repartition_remove_partitioning(maint, ducklake_conn):
 
 # Test que repartition déclenche merge_files
 # et rewrite_data_files quand run_maintenance=True
-def test_repartition_with_maintenance(maint, ducklake_conn):
+def test_repartition_with_maintenance(maint: Any, ducklake_conn: Any) -> None:
     """Test that repartition triggers merge_files
     and rewrite_data_files when run_maintenance=True.
 
@@ -358,16 +366,16 @@ def test_repartition_with_maintenance(maint, ducklake_conn):
         ducklake_conn: Fixture providing (connection, table_name).
     """
     _, table = ducklake_conn
-    call_log: list = []
+    call_log: list[str] = []
 
     original_merge = maint.merge_files
     original_rewrite = maint.rewrite_data_files
 
-    def tracking_merge(schema, tbl):
+    def tracking_merge(schema: Any, tbl: Any) -> None:
         call_log.append("merge_files")
         original_merge(schema, tbl)
 
-    def tracking_rewrite(schema, tbl):
+    def tracking_rewrite(schema: Any, tbl: Any) -> None:
         call_log.append("rewrite_data_files")
         original_rewrite(schema, tbl)
 
@@ -382,7 +390,7 @@ def test_repartition_with_maintenance(maint, ducklake_conn):
 
 
 # Test que repartition ne déclenche pas la maintenance quand run_maintenance=False
-def test_repartition_without_maintenance(maint, ducklake_conn):
+def test_repartition_without_maintenance(maint: Any, ducklake_conn: Any) -> None:
     """Test that repartition skips maintenance calls when run_maintenance=False.
 
     Args:
@@ -390,12 +398,12 @@ def test_repartition_without_maintenance(maint, ducklake_conn):
         ducklake_conn: Fixture providing (connection, table_name).
     """
     _, table = ducklake_conn
-    call_log: list = []
+    call_log: list[str] = []
 
-    def tracking_merge(schema, tbl):
+    def tracking_merge(schema: Any, tbl: Any) -> None:
         call_log.append("merge_files")
 
-    def tracking_rewrite(schema, tbl):
+    def tracking_rewrite(schema: Any, tbl: Any) -> None:
         call_log.append("rewrite_data_files")
 
     maint.merge_files = tracking_merge

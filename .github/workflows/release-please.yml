@@ -1,0 +1,33 @@
+name: Release Please
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+# Pas d'annulation : on ne veut jamais interrompre une release en cours.
+concurrency:
+  group: release-please-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release-please:
+    name: Release Please
+    runs-on: ubuntu-latest
+    steps:
+      # Maintient une PR de release qui agrège les commits depuis la dernière
+      # version ; à son merge, bump de pyproject.toml, mise à jour du CHANGELOG,
+      # création du tag et de la release GitHub. Le PAT (RELEASE_PLEASE_TOKEN)
+      # remplace le GITHUB_TOKEN afin que la PR de release déclenche bien la CI :
+      # une PR ouverte avec le GITHUB_TOKEN ne déclenche aucun workflow.
+      - name: Run release-please
+        uses: googleapis/release-please-action@v5
+        with:
+          config-file: .release-please-config.json
+          manifest-file: .release-please-manifest.json
+          token: ${{ secrets.RELEASE_PLEASE_TOKEN }}

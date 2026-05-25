@@ -7,6 +7,13 @@ on:
   pull_request:
     branches:
       - main
+  workflow_dispatch:
+
+# Annulation des exécutions obsolètes : un nouveau push sur la même réf
+# annule le run précédent encore en cours (économie de minutes CI).
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   lint:
@@ -18,6 +25,7 @@ jobs:
       - uses: astral-sh/setup-uv@v5
         with:
           python-version: "3.13"
+          enable-cache: true
 
       - name: Installer les dépendances de développement
         run: uv sync --group dev
@@ -34,12 +42,42 @@ jobs:
   test:
     name: Tests
     runs-on: ubuntu-latest
+
+    # Serveur PostgreSQL éphémère pour les tests d'intégration du backend
+    # catalogue Postgres (concurrence lecture/écriture). Sans ce service, le
+    # test correspondant est ignoré (skipif) et la CI passe au vert sans le
+    # couvrir réellement.
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: ducklake
+          POSTGRES_USER: app
+          POSTGRES_PASSWORD: secret
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U app -d ducklake"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 5
+
+    # Paramètres de connexion lus par les tests d'intégration Postgres
+    # (cf. _postgres_test_params dans tests/unit/test_connection/test_connector.py).
+    env:
+      DUCKLAKE_TEST_PG_HOST: localhost
+      DUCKLAKE_TEST_PG_PORT: "5432"
+      DUCKLAKE_TEST_PG_DB: ducklake
+      DUCKLAKE_TEST_PG_USER: app
+      DUCKLAKE_TEST_PG_PASSWORD: secret
+
     steps:
       - uses: actions/checkout@v4
 
       - uses: astral-sh/setup-uv@v5
         with:
           python-version: "3.13"
+          enable-cache: true
 
       - name: Installer les dépendances de développement
         run: uv sync --group dev

@@ -43,7 +43,7 @@ class DatabaseDeleter(BaseSchemaManager):
         enable_validation (bool): Whether to enable validation
         auto_cleanup (bool): Whether to automatically clean up orphaned data
         ducklake_catalog_alias (str): Alias of the attached DuckLake catalog
-        ducklake_schema (str): DuckLake schema name
+        schema (str): DuckLake schema name
     """
 
     # Initialisation
@@ -55,7 +55,7 @@ class DatabaseDeleter(BaseSchemaManager):
         enable_validation: bool = True,
         auto_cleanup: bool = True,
         ducklake_catalog_alias: str = "db",
-        ducklake_schema: str = "main",
+        schema: str = "main",
     ):
         """
         Initialize the refactored database deleter.
@@ -70,19 +70,22 @@ class DatabaseDeleter(BaseSchemaManager):
             auto_cleanup: Whether to automatically clean up orphaned data.
             ducklake_catalog_alias: Alias used in the DuckLake ATTACH statement.
                 Defaults to ``'db'``.
-            ducklake_schema: DuckLake schema name used in compaction calls.
-                Defaults to ``'main'``.
+            schema: DuckLake schema to delete from. A single catalog can host several
+                schemas; all tables are qualified by this one, and compaction calls
+                target it. Defaults to ``'main'``.
 
         Example:
             >>> conn = DuckLakeConnector('catalog.ducklake', 'data/').connect()
             >>> deleter = DatabaseDeleter(conn, enable_validation=True,
             auto_cleanup=True)
+            >>> deleter = DatabaseDeleter(conn, schema='predictions')
         """
         # Initialisation du parent
         super().__init__(
             connection=connection,
             categorical_threshold=categorical_threshold,
             log_filename=log_filename,
+            schema=schema,
         )
 
         # Initialisation des gestionnaires spécialisés
@@ -90,18 +93,22 @@ class DatabaseDeleter(BaseSchemaManager):
             connection=connection,
             categorical_threshold=categorical_threshold,
             log_filename=log_filename,
+            schema=schema,
         )
 
         self.data_mgr = DataManager(
             connection=connection,
             categorical_threshold=categorical_threshold,
             log_filename=log_filename,
+            schema=schema,
         )
 
         self.transaction_mgr = TransactionManager(
             connection=connection,
             categorical_threshold=categorical_threshold,
             log_filename=log_filename,
+            ducklake_catalog_alias=ducklake_catalog_alias,
+            schema=schema,
         )
 
         self.auditor = (
@@ -109,6 +116,7 @@ class DatabaseDeleter(BaseSchemaManager):
                 connection=connection,
                 categorical_threshold=categorical_threshold,
                 log_filename=log_filename,
+                schema=schema,
             )
             if enable_validation
             else None
@@ -118,9 +126,9 @@ class DatabaseDeleter(BaseSchemaManager):
         self.enable_validation = enable_validation
         self.auto_cleanup = auto_cleanup
 
-        # Configuration DuckLake pour les appels de compaction
+        # Configuration DuckLake pour les appels de compaction.
+        # L'alias du catalogue ; le schéma est porté par self.schema (classe de base).
         self.ducklake_catalog_alias = ducklake_catalog_alias
-        self.ducklake_schema = ducklake_schema
 
     # Méthode de validation de l'opération de suppression avant son exécution
     def validate_operation(self, operation_type: str, **kwargs: Any) -> bool:
@@ -246,7 +254,9 @@ class DatabaseDeleter(BaseSchemaManager):
 
         try:
             # Comptage initial pour le rollback
-            _row = self.conn.execute("SELECT COUNT(*) FROM fact_table").fetchone()
+            _row = self.conn.execute(
+                f"SELECT COUNT(*) FROM {self._qualified('fact_table')}"
+            ).fetchone()
             initial_count = _row[0] if _row is not None else 0
 
             # Étape 1: Suppression des lignes
@@ -269,7 +279,9 @@ class DatabaseDeleter(BaseSchemaManager):
                 return -1
 
             # Calcul du nombre de lignes supprimées
-            _row2 = self.conn.execute("SELECT COUNT(*) FROM fact_table").fetchone()
+            _row2 = self.conn.execute(
+                f"SELECT COUNT(*) FROM {self._qualified('fact_table')}"
+            ).fetchone()
             current_count = _row2[0] if _row2 is not None else 0
             rows_deleted = initial_count - current_count
 
@@ -388,7 +400,7 @@ class DatabaseDeleter(BaseSchemaManager):
         """
         # Extraction des alias et du schéma
         alias = self.ducklake_catalog_alias
-        schema = self.ducklake_schema
+        schema = self.schema
         try:
             # Fusion des petits fichiers delta adjacents
             # Note : les table functions DuckLake sont enregistrées dans le catalogue
@@ -752,7 +764,8 @@ class DatabaseDeleter(BaseSchemaManager):
 
                 # Comptage des valeurs uniques non nulles
                 _uq_row = self.conn.execute(
-                    f"SELECT COUNT(DISTINCT {col_name}) FROM fact_table WHERE"
+                    f"SELECT COUNT(DISTINCT {col_name}) FROM"
+                    f" {self._qualified('fact_table')} WHERE"
                     f" {col_name} IS NOT NULL"
                 ).fetchone()
                 unique_count = _uq_row[0] if _uq_row is not None else 0
@@ -764,7 +777,8 @@ class DatabaseDeleter(BaseSchemaManager):
                 ):
                     # Extraction des valeurs distinctes sous forme de narwhals Series
                     values_pl = self.conn.execute(
-                        f"SELECT DISTINCT {col_name} FROM fact_table WHERE {col_name}"
+                        f"SELECT DISTINCT {col_name} FROM"
+                        f" {self._qualified('fact_table')} WHERE {col_name}"
                         f" IS NOT NULL"
                     ).pl()
                     values = nw.from_native(values_pl, eager_only=True)[col_name]
@@ -1082,7 +1096,10 @@ class DatabaseDeleter(BaseSchemaManager):
                     where_clause = _build_where_clause(filters)  # type: ignore[arg-type]
                     # Identification de slignes affectées
                     if where_clause:
-                        count_query = f"SELECT COUNT(*) FROM fact_table {where_clause}"
+                        count_query = (
+                            f"SELECT COUNT(*) FROM {self._qualified('fact_table')}"
+                            f" {where_clause}"
+                        )
                         _impact_row = self.conn.execute(count_query).fetchone()
                         impact_report["rows_affected"] = (
                             _impact_row[0] if _impact_row is not None else 0

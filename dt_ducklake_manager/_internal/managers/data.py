@@ -41,6 +41,7 @@ class DataManager(BaseSchemaManager):
         categorical_threshold: int | None = 50,
         log_filename: str | os.PathLike[str] | None = None,
         batch_size: int = 10000,
+        schema: str = "main",
     ):
         """
         Initialize the data manager.
@@ -52,16 +53,20 @@ class DataManager(BaseSchemaManager):
             categorical_threshold: Threshold for determining categorical variables.
             log_filename: Path to log file.
             batch_size: Size of batches for processing large datasets.
+            schema: DuckLake schema holding the fact table to operate on. Defaults
+                to ``'main'``.
 
         Example:
             >>> conn = DuckLakeConnector('catalog.ducklake', 'data/').connect()
             >>> data_mgr = DataManager(conn, batch_size=5000)
+            >>> data_mgr = DataManager(conn, schema='predictions')
         """
         # Initialisation du parent
         super().__init__(
             connection=connection,
             categorical_threshold=categorical_threshold,
             log_filename=log_filename,
+            schema=schema,
         )
 
         # Configuration pour le traitement par lots
@@ -228,8 +233,8 @@ class DataManager(BaseSchemaManager):
             self.conn.register("temp_fact_creation", nw.to_native(df_nw))
 
             # Création de la table des faits
-            self.conn.execute("""
-                CREATE TABLE fact_table AS
+            self.conn.execute(f"""
+                CREATE TABLE {self._qualified("fact_table")} AS
                 SELECT * FROM temp_fact_creation
             """)
 
@@ -372,8 +377,11 @@ class DataManager(BaseSchemaManager):
             return 0
 
         try:
+            # Nom qualifié de la table des faits
+            fact_table = self._qualified("fact_table")
+
             # Comptage initial
-            _r1 = self.conn.execute("SELECT COUNT(*) FROM fact_table").fetchone()
+            _r1 = self.conn.execute(f"SELECT COUNT(*) FROM {fact_table}").fetchone()
             initial_count = _r1[0] if _r1 is not None else 0
 
             # Construction de la clause WHERE
@@ -384,11 +392,11 @@ class DataManager(BaseSchemaManager):
                 return 0
 
             # Construction et exécution de la requête de suppression
-            delete_query = f"DELETE FROM fact_table {where_clause}"
+            delete_query = f"DELETE FROM {fact_table} {where_clause}"
             self.conn.execute(delete_query)
 
             # Comptage final
-            _r2 = self.conn.execute("SELECT COUNT(*) FROM fact_table").fetchone()
+            _r2 = self.conn.execute(f"SELECT COUNT(*) FROM {fact_table}").fetchone()
             final_count = _r2[0] if _r2 is not None else 0
             rows_deleted = initial_count - final_count
 
@@ -440,15 +448,16 @@ class DataManager(BaseSchemaManager):
             sql_type = map_python_to_sql_type(df_nw.schema[column_name])
 
             # Ajout de la colonne avec valeur par défaut
+            fact_table = self._qualified("fact_table")
             if default_value is not None:
                 alter_query = (
-                    f"ALTER TABLE fact_table ADD COLUMN {column_name}"
+                    f"ALTER TABLE {fact_table} ADD COLUMN {column_name}"
                     f" {sql_type} DEFAULT ?"
                 )
                 self.conn.execute(alter_query, [default_value])
             else:
                 alter_query = (
-                    f"ALTER TABLE fact_table ADD COLUMN {column_name}"
+                    f"ALTER TABLE {fact_table} ADD COLUMN {column_name}"
                     f" {sql_type} DEFAULT NULL"
                 )
                 self.conn.execute(alter_query)
@@ -493,7 +502,9 @@ class DataManager(BaseSchemaManager):
         for column in valid_columns:
             try:
                 # Suppression de la colonne
-                alter_query = f"ALTER TABLE fact_table DROP COLUMN {column}"
+                alter_query = (
+                    f"ALTER TABLE {self._qualified('fact_table')} DROP COLUMN {column}"
+                )
                 self.conn.execute(alter_query)
 
                 # Suppression des métadonnées
@@ -532,14 +543,16 @@ class DataManager(BaseSchemaManager):
 
             # Mise à jour du type
             alter_query = (
-                f"ALTER TABLE fact_table ALTER {column_name} SET DATA TYPE {new_type}"
+                f"ALTER TABLE {self._qualified('fact_table')} ALTER {column_name}"
+                f" SET DATA TYPE {new_type}"
             )
             self.conn.execute(alter_query)
 
             # Mise à jour des métadonnées si disponibles
             try:
                 self.conn.execute(
-                    "UPDATE metadata SET sql_type = ? WHERE name = ?",
+                    f"UPDATE {self._qualified('metadata')} SET sql_type = ?"
+                    f" WHERE name = ?",
                     [new_type, column_name],
                 )
                 self._invalidate_metadata_cache()
@@ -602,7 +615,7 @@ class DataManager(BaseSchemaManager):
             # Insertion des données
             column_list = ", ".join(df.columns)
             insert_query = f"""
-                INSERT INTO fact_table ({column_list})
+                INSERT INTO {self._qualified("fact_table")} ({column_list})
                 SELECT {column_list} FROM temp_insert
             """
             self.conn.execute(insert_query)
@@ -661,12 +674,15 @@ class DataManager(BaseSchemaManager):
             # Enregistrement d'une vue temporaire (polars natif pour DuckDB)
             self.conn.register("temp_upsert", nw.to_native(df))
 
+            # Nom qualifié de la table des faits
+            fact_table = self._qualified("fact_table")
+
             # Construction des conditions de jointure
             merge_condition = " AND ".join([f"f.{key} = t.{key}" for key in merge_keys])
 
             # Comptage des mises à jour
             update_count_query = f"""
-                SELECT COUNT(*) FROM fact_table f
+                SELECT COUNT(*) FROM {fact_table} f
                 WHERE EXISTS (
                     SELECT 1 FROM temp_upsert t
                     WHERE {merge_condition}
@@ -692,7 +708,7 @@ class DataManager(BaseSchemaManager):
                         [f"{col} = t.{col}" for col in update_columns]
                     )
                     update_query = f"""
-                        UPDATE fact_table f
+                        UPDATE {fact_table} f
                         SET {set_clause}
                         FROM temp_upsert t
                         WHERE {merge_condition}
@@ -700,22 +716,22 @@ class DataManager(BaseSchemaManager):
                     self.conn.execute(update_query)
 
             # Insertion des nouvelles lignes
-            _ic_row = self.conn.execute("SELECT COUNT(*) FROM fact_table").fetchone()
+            _ic_row = self.conn.execute(f"SELECT COUNT(*) FROM {fact_table}").fetchone()
             initial_count = _ic_row[0] if _ic_row is not None else 0
 
             column_list = ", ".join(df.columns)
             insert_query = f"""
-                INSERT INTO fact_table ({column_list})
+                INSERT INTO {fact_table} ({column_list})
                 SELECT {column_list} FROM temp_upsert t
                 WHERE NOT EXISTS (
-                    SELECT 1 FROM fact_table f
+                    SELECT 1 FROM {fact_table} f
                     WHERE {merge_condition}
                 )
             """
             self.conn.execute(insert_query)
 
             # Comptage final
-            _fc_row = self.conn.execute("SELECT COUNT(*) FROM fact_table").fetchone()
+            _fc_row = self.conn.execute(f"SELECT COUNT(*) FROM {fact_table}").fetchone()
             final_count = _fc_row[0] if _fc_row is not None else 0
             rows_inserted = final_count - initial_count
 
@@ -766,12 +782,15 @@ class DataManager(BaseSchemaManager):
         try:
             stats = {}
 
+            # Nom qualifié de la table des faits
+            fact_table = self._qualified("fact_table")
+
             # Comptage des lignes
-            _rc_row = self.conn.execute("SELECT COUNT(*) FROM fact_table").fetchone()
+            _rc_row = self.conn.execute(f"SELECT COUNT(*) FROM {fact_table}").fetchone()
             stats["row_count"] = _rc_row[0] if _rc_row is not None else 0
 
             # Informations sur les colonnes
-            columns_info = self.conn.execute("DESCRIBE fact_table").fetchall()
+            columns_info = self.conn.execute(f"DESCRIBE {fact_table}").fetchall()
             stats["column_count"] = len(columns_info)
             stats["columns"] = [
                 {"name": col[0], "type": col[1]} for col in columns_info
@@ -780,7 +799,7 @@ class DataManager(BaseSchemaManager):
             # Taille approximative (en MB)
             try:
                 size_query = (
-                    "SELECT pg_size_pretty(pg_total_relation_size('fact_table'))"
+                    f"SELECT pg_size_pretty(pg_total_relation_size('{fact_table}'))"
                 )
                 size_result = self.conn.execute(size_query).fetchone()
                 stats["table_size"] = size_result[0] if size_result else "Unknown"
@@ -807,7 +826,7 @@ class DataManager(BaseSchemaManager):
         """
         try:
             # Analyse de la table pour optimiser les requêtes
-            self.conn.execute("ANALYZE fact_table")
+            self.conn.execute(f"ANALYZE {self._qualified('fact_table')}")
 
             # Logging
             self.logger.info("Table optimization completed")

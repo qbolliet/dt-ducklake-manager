@@ -1,6 +1,7 @@
 # Importation des modules
 # Modules de base
 from datetime import datetime
+from typing import Any
 
 import polars as pl
 
@@ -17,7 +18,7 @@ from dt_ducklake_manager._internal.managers.data import DataManager
 
 # Initialisation d'un DataManager pour les tests
 @pytest.fixture
-def data_manager(built_ducklake_schema):
+def data_manager(built_ducklake_schema: Any) -> DataManager:
     """Create a DataManager instance for testing.
 
     Args:
@@ -36,7 +37,7 @@ def data_manager(built_ducklake_schema):
 
 # Initialisation d'un DataFrame d'insertion valide
 @pytest.fixture
-def new_rows(sample_df):
+def new_rows(sample_df: Any) -> pl.DataFrame:
     """Create a small DataFrame with new rows compatible with sample_df schema.
 
     Args:
@@ -61,7 +62,7 @@ def new_rows(sample_df):
 
 # Initialisation d'un DataFrame vide
 @pytest.fixture
-def empty_df():
+def empty_df() -> pl.DataFrame:
     """Create an empty DataFrame for edge case testing.
 
     Returns:
@@ -76,7 +77,7 @@ def empty_df():
 
 
 # Test de l'initialisation correcte du gestionnaire de données
-def test_data_manager_initialization(built_ducklake_schema):
+def test_data_manager_initialization(built_ducklake_schema: Any) -> None:
     """Test that DataManager initializes correctly with the given parameters.
 
     Args:
@@ -94,7 +95,7 @@ def test_data_manager_initialization(built_ducklake_schema):
 
 
 # Test que validate_operation retourne True pour une insertion valide
-def test_validate_operation_insert_valid(data_manager, new_rows):
+def test_validate_operation_insert_valid(data_manager: Any, new_rows: Any) -> None:
     """Test that validate_operation returns True for a valid insert operation.
 
     Args:
@@ -106,7 +107,7 @@ def test_validate_operation_insert_valid(data_manager, new_rows):
 
 
 # Test que validate_operation retourne False pour un DataFrame vide
-def test_validate_operation_insert_empty_df(data_manager, empty_df):
+def test_validate_operation_insert_empty_df(data_manager: Any, empty_df: Any) -> None:
     """Test that validate_operation returns False when inserting an empty DataFrame.
 
     Args:
@@ -123,7 +124,9 @@ def test_validate_operation_insert_empty_df(data_manager, empty_df):
 
 
 # Test que insert_data insère bien les nouvelles lignes dans fact_table
-def test_insert_data_increases_row_count(data_manager, built_ducklake_schema, new_rows):
+def test_insert_data_increases_row_count(
+    data_manager: Any, built_ducklake_schema: Any, new_rows: Any
+) -> None:
     """Test that insert_data increases the fact table row count.
 
     Args:
@@ -150,7 +153,9 @@ def test_insert_data_increases_row_count(data_manager, built_ducklake_schema, ne
 
 
 # Test que insert_data avec use_batch=True fonctionne correctement
-def test_insert_data_batch_mode(data_manager, built_ducklake_schema, new_rows):
+def test_insert_data_batch_mode(
+    data_manager: Any, built_ducklake_schema: Any, new_rows: Any
+) -> None:
     """Test that insert_data with use_batch=True works correctly.
 
     Args:
@@ -177,7 +182,7 @@ def test_insert_data_batch_mode(data_manager, built_ducklake_schema, new_rows):
 
 
 # Test que delete_rows supprime les lignes correspondant au filtre
-def test_delete_rows_with_filter(data_manager, built_ducklake_schema):
+def test_delete_rows_with_filter(data_manager: Any, built_ducklake_schema: Any) -> None:
     """Test that delete_rows removes rows matching the given filter.
 
     Args:
@@ -204,7 +209,7 @@ def test_delete_rows_with_filter(data_manager, built_ducklake_schema):
 
 
 # Test que delete_rows avec filters=None supprime toutes les lignes
-def test_delete_rows_all(data_manager, built_ducklake_schema):
+def test_delete_rows_all(data_manager: Any, built_ducklake_schema: Any) -> None:
     """Test that delete_rows with filters=None removes all rows.
 
     Args:

@@ -1,5 +1,7 @@
 # Importation des modules
 # Modules de base
+from typing import Any
+
 import narwhals as nw
 import polars as pl
 
@@ -16,7 +18,7 @@ from dt_ducklake_manager._internal.managers.dimension import DimensionManager
 
 # Initialisation d'un DimensionManager pour les tests
 @pytest.fixture
-def dim_manager(built_ducklake_schema):
+def dim_manager(built_ducklake_schema: Any) -> DimensionManager:
     """Create a DimensionManager instance for testing.
 
     Args:
@@ -35,7 +37,7 @@ def dim_manager(built_ducklake_schema):
 
 
 # Test de l'initialisation correcte du gestionnaire de dimensions
-def test_dimension_manager_initialization(built_ducklake_schema):
+def test_dimension_manager_initialization(built_ducklake_schema: Any) -> None:
     """Test that DimensionManager initializes correctly.
 
     Args:
@@ -56,7 +58,7 @@ def test_dimension_manager_initialization(built_ducklake_schema):
 
 
 # Test que validate_operation retourne un booléen pour create_dimension
-def test_validate_operation_create_dimension(dim_manager):
+def test_validate_operation_create_dimension(dim_manager: Any) -> None:
     """Test that validate_operation returns a boolean for 'create' operation.
 
     Args:
@@ -75,7 +77,7 @@ def test_validate_operation_create_dimension(dim_manager):
 
 
 # Test de la création d'une nouvelle table de dimension
-def test_create_dimension_table(dim_manager, built_ducklake_schema):
+def test_create_dimension_table(dim_manager: Any, built_ducklake_schema: Any) -> None:
     """Test that create_dimension_table creates a new dimension table in DuckDB.
 
     Args:
@@ -108,7 +110,7 @@ def test_create_dimension_table(dim_manager, built_ducklake_schema):
 
 
 # Test de la récupération du mapping d'une table de dimension existante
-def test_get_dimension_mapping_existing(dim_manager):
+def test_get_dimension_mapping_existing(dim_manager: Any) -> None:
     """Test that get_dimension_mapping returns a DataFrame for an existing dimension.
 
     Args:
@@ -125,7 +127,7 @@ def test_get_dimension_mapping_existing(dim_manager):
 
 
 # Test que get_dimension_mapping retourne None pour une dimension inexistante
-def test_get_dimension_mapping_nonexistent(dim_manager):
+def test_get_dimension_mapping_nonexistent(dim_manager: Any) -> None:
     """Test that get_dimension_mapping returns None for a non-existent dimension.
 
     Args:
@@ -141,7 +143,7 @@ def test_get_dimension_mapping_nonexistent(dim_manager):
 
 
 # Test de la suppression d'une table de dimension existante
-def test_delete_dimension_table(dim_manager, built_ducklake_schema):
+def test_delete_dimension_table(dim_manager: Any, built_ducklake_schema: Any) -> None:
     """Test that delete_dimension_table removes the dimension table from DuckDB.
 
     Args:
@@ -173,7 +175,7 @@ def test_delete_dimension_table(dim_manager, built_ducklake_schema):
 
 
 # Test que cleanup_orphaned_dimension_entries s'exécute sans erreur
-def test_cleanup_orphaned_dimension_entries(dim_manager):
+def test_cleanup_orphaned_dimension_entries(dim_manager: Any) -> None:
     """Test that cleanup_orphaned_dimension_entries executes without error.
 
     Args:
@@ -191,7 +193,7 @@ def test_cleanup_orphaned_dimension_entries(dim_manager):
 
 # Extension du schéma de test avec une colonne non-catégorielle convertible
 @pytest.fixture
-def schema_with_region(built_ducklake_schema):
+def schema_with_region(built_ducklake_schema: Any) -> Any:
     """Extend the built schema with a non-categorical VARCHAR column 'region'.
 
     Adds a 'region' column to fact_table with 4 unique values (Nord, Sud, Est,
@@ -233,7 +235,7 @@ def schema_with_region(built_ducklake_schema):
 
 # Initialisation d'un DimensionManager sur le schéma étendu avec 'region'
 @pytest.fixture
-def dim_manager_with_region(schema_with_region):
+def dim_manager_with_region(schema_with_region: Any) -> DimensionManager:
     """Create a DimensionManager instance on the extended schema with 'region'.
 
     Args:
@@ -252,7 +254,9 @@ def dim_manager_with_region(schema_with_region):
 
 
 # Test du cas nominal : conversion réussie d'une colonne non-catégorielle
-def test_convert_to_categorical_success(dim_manager_with_region, schema_with_region):
+def test_convert_to_categorical_success(
+    dim_manager_with_region: Any, schema_with_region: Any
+) -> None:
     """Test that convert_to_categorical returns True and correctly converts a
     non-categorical VARCHAR column to categorical.
 
@@ -322,7 +326,9 @@ def test_convert_to_categorical_success(dim_manager_with_region, schema_with_reg
 
 
 # Test du dépassement du seuil catégoriel : conversion refusée
-def test_convert_to_categorical_threshold_exceeded(dim_manager, built_ducklake_schema):
+def test_convert_to_categorical_threshold_exceeded(
+    dim_manager: Any, built_ducklake_schema: Any
+) -> None:
     """Test that convert_to_categorical returns False when the column has more
     unique values than the categorical threshold.
 
@@ -371,7 +377,7 @@ def test_convert_to_categorical_threshold_exceeded(dim_manager, built_ducklake_s
 
 
 # Test du refus de conversion pour un nom de colonne vide
-def test_convert_to_categorical_empty_column_name(dim_manager):
+def test_convert_to_categorical_empty_column_name(dim_manager: Any) -> None:
     """Test that convert_to_categorical returns False when given an empty column
     name, failing at the validation step.
 
@@ -389,7 +395,7 @@ def test_convert_to_categorical_empty_column_name(dim_manager):
 
 
 # Test du refus de conversion pour un nom de colonne composé d'espaces
-def test_convert_to_categorical_whitespace_column_name(dim_manager):
+def test_convert_to_categorical_whitespace_column_name(dim_manager: Any) -> None:
     """Test that convert_to_categorical returns False when the column name
     consists only of whitespace characters.
 
@@ -407,7 +413,9 @@ def test_convert_to_categorical_whitespace_column_name(dim_manager):
 
 
 # Test du refus de conversion pour une série vide
-def test_convert_to_categorical_empty_series(dim_manager, built_ducklake_schema):
+def test_convert_to_categorical_empty_series(
+    dim_manager: Any, built_ducklake_schema: Any
+) -> None:
     """Test that convert_to_categorical returns False when the values series is
     empty, and that no side effects occur on existing dimension tables.
 
@@ -435,8 +443,8 @@ def test_convert_to_categorical_empty_series(dim_manager, built_ducklake_schema)
 
 # Test du rollback lors d'un échec de conversion dans fact_table
 def test_convert_to_categorical_missing_column_triggers_rollback(
-    dim_manager_with_region, schema_with_region
-):
+    dim_manager_with_region: DimensionManager, schema_with_region: Any
+) -> None:
     """Test that convert_to_categorical performs a full rollback when
     _convert_fact_table_dimension_mapping fails because the column is absent
     from fact_table.
@@ -486,7 +494,9 @@ def test_convert_to_categorical_missing_column_triggers_rollback(
 
 
 # Test du cas nominal : conversion réussie d'une colonne catégorielle
-def test_convert_to_non_categorical_success(dim_manager, built_ducklake_schema):
+def test_convert_to_non_categorical_success(
+    dim_manager: Any, built_ducklake_schema: Any
+) -> None:
     """Test that convert_to_non_categorical returns True and correctly restores
     original labels in fact_table for an existing categorical column.
 
@@ -534,8 +544,8 @@ def test_convert_to_non_categorical_success(dim_manager, built_ducklake_schema):
 
 # Test du refus de conversion pour un nom de colonne vide
 def test_convert_to_non_categorical_empty_column_name(
-    dim_manager, built_ducklake_schema
-):
+    dim_manager: DimensionManager, built_ducklake_schema: Any
+) -> None:
     """Test that convert_to_non_categorical returns False when given an empty
     column name, and that no dimension tables are altered.
 
@@ -559,8 +569,8 @@ def test_convert_to_non_categorical_empty_column_name(
 
 # Test du refus lorsque la colonne n'existe pas dans fact_table
 def test_convert_to_non_categorical_column_not_in_fact_table(
-    dim_manager, built_ducklake_schema
-):
+    dim_manager: DimensionManager, built_ducklake_schema: Any
+) -> None:
     """Test that convert_to_non_categorical returns False when the column is
     absent from fact_table, leaving the dimension table and metadata unchanged.
 
@@ -606,7 +616,9 @@ def test_convert_to_non_categorical_column_not_in_fact_table(
 
 
 # Test du refus lorsque la table de dimension est absente
-def test_convert_to_non_categorical_no_dim_table(dim_manager, built_ducklake_schema):
+def test_convert_to_non_categorical_no_dim_table(
+    dim_manager: Any, built_ducklake_schema: Any
+) -> None:
     """Test that convert_to_non_categorical returns False when no dimension table
     exists for the target column, and that fact_table remains unchanged.
 
@@ -637,7 +649,9 @@ def test_convert_to_non_categorical_no_dim_table(dim_manager, built_ducklake_sch
 
 
 # Test de l'intégrité des données après conversion : fréquences exactes des labels
-def test_convert_to_non_categorical_data_integrity(dim_manager, built_ducklake_schema):
+def test_convert_to_non_categorical_data_integrity(
+    dim_manager: Any, built_ducklake_schema: Any
+) -> None:
     """Test that after converting 'status' to non-categorical, fact_table contains
     the exact original labels with their correct occurrence counts and no NULLs.
 
@@ -690,7 +704,9 @@ def test_convert_to_non_categorical_data_integrity(dim_manager, built_ducklake_s
 
 
 # Test du cycle complet catégoriel → non-catégoriel → catégoriel
-def test_roundtrip_categorical_conversion(dim_manager, built_ducklake_schema):
+def test_roundtrip_categorical_conversion(
+    dim_manager: Any, built_ducklake_schema: Any
+) -> None:
     """Test that converting 'category' to non-categorical and back to categorical
     leaves fact_table in a consistent state with correct label frequencies and
     valid dimension table content.

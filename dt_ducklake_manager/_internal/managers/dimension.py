@@ -37,6 +37,7 @@ class DimensionManager(BaseSchemaManager):
         categorical_threshold: int | None = 50,
         log_filename: str | os.PathLike[str] | None = None,
         max_workers: int = 4,
+        schema: str = "main",
     ):
         """
         Initialize the dimension manager.
@@ -48,16 +49,20 @@ class DimensionManager(BaseSchemaManager):
             categorical_threshold: Threshold for determining categorical variables.
             log_filename: Path to log file.
             max_workers: Maximum number of parallel workers.
+            schema: DuckLake schema holding the dimension and fact tables. Defaults
+                to ``'main'``.
 
         Example:
             >>> conn = DuckLakeConnector('catalog.ducklake', 'data/').connect()
             >>> dim_mgr = DimensionManager(conn, max_workers=8)
+            >>> dim_mgr = DimensionManager(conn, schema='predictions')
         """
         # Initialisation du parent
         super().__init__(
             connection=connection,
             categorical_threshold=categorical_threshold,
             log_filename=log_filename,
+            schema=schema,
         )
 
         # Configuration pour le traitement parallèle
@@ -160,8 +165,8 @@ class DimensionManager(BaseSchemaManager):
 
         with self._dimension_lock:
             try:
-                # Nom de la table de dimension
-                table_name = f"dim_{dimension_name}"
+                # Nom qualifié de la table de dimension (schéma cible)
+                table_name = self._qualified(f"dim_{dimension_name}")
 
                 # Création de la table
                 # L'unicité de 'value' est garantie applicativement par l'utilisation de
@@ -226,11 +231,12 @@ class DimensionManager(BaseSchemaManager):
 
         with self._dimension_lock:
             try:
-                # Nom de la table de dimension
-                table_name = f"dim_{dimension_name}"
+                # Nom nu (pour _table_exists) et nom qualifié (pour le SQL)
+                dim_name = f"dim_{dimension_name}"
+                table_name = self._qualified(dim_name)
 
                 # Création de la table si elle n'existe pas
-                if not self._table_exists(table_name):
+                if not self._table_exists(dim_name):
                     if self.create_dimension_table(dimension_name, values):
                         return values.drop_nulls().n_unique()
                     else:
@@ -312,8 +318,8 @@ class DimensionManager(BaseSchemaManager):
 
         with self._dimension_lock:
             try:
-                # Nom de la table de dimension
-                table_name = f"dim_{dimension_name}"
+                # Nom qualifié de la table de dimension
+                table_name = self._qualified(f"dim_{dimension_name}")
 
                 # Suppression de la table
                 self.conn.execute(f"DROP TABLE IF EXISTS {table_name}")
@@ -508,11 +514,12 @@ class DimensionManager(BaseSchemaManager):
 
         for dim_col in dimensions_to_clean:
             try:
-                # Nom de la table de dimension
-                table_name = f"dim_{dim_col}"
+                # Nom nu (pour _table_exists) et nom qualifié (pour le SQL)
+                dim_name = f"dim_{dim_col}"
+                table_name = self._qualified(dim_name)
 
                 # Vérification de l'existence de la table
-                if not self._table_exists(table_name):
+                if not self._table_exists(dim_name):
                     continue
 
                 # Vérification que la colonne existe dans la fact table
@@ -536,7 +543,7 @@ class DimensionManager(BaseSchemaManager):
                     DELETE FROM {table_name}
                     WHERE value NOT IN (
                         SELECT DISTINCT CAST({dim_col} AS VARCHAR)
-                        FROM fact_table
+                        FROM {self._qualified("fact_table")}
                         WHERE {dim_col} IS NOT NULL
                     )
                 """
@@ -579,11 +586,12 @@ class DimensionManager(BaseSchemaManager):
             >>> print(mapping[['value', 'label']])
         """
         try:
-            # Nom de la table de dimension
-            table_name = f"dim_{dimension_name}"
+            # Nom nu (pour _table_exists) et nom qualifié (pour le SQL)
+            dim_name = f"dim_{dimension_name}"
+            table_name = self._qualified(dim_name)
 
             # Vérification de l'existence de la table
-            if not self._table_exists(table_name):
+            if not self._table_exists(dim_name):
                 # Logging
                 self.logger.warning(f"Dimension table {table_name} does not exist")
                 return None
@@ -617,8 +625,9 @@ class DimensionManager(BaseSchemaManager):
         Returns:
             True if conversion was successful
         """
-        # Nom de la table de dimension
-        table_name = f"dim_{col_name}"
+        # Nom qualifié de la table de dimension et de la table des faits
+        table_name = self._qualified(f"dim_{col_name}")
+        fact_table = self._qualified("fact_table")
 
         try:
             # Vérification de l'existence de la colonne
@@ -641,26 +650,28 @@ class DimensionManager(BaseSchemaManager):
             # Création d'une vue temporaire pour le mapping
             self.conn.register("temp_dim_mapping", dim_result_pl)
 
+            # Alias 'f' sur la table cible : la table étant qualifiée par le schéma,
+            # un alias garde les références corrélées de la sous-requête sans ambiguïté.
             if values_to_labels:
                 # Conversion values → labels (pour revenir aux données originales)
                 update_query = f"""
-                    UPDATE fact_table
+                    UPDATE {fact_table} AS f
                     SET {col_name} = (
                         SELECT label FROM temp_dim_mapping
-                        WHERE temp_dim_mapping.value = fact_table.{col_name}
+                        WHERE temp_dim_mapping.value = f.{col_name}
                     )
-                    WHERE {col_name} IS NOT NULL
+                    WHERE f.{col_name} IS NOT NULL
                 """
                 operation = "values to labels"
             else:
                 # Conversion labels → values (pour utiliser les index de dimension)
                 update_query = f"""
-                    UPDATE fact_table
+                    UPDATE {fact_table} AS f
                     SET {col_name} = (
                         SELECT value FROM temp_dim_mapping
-                        WHERE temp_dim_mapping.label = fact_table.{col_name}
+                        WHERE temp_dim_mapping.label = f.{col_name}
                     )
-                    WHERE {col_name} IS NOT NULL
+                    WHERE f.{col_name} IS NOT NULL
                 """
                 operation = "labels to values"
 

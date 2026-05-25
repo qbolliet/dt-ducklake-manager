@@ -1,3 +1,7 @@
+# Installation des types de hooks nécessaires lors de `pre-commit install`
+# (sans cette directive, le hook commit-msg ci-dessous ne serait pas posé).
+default_install_hook_types: [pre-commit, commit-msg]
+
 repos:
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v5.0.0
@@ -26,3 +30,12 @@ repos:
           - narwhals>=1.48.1
           - polars>=1.39.3
           - pyarrow>=23.0.1
+
+  # Validation du format Conventional Commits sur le message de commit.
+  # Indispensable au changelog : release-please n'incrémente la version et
+  # ne génère les notes qu'à partir de commits conventionnels.
+  - repo: https://github.com/compilerla/conventional-pre-commit
+    rev: v3.6.0
+    hooks:
+      - id: conventional-pre-commit
+        stages: [commit-msg]

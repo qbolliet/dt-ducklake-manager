@@ -1,6 +1,7 @@
 # Importation des modules
 # Modules de base
 import logging
+from typing import Any
 
 import narwhals as nw
 import polars as pl
@@ -22,7 +23,7 @@ from dt_ducklake_manager.utils.sql import (
 
 
 # Test de la déduplication sur toutes les colonnes quand primary_keys est None
-def test_remove_duplicates_all_columns_no_primary_keys():
+def test_remove_duplicates_all_columns_no_primary_keys() -> None:
     """Test that all columns are used when primary_keys is None.
 
     Examples:
@@ -39,7 +40,7 @@ def test_remove_duplicates_all_columns_no_primary_keys():
 
 
 # Test de la déduplication sur les clés primaires quand primary_keys est fourni
-def test_remove_duplicates_with_primary_keys():
+def test_remove_duplicates_with_primary_keys() -> None:
     """Test that only primary key columns are used when primary_keys is provided.
 
     Even though 'value' differs between the two duplicated rows, the deduplication
@@ -59,7 +60,7 @@ def test_remove_duplicates_with_primary_keys():
 
 
 # Test de la conservation du premier doublon avec primary_keys
-def test_remove_duplicates_primary_keys_keep_first():
+def test_remove_duplicates_primary_keys_keep_first() -> None:
     """Test that keep='first' retains the first occurrence when using primary_keys.
 
     Examples:
@@ -76,7 +77,7 @@ def test_remove_duplicates_primary_keys_keep_first():
 
 
 # Test de la conservation du dernier doublon avec primary_keys
-def test_remove_duplicates_primary_keys_keep_last():
+def test_remove_duplicates_primary_keys_keep_last() -> None:
     """Test that keep='last' retains the last occurrence when using primary_keys.
 
     Examples:
@@ -93,7 +94,7 @@ def test_remove_duplicates_primary_keys_keep_last():
 
 
 # Test confirmant que la colonne 'value' n'est plus exclue automatiquement
-def test_remove_duplicates_value_column_not_excluded():
+def test_remove_duplicates_value_column_not_excluded() -> None:
     """Test that the 'value' column is NOT automatically excluded from deduplication.
 
     With primary_keys=None, all columns (including 'value') are used, so two rows
@@ -112,7 +113,7 @@ def test_remove_duplicates_value_column_not_excluded():
 
 
 # Test que primary_keys=[] est équivalent à primary_keys=None (toutes les colonnes)
-def test_remove_duplicates_empty_primary_keys_list():
+def test_remove_duplicates_empty_primary_keys_list() -> None:
     """Test that an empty list for primary_keys behaves the same as None.
 
     Examples:
@@ -127,7 +128,7 @@ def test_remove_duplicates_empty_primary_keys_list():
 
 
 # Test de l'absence de modification quand il n'y a pas de doublons
-def test_remove_duplicates_no_duplicates():
+def test_remove_duplicates_no_duplicates() -> None:
     """Test that the DataFrame is unchanged when there are no duplicates.
 
     Examples:
@@ -142,7 +143,7 @@ def test_remove_duplicates_no_duplicates():
 
 
 # Test du logging lorsque des doublons sont supprimés
-def test_remove_duplicates_logging():
+def test_remove_duplicates_logging() -> None:
     """Test that a warning is logged when duplicates are removed.
 
     Examples:
@@ -155,7 +156,7 @@ def test_remove_duplicates_logging():
     records = []
 
     class ListHandler(logging.Handler):
-        def emit(self, record):
+        def emit(self: Any, record: Any) -> None:
             records.append(record)
 
     handler = ListHandler()
@@ -175,7 +176,7 @@ def test_remove_duplicates_logging():
 
 
 # Test de l'absence de logging quand il n'y a pas de doublons
-def test_remove_duplicates_no_logging_when_no_duplicates():
+def test_remove_duplicates_no_logging_when_no_duplicates() -> None:
     """Test that nothing is logged when no duplicates are removed.
 
     Examples:
@@ -187,7 +188,7 @@ def test_remove_duplicates_no_logging_when_no_duplicates():
     records = []
 
     class ListHandler(logging.Handler):
-        def emit(self, record):
+        def emit(self: Any, record: Any) -> None:
             records.append(record)
 
     handler = ListHandler()
@@ -206,7 +207,7 @@ def test_remove_duplicates_no_logging_when_no_duplicates():
 
 
 # Test de la construction de la requête SQL avec keep='first'
-def test_build_duplicate_query_keep_first():
+def test_build_duplicate_query_keep_first() -> None:
     """Test that keep='first' produces a query with ROW_NUMBER and ASC ordering.
 
     Examples:
@@ -221,7 +222,7 @@ def test_build_duplicate_query_keep_first():
 
 
 # Test de la construction de la requête SQL avec keep='last'
-def test_build_duplicate_query_keep_last():
+def test_build_duplicate_query_keep_last() -> None:
     """Test that keep='last' produces a query with DESC ordering.
 
     Examples:
@@ -235,7 +236,7 @@ def test_build_duplicate_query_keep_last():
 
 
 # Test de la construction de la requête SQL avec keep=False
-def test_build_duplicate_query_keep_none():
+def test_build_duplicate_query_keep_none() -> None:
     """Test that keep='none' produces a query using HAVING COUNT(*) > 1.
 
     Examples:
@@ -249,7 +250,7 @@ def test_build_duplicate_query_keep_none():
 
 
 # Test que columns_to_check=[] retourne une chaîne vide
-def test_build_duplicate_query_empty_columns():
+def test_build_duplicate_query_empty_columns() -> None:
     """Test that an empty columns_to_check list returns an empty string.
 
     Examples:
@@ -261,7 +262,7 @@ def test_build_duplicate_query_empty_columns():
 
 
 # Test de la construction avec un nom de table personnalisé
-def test_build_duplicate_query_custom_table_name():
+def test_build_duplicate_query_custom_table_name() -> None:
     """Test that the custom table_name is used in the generated query.
 
     Examples:
@@ -279,7 +280,7 @@ def test_build_duplicate_query_custom_table_name():
 
 
 # Test d'un filtre AND (liste de tuples)
-def test_build_sql_filter_list_of_tuples():
+def test_build_sql_filter_list_of_tuples() -> None:
     """Test that a list of tuples generates an AND condition.
 
     The column names are preserved as-is; only the operator is uppercased.
@@ -297,7 +298,7 @@ def test_build_sql_filter_list_of_tuples():
 
 
 # Test d'un filtre OR (liste de listes de tuples)
-def test_build_sql_filter_list_of_lists_of_tuples():
+def test_build_sql_filter_list_of_lists_of_tuples() -> None:
     """Test that a list of lists of tuples generates
     an AND ... OR AND condition.
 
@@ -311,7 +312,7 @@ def test_build_sql_filter_list_of_lists_of_tuples():
 
 
 # Test que l'opérateur IN est géré correctement
-def test_build_sql_filter_in_operator():
+def test_build_sql_filter_in_operator() -> None:
     """Test that the 'in' operator generates an IN (...) clause.
 
     Examples:
@@ -324,7 +325,7 @@ def test_build_sql_filter_in_operator():
 
 
 # Test que l'opérateur NOT IN est géré correctement
-def test_build_sql_filter_not_in_operator():
+def test_build_sql_filter_not_in_operator() -> None:
     """Test that the 'not in' operator generates a NOT IN (...) clause.
 
     Examples:
@@ -337,7 +338,7 @@ def test_build_sql_filter_not_in_operator():
 
 
 # Test qu'un type invalide lève une TypeError
-def test_build_sql_filter_invalid_type_raises_type_error():
+def test_build_sql_filter_invalid_type_raises_type_error() -> None:
     """Test that passing an invalid filter type raises a TypeError.
 
     Examples:
@@ -346,7 +347,7 @@ def test_build_sql_filter_invalid_type_raises_type_error():
             TypeError
     """
     with pytest.raises(TypeError):
-        _build_sql_filter("invalid_filter")
+        _build_sql_filter("invalid_filter")  # type: ignore[arg-type]
 
 
 # ===========================================================================
@@ -355,7 +356,7 @@ def test_build_sql_filter_invalid_type_raises_type_error():
 
 
 # Test que filters=None retourne une chaîne vide
-def test_build_where_clause_none():
+def test_build_where_clause_none() -> None:
     """Test that filters=None returns an empty string.
 
     Examples:
@@ -366,7 +367,7 @@ def test_build_where_clause_none():
 
 
 # Test que filters est une chaîne SQL brute
-def test_build_where_clause_string():
+def test_build_where_clause_string() -> None:
     """Test that a string filter is wrapped in a WHERE clause.
 
     Examples:
@@ -378,7 +379,7 @@ def test_build_where_clause_string():
 
 
 # Test que filters est une liste de tuples
-def test_build_where_clause_list_of_tuples():
+def test_build_where_clause_list_of_tuples() -> None:
     """Test that a list of tuples generates a WHERE clause.
 
     Examples:
@@ -391,7 +392,7 @@ def test_build_where_clause_list_of_tuples():
 
 
 # Test qu'un type invalide lève une TypeError
-def test_build_where_clause_invalid_type_raises_type_error():
+def test_build_where_clause_invalid_type_raises_type_error() -> None:
     """Test that passing an unsupported filter type raises a TypeError.
 
     Examples:
@@ -400,4 +401,4 @@ def test_build_where_clause_invalid_type_raises_type_error():
             TypeError
     """
     with pytest.raises(TypeError):
-        _build_where_clause(42)
+        _build_where_clause(42)  # type: ignore[arg-type]

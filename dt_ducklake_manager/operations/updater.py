@@ -55,7 +55,7 @@ class DatabaseUpdater(BaseSchemaManager):
         batch_size: int = 10000,
         enable_validation: bool = True,
         ducklake_catalog_alias: str = "db",
-        ducklake_schema: str = "main",
+        schema: str = "main",
     ):
         """
         Initialize the refactored database updater.
@@ -71,18 +71,21 @@ class DatabaseUpdater(BaseSchemaManager):
             enable_validation: Whether to enable pre/post operation validation.
             ducklake_catalog_alias: Alias used in the DuckLake ATTACH statement.
                 Passed to maintenance and snapshot calls. Defaults to ``'db'``.
-            ducklake_schema: DuckLake schema name used in maintenance and snapshot
-                calls. Defaults to ``'main'``.
+            schema: DuckLake schema to update. A single catalog can host several
+                schemas; all tables are qualified by this one, and maintenance and
+                snapshot calls target it. Defaults to ``'main'``.
 
         Examples:
             >>> conn = DuckLakeConnector('catalog.ducklake', 'data/').connect()
             >>> updater = DatabaseUpdater(conn, max_workers=8, enable_validation=True)
+            >>> updater = DatabaseUpdater(conn, schema='predictions')
         """
         # Initialisation du parent
         super().__init__(
             connection=connection,
             categorical_threshold=categorical_threshold,
             log_filename=log_filename,
+            schema=schema,
         )
 
         # Initialisation des gestionnaires spécialisés
@@ -91,6 +94,7 @@ class DatabaseUpdater(BaseSchemaManager):
             categorical_threshold=categorical_threshold,
             log_filename=log_filename,
             max_workers=max_workers,
+            schema=schema,
         )
 
         self.data_mgr = DataManager(
@@ -98,6 +102,7 @@ class DatabaseUpdater(BaseSchemaManager):
             categorical_threshold=categorical_threshold,
             log_filename=log_filename,
             batch_size=batch_size,
+            schema=schema,
         )
 
         self.transaction_mgr = TransactionManager(
@@ -105,7 +110,7 @@ class DatabaseUpdater(BaseSchemaManager):
             categorical_threshold=categorical_threshold,
             log_filename=log_filename,
             ducklake_catalog_alias=ducklake_catalog_alias,
-            ducklake_schema=ducklake_schema,
+            schema=schema,
         )
 
         self.auditor = (
@@ -113,6 +118,7 @@ class DatabaseUpdater(BaseSchemaManager):
                 connection=connection,
                 categorical_threshold=categorical_threshold,
                 log_filename=log_filename,
+                schema=schema,
             )
             if enable_validation
             else None
@@ -123,9 +129,9 @@ class DatabaseUpdater(BaseSchemaManager):
         self.batch_size = batch_size
         self.enable_validation = enable_validation
 
-        # Configuration DuckLake pour les appels de maintenance (compaction)
+        # Configuration DuckLake pour les appels de maintenance (compaction).
+        # L'alias du catalogue ; le schéma est porté par self.schema (classe de base).
         self.ducklake_catalog_alias = ducklake_catalog_alias
-        self.ducklake_schema = ducklake_schema
 
     # Méthode de validation d'une opération
     def validate_operation(self, operation_type: str, **kwargs: Any) -> bool:
@@ -639,7 +645,8 @@ class DatabaseUpdater(BaseSchemaManager):
                 # Récupération des valeurs distinctes dans fact_table (état post-upsert)
                 db_values_series = nw.from_native(
                     self.conn.execute(
-                        f"SELECT DISTINCT {col_name} FROM fact_table WHERE {col_name}"
+                        f"SELECT DISTINCT {col_name} FROM"
+                        f" {self._qualified('fact_table')} WHERE {col_name}"
                         f" IS NOT NULL"
                     ).pl()[col_name],
                     series_only=True,
@@ -665,7 +672,7 @@ class DatabaseUpdater(BaseSchemaManager):
                 # Comptage des entrées dans la table de dimension après
                 # batch_update_dimensions
                 _rd = self.conn.execute(
-                    f"SELECT COUNT(*) FROM dim_{col_name}"
+                    f"SELECT COUNT(*) FROM {self._qualified(f'dim_{col_name}')}"
                 ).fetchone()
                 n_dim_entries = _rd[0] if _rd is not None else 0
                 # Vérification du seuil (garde contre un seuil non défini)
@@ -853,8 +860,11 @@ class DatabaseUpdater(BaseSchemaManager):
                 # Aucune fact_table : toutes les lignes sont à insérer
                 return df.clone(), df.head(0)
 
+            # Nom qualifié de la table des faits
+            fact_table = self._qualified("fact_table")
+
             # Vérification que la fact_table n'est pas vide
-            _rc = self.conn.execute("SELECT COUNT(*) FROM fact_table").fetchone()
+            _rc = self.conn.execute(f"SELECT COUNT(*) FROM {fact_table}").fetchone()
             count = _rc[0] if _rc is not None else 0
             if count == 0:
                 return df.clone(), df.head(0)
@@ -873,7 +883,7 @@ class DatabaseUpdater(BaseSchemaManager):
                 self.conn.execute(f"""
                 SELECT upd.* FROM _upd_split upd
                 WHERE EXISTS (
-                    SELECT 1 FROM fact_table f
+                    SELECT 1 FROM {fact_table} f
                     WHERE {conditions}
                 )
             """).pl(),
@@ -885,7 +895,7 @@ class DatabaseUpdater(BaseSchemaManager):
                 self.conn.execute(f"""
                 SELECT upd.* FROM _upd_split upd
                 WHERE NOT EXISTS (
-                    SELECT 1 FROM fact_table f
+                    SELECT 1 FROM {fact_table} f
                     WHERE {conditions}
                 )
             """).pl(),
@@ -913,7 +923,7 @@ class DatabaseUpdater(BaseSchemaManager):
         logged and execution continues normally.
 
         The catalog alias and schema are read from ``self.ducklake_catalog_alias``
-        and ``self.ducklake_schema``, which can be set at construction time.
+        and ``self.schema``, which can be set at construction time.
 
         Args:
             fact_table: Name of the fact table to compact. Defaults to ``'fact_table'``.
@@ -924,7 +934,7 @@ class DatabaseUpdater(BaseSchemaManager):
         """
         # Extraction des alias et du schéma
         alias = self.ducklake_catalog_alias
-        schema = self.ducklake_schema
+        schema = self.schema
         try:
             # Fusion des petits fichiers delta adjacents
             # Note : les table functions DuckLake sont enregistrées dans le catalogue
@@ -1156,13 +1166,16 @@ class DatabaseUpdater(BaseSchemaManager):
             True if deduplication succeeded, False on error.
         """
         try:
+            # Nom qualifié de la table des faits
+            fact_table = self._qualified("fact_table")
+
             # Récupération du nombre initial de lignes
-            _ri = self.conn.execute("SELECT COUNT(*) FROM fact_table").fetchone()
+            _ri = self.conn.execute(f"SELECT COUNT(*) FROM {fact_table}").fetchone()
             initial_count = _ri[0] if _ri is not None else 0
 
             # Récupération des colonnes
             all_columns = [
-                col[0] for col in self.conn.execute("DESCRIBE fact_table").fetchall()
+                col[0] for col in self.conn.execute(f"DESCRIBE {fact_table}").fetchall()
             ]
             columns_to_check = [col for col in all_columns if col != "value"]
 
@@ -1171,12 +1184,14 @@ class DatabaseUpdater(BaseSchemaManager):
 
             # Construction et exécution de la requête de suppression des doublons
             delete_query = build_database_duplicate_removal_query(
-                columns_to_check, keep, "fact_table"
+                columns_to_check, keep, fact_table
             )
             self.conn.execute(delete_query)
 
             # Calcul des lignes supprimées
-            _final_row = self.conn.execute("SELECT COUNT(*) FROM fact_table").fetchone()
+            _final_row = self.conn.execute(
+                f"SELECT COUNT(*) FROM {fact_table}"
+            ).fetchone()
             final_count = _final_row[0] if _final_row is not None else 0
             removed_count = initial_count - final_count
 

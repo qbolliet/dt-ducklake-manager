@@ -6,6 +6,39 @@ import narwhals as nw
 from narwhals.typing import IntoDataFrame
 
 
+# Fonction de qualification d'un nom de table par son schéma
+def qualify_table(table: str, schema: str = "main") -> str:
+    """
+    Build a schema-qualified SQL table identifier.
+
+    A single DuckLake catalog may hold several schemas, each carrying its own
+    ``fact_table``, ``metadata`` and ``dim_*`` tables. Since every result set uses
+    the same table names, references must be schema-qualified to target the right
+    one. The attached catalog is the connection's default catalog (set by the
+    ``USE {alias}.{schema}`` issued by :class:`DuckLakeConnector`), so a
+    schema-qualified name resolves within it without naming the catalog alias.
+
+    Args:
+        table (str): Bare table name (e.g. ``'fact_table'``, ``'metadata'``,
+            ``'dim_country'``).
+        schema (str): Target DuckLake schema. Defaults to ``'main'``.
+
+    Returns:
+        str: The ``'<schema>.<table>'`` identifier.
+
+    Examples:
+        >>> qualify_table("fact_table")
+        'main.fact_table'
+        >>> qualify_table("fact_table", "predictions")
+        'predictions.fact_table'
+        >>> qualify_table("dim_country", "shapley")
+        'shapley.dim_country'
+    """
+    # Qualification simple par préfixe de schéma : le catalogue est le catalogue par
+    # défaut de la connexion, donc inutile d'ajouter l'alias du catalogue.
+    return f"{schema}.{table}"
+
+
 # Fonction de suppression des duplicats d'un jeu de données
 def remove_dataframe_duplicates(
     df: IntoDataFrame,

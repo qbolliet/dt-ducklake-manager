@@ -1,5 +1,6 @@
 # Importation des modules
 # Modules de base
+import duckdb
 import narwhals as nw
 import polars as pl
 
@@ -17,7 +18,7 @@ from dt_ducklake_manager._internal.managers.dimension import DimensionManager
 
 # Initialisation d'une instance concrète de BaseSchemaManager pour les tests
 @pytest.fixture
-def manager(built_ducklake_schema):
+def manager(built_ducklake_schema: duckdb.DuckDBPyConnection) -> DimensionManager:
     """Create a DimensionManager (concrete subclass) to test BaseSchemaManager methods.
 
     Args:
@@ -37,7 +38,7 @@ def manager(built_ducklake_schema):
 
 # Test que _load_current_metadata retourne un DataFrame narwhals avec les colonnes
 # attendues
-def test_load_current_metadata_returns_dataframe(manager):
+def test_load_current_metadata_returns_dataframe(manager: DimensionManager) -> None:
     """Test that _load_current_metadata returns a narwhals DataFrame
     with expected columns.
 
@@ -55,7 +56,7 @@ def test_load_current_metadata_returns_dataframe(manager):
 
 # Test que _load_current_metadata retourne un DataFrame non vide pour un schéma
 # construit
-def test_load_current_metadata_non_empty(manager):
+def test_load_current_metadata_non_empty(manager: DimensionManager) -> None:
     """Test that _load_current_metadata returns a non-empty DataFrame
     for a built schema.
 
@@ -73,7 +74,7 @@ def test_load_current_metadata_non_empty(manager):
 
 
 # Test que _table_exists retourne True pour une table existante
-def test_table_exists_fact_table(manager):
+def test_table_exists_fact_table(manager: DimensionManager) -> None:
     """Test that _table_exists returns True for an existing table.
 
     Args:
@@ -83,7 +84,7 @@ def test_table_exists_fact_table(manager):
 
 
 # Test que _table_exists retourne True pour la table metadata
-def test_table_exists_metadata(manager):
+def test_table_exists_metadata(manager: DimensionManager) -> None:
     """Test that _table_exists returns True for the metadata table.
 
     Args:
@@ -93,7 +94,7 @@ def test_table_exists_metadata(manager):
 
 
 # Test que _table_exists retourne False pour une table inexistante
-def test_table_exists_nonexistent(manager):
+def test_table_exists_nonexistent(manager: DimensionManager) -> None:
     """Test that _table_exists returns False for a non-existent table.
 
     Args:
@@ -108,7 +109,7 @@ def test_table_exists_nonexistent(manager):
 
 
 # Test que _get_primary_key_columns retourne la liste des clés primaires
-def test_get_primary_key_columns(manager):
+def test_get_primary_key_columns(manager: DimensionManager) -> None:
     """Test that _get_primary_key_columns returns the list of primary key columns.
 
     Args:
@@ -127,7 +128,7 @@ def test_get_primary_key_columns(manager):
 
 
 # Test que _column_exists retourne True pour une colonne existante dans fact_table
-def test_column_exists_true(manager):
+def test_column_exists_true(manager: DimensionManager) -> None:
     """Test that _column_exists returns True for an existing column.
 
     Args:
@@ -137,7 +138,7 @@ def test_column_exists_true(manager):
 
 
 # Test que _column_exists retourne False pour une colonne inexistante
-def test_column_exists_false(manager):
+def test_column_exists_false(manager: DimensionManager) -> None:
     """Test that _column_exists returns False for a non-existent column.
 
     Args:
@@ -152,7 +153,7 @@ def test_column_exists_false(manager):
 
 
 # Test que _is_primary_key_column retourne True pour une colonne clé primaire
-def test_is_primary_key_column_true(manager):
+def test_is_primary_key_column_true(manager: DimensionManager) -> None:
     """Test that _is_primary_key_column returns True for a primary key column.
 
     Args:
@@ -162,7 +163,7 @@ def test_is_primary_key_column_true(manager):
 
 
 # Test que _is_primary_key_column retourne False pour une colonne non-clé primaire
-def test_is_primary_key_column_false(manager):
+def test_is_primary_key_column_false(manager: DimensionManager) -> None:
     """Test that _is_primary_key_column returns False for a non-primary-key column.
 
     Args:
@@ -177,7 +178,7 @@ def test_is_primary_key_column_false(manager):
 
 
 # Test que _invalidate_metadata_cache vide le cache
-def test_invalidate_metadata_cache(manager):
+def test_invalidate_metadata_cache(manager: DimensionManager) -> None:
     """Test that _invalidate_metadata_cache sets the cache to None.
 
     Args:
@@ -199,7 +200,7 @@ def test_invalidate_metadata_cache(manager):
 
 # Test que _check_categorical_threshold retourne True quand le nombre de modalités est
 # inférieur au seuil
-def test_check_categorical_threshold_below(manager):
+def test_check_categorical_threshold_below(manager: DimensionManager) -> None:
     """Test that _check_categorical_threshold returns True when
     unique values <= threshold.
 
@@ -214,7 +215,7 @@ def test_check_categorical_threshold_below(manager):
 
 # Test que _check_categorical_threshold retourne False quand le nombre de modalités est
 # supérieur au seuil
-def test_check_categorical_threshold_above(manager):
+def test_check_categorical_threshold_above(manager: DimensionManager) -> None:
     """Test that _check_categorical_threshold returns False when
     unique values > threshold.
 
@@ -230,7 +231,7 @@ def test_check_categorical_threshold_above(manager):
 
 
 # Test que _check_categorical_threshold retourne False pour une série entièrement nulle
-def test_check_categorical_threshold_all_null(manager):
+def test_check_categorical_threshold_all_null(manager: DimensionManager) -> None:
     """Test that _check_categorical_threshold returns False for an all-null series.
 
     Args:
@@ -241,3 +242,92 @@ def test_check_categorical_threshold_all_null(manager):
     )
     result = manager._check_categorical_threshold(series, threshold=4)
     assert result is False
+
+
+# ===========================================================================
+# Tests du support multi-schémas (qualification et isolation)
+# ===========================================================================
+
+
+# Test que _qualified préfixe le nom de table par le schéma du gestionnaire
+def test_qualified_prefixes_schema(
+    built_ducklake_schema: duckdb.DuckDBPyConnection,
+) -> None:
+    """Test that _qualified prefixes the table name with the manager's schema.
+
+    Args:
+        built_ducklake_schema: Fixture providing a DuckDB connection with a built
+        schema.
+    """
+    mgr = DimensionManager(connection=built_ducklake_schema, schema="predictions")
+    assert mgr._qualified("fact_table") == "predictions.fact_table"
+    assert mgr._qualified("dim_category") == "predictions.dim_category"
+
+
+# Test que le schéma par défaut est 'main'
+def test_default_schema_is_main(
+    built_ducklake_schema: duckdb.DuckDBPyConnection,
+) -> None:
+    """Test that the default schema is 'main'.
+
+    Args:
+        built_ducklake_schema: Fixture providing a DuckDB connection with a built
+        schema.
+    """
+    mgr = DimensionManager(connection=built_ducklake_schema)
+    assert mgr.schema == "main"
+    assert mgr._qualified("metadata") == "main.metadata"
+
+
+# Test que _table_exists est isolé par schéma : une table d'un schéma n'est pas vue
+# depuis un autre schéma du même catalogue
+def test_table_exists_isolated_by_schema(
+    multi_schema_connection: duckdb.DuckDBPyConnection,
+) -> None:
+    """Test that _table_exists distinguishes tables across schemas.
+
+    A ``fact_table`` exists in both schemas; a manager bound to one schema must not
+    see tables of a schema where they were not built (here a third, empty schema).
+
+    Args:
+        multi_schema_connection: Connection with 'predictions' and 'shapley' schemas.
+    """
+    # Gestionnaires liés à chacun des deux schémas construits
+    pred_mgr = DimensionManager(
+        connection=multi_schema_connection, schema="predictions"
+    )
+    shap_mgr = DimensionManager(connection=multi_schema_connection, schema="shapley")
+
+    # Chaque schéma voit bien ses propres tables
+    assert pred_mgr._table_exists("fact_table") is True
+    assert shap_mgr._table_exists("fact_table") is True
+
+    # Un schéma vide ne voit aucune table fact_table
+    empty_mgr = DimensionManager(connection=multi_schema_connection, schema="main")
+    assert empty_mgr._table_exists("fact_table") is False
+
+
+# Test que les métadonnées chargées sont propres au schéma ciblé
+def test_metadata_isolated_by_schema(
+    multi_schema_connection: duckdb.DuckDBPyConnection,
+) -> None:
+    """Test that _load_current_metadata reads the targeted schema's metadata only.
+
+    The 'shapley' schema carries a 'shap_value' column absent from 'predictions'.
+
+    Args:
+        multi_schema_connection: Connection with 'predictions' and 'shapley' schemas.
+    """
+    pred_mgr = DimensionManager(
+        connection=multi_schema_connection, schema="predictions"
+    )
+    shap_mgr = DimensionManager(connection=multi_schema_connection, schema="shapley")
+
+    pred_columns = set(pred_mgr._load_current_metadata()["name"].to_list())
+    shap_columns = set(shap_mgr._load_current_metadata()["name"].to_list())
+
+    # La colonne 'value' n'existe que dans predictions, 'shap_value' que dans shapley
+    assert "value" in pred_columns
+    assert "value" not in shap_columns
+    assert "shap_value" in shap_columns
+    assert "shap_value" not in pred_columns

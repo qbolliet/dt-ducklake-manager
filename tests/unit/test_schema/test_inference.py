@@ -1,6 +1,7 @@
 # Importation des modules
 # Modules de base
 import warnings
+from typing import Any
 
 import narwhals as nw
 
@@ -17,7 +18,7 @@ from dt_ducklake_manager.schema import SchemaBuilder
 
 # Initialisation d'une instance de SchemaBuilder utilisée dans l'ensemble des tests
 @pytest.fixture
-def schema_builder(sample_df):
+def schema_builder(sample_df: Any) -> SchemaBuilder:
     """Initialize a SchemaBuilder instance with a sample DataFrame.
 
     Args:
@@ -39,7 +40,7 @@ def schema_builder(sample_df):
 
 
 # Test de l'initialisation correcte des attributs de la classe
-def test_schema_builder_initialization(schema_builder, sample_df):
+def test_schema_builder_initialization(schema_builder: Any, sample_df: Any) -> None:
     """Test the initialization of the SchemaBuilder class.
 
     Args:
@@ -53,7 +54,7 @@ def test_schema_builder_initialization(schema_builder, sample_df):
     assert isinstance(schema_builder.df, nw.DataFrame)
     # Vérification de l'équivalence de contenu (comparaison via les backends natifs)
     expected = nw.from_native(sample_df, eager_only=True)
-    assert schema_builder.df.to_native().equals(expected.to_native())
+    assert schema_builder.df.to_native().equals(expected.to_native())  # type: ignore[attr-defined]
 
 
 # ---------------------------------------------------------------------------
@@ -62,7 +63,7 @@ def test_schema_builder_initialization(schema_builder, sample_df):
 
 
 # Test de la création de la table des méta-données
-def test_create_metadata_table(schema_builder):
+def test_create_metadata_table(schema_builder: Any) -> None:
     """Test the build of the metadata table.
 
     Args:
@@ -94,7 +95,9 @@ def test_create_metadata_table(schema_builder):
 
 # Test de l'ajout de labels personnalisés
 # lors de la création de la table des méta-données
-def test_create_metadata_table_with_labels(schema_builder, column_labels):
+def test_create_metadata_table_with_labels(
+    schema_builder: Any, column_labels: Any
+) -> None:
     """Test the build of the metadata table with custom column labels.
 
     Args:
@@ -116,7 +119,7 @@ def test_create_metadata_table_with_labels(schema_builder, column_labels):
 
 
 # Test de la création des tables de dimension
-def test_create_dimension_tables(schema_builder):
+def test_create_dimension_tables(schema_builder: Any) -> None:
     """Test the build of the dimension tables.
 
     Args:
@@ -145,7 +148,7 @@ def test_create_dimension_tables(schema_builder):
 
 
 # Test de la création de la table des faits
-def test_create_fact_table(schema_builder, sample_df):
+def test_create_fact_table(schema_builder: Any, sample_df: Any) -> None:
     """Test the build of the fact table.
 
     Args:
@@ -165,32 +168,18 @@ def test_create_fact_table(schema_builder, sample_df):
     # Vérification que les colonnes catégorielles ont été remplacées par des entiers
     category_dtype = fact_table.schema["category"]
     status_dtype = fact_table.schema["status"]
-    assert isinstance(
-        category_dtype,
-        (
-            nw.Int8,
-            nw.Int16,
-            nw.Int32,
-            nw.Int64,
-            nw.UInt8,
-            nw.UInt16,
-            nw.UInt32,
-            nw.UInt64,
-        ),
+    int_types = (
+        nw.Int8
+        | nw.Int16
+        | nw.Int32
+        | nw.Int64
+        | nw.UInt8
+        | nw.UInt16
+        | nw.UInt32
+        | nw.UInt64
     )
-    assert isinstance(
-        status_dtype,
-        (
-            nw.Int8,
-            nw.Int16,
-            nw.Int32,
-            nw.Int64,
-            nw.UInt8,
-            nw.UInt16,
-            nw.UInt32,
-            nw.UInt64,
-        ),
-    )
+    assert isinstance(category_dtype, int_types)
+    assert isinstance(status_dtype, int_types)
 
 
 # ---------------------------------------------------------------------------
@@ -199,7 +188,7 @@ def test_create_fact_table(schema_builder, sample_df):
 
 
 # Test de la construction complète du schéma
-def test_build_complete_schema(schema_builder, column_labels):
+def test_build_complete_schema(schema_builder: Any, column_labels: Any) -> None:
     """Test the build of the complete schema (metadata, dimensions, fact table).
 
     Args:
@@ -221,7 +210,7 @@ def test_build_complete_schema(schema_builder, column_labels):
 
 
 # Test que categorical_threshold=None ne produit aucune colonne catégorielle
-def test_categorical_threshold_none_no_categorical_columns(sample_df):
+def test_categorical_threshold_none_no_categorical_columns(sample_df: Any) -> None:
     """Test that no column is marked categorical when categorical_threshold=None.
 
     Args:
@@ -238,7 +227,7 @@ def test_categorical_threshold_none_no_categorical_columns(sample_df):
 
 
 # Test que categorical_threshold=None produit un dictionnaire de dimensions vide
-def test_categorical_threshold_none_empty_dimension_tables(sample_df):
+def test_categorical_threshold_none_empty_dimension_tables(sample_df: Any) -> None:
     """Test that no dimension tables are created when categorical_threshold=None.
 
     Args:
@@ -262,7 +251,7 @@ def test_categorical_threshold_none_empty_dimension_tables(sample_df):
 
 
 # Test que UserWarning est levé quand aucune clé primaire n'est fournie
-def test_warning_when_no_primary_keys(sample_df):
+def test_warning_when_no_primary_keys(sample_df: Any) -> None:
     """Test that a UserWarning is raised when no primary keys are specified.
 
     Args:
@@ -273,7 +262,7 @@ def test_warning_when_no_primary_keys(sample_df):
 
 
 # Test qu'aucun avertissement n'est levé quand des clés primaires sont fournies
-def test_no_warning_when_primary_keys_provided(sample_df):
+def test_no_warning_when_primary_keys_provided(sample_df: Any) -> None:
     """Test that no UserWarning is raised when primary_keys is provided.
 
     Args:
@@ -288,7 +277,7 @@ def test_no_warning_when_primary_keys_provided(sample_df):
 
 
 # Test que les clés primaires sont marquées dans les méta-données
-def test_primary_keys_marked_in_metadata(sample_df):
+def test_primary_keys_marked_in_metadata(sample_df: Any) -> None:
     """Test that primary key columns are marked as is_primary_key=True in metadata.
 
     Args:
@@ -307,7 +296,7 @@ def test_primary_keys_marked_in_metadata(sample_df):
 
 
 # Test qu'une ValueError est levée pour une clé primaire inexistante
-def test_invalid_primary_key_raises_value_error(sample_df):
+def test_invalid_primary_key_raises_value_error(sample_df: Any) -> None:
     """Test that a ValueError is raised when a primary key column does not exist.
 
     Args:

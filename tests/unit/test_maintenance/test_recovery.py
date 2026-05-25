@@ -1,6 +1,8 @@
 # Importation des modules
 # Modules de base
 # Module de tests
+from typing import Any
+
 import pytest
 
 # Modules du package à tester
@@ -17,7 +19,7 @@ from dt_ducklake_manager.maintenance.recovery import RecoveryResult
 
 
 # Test de l'initialisation de RecoveryOperation
-def test_recovery_operation_initialization():
+def test_recovery_operation_initialization() -> None:
     """Test that RecoveryOperation is correctly initialized with default values.
 
     Examples:
@@ -33,7 +35,7 @@ def test_recovery_operation_initialization():
 
 
 # Test de l'initialisation de RecoveryOperation avec des paramètres personnalisés
-def test_recovery_operation_custom_parameters():
+def test_recovery_operation_custom_parameters() -> None:
     """Test RecoveryOperation with custom parameters.
 
     Examples:
@@ -58,7 +60,7 @@ def test_recovery_operation_custom_parameters():
 
 
 # Test de l'initialisation de RecoveryResult
-def test_recovery_result_initialization():
+def test_recovery_result_initialization() -> None:
     """Test that RecoveryResult is correctly initialized.
 
     Examples:
@@ -85,7 +87,9 @@ def test_recovery_result_initialization():
 
 # Initialisation d'un gestionnaire de récupération pour les tests
 @pytest.fixture
-def recovery_manager(built_ducklake_schema, tmp_path):
+def recovery_manager(
+    built_ducklake_schema: Any, tmp_path: Any
+) -> DatabaseRecoveryManager:
     """Create a DatabaseRecoveryManager for testing.
 
     Args:
@@ -106,7 +110,7 @@ def recovery_manager(built_ducklake_schema, tmp_path):
 
 
 # Test de l'initialisation du gestionnaire de récupération
-def test_recovery_manager_initialization(recovery_manager):
+def test_recovery_manager_initialization(recovery_manager: Any) -> None:
     """Test that DatabaseRecoveryManager initializes correctly.
 
     Args:
@@ -117,7 +121,7 @@ def test_recovery_manager_initialization(recovery_manager):
 
 
 # Test de la création d'un point de récupération
-def test_create_recovery_point(recovery_manager):
+def test_create_recovery_point(recovery_manager: Any) -> None:
     """Test that create_recovery_point returns a non-None recovery ID.
 
     Args:
@@ -133,7 +137,7 @@ def test_create_recovery_point(recovery_manager):
 
 
 # Test que la liste des points de récupération est non vide après création
-def test_list_recovery_points_after_creation(recovery_manager):
+def test_list_recovery_points_after_creation(recovery_manager: Any) -> None:
     """Test that list_recovery_points returns a non-empty list after creation.
 
     Args:
@@ -151,7 +155,7 @@ def test_list_recovery_points_after_creation(recovery_manager):
 
 
 # Test de la suppression d'un point de récupération
-def test_delete_recovery_point(recovery_manager):
+def test_delete_recovery_point(recovery_manager: Any) -> None:
     """Test that delete_recovery_point returns True and removes the point.
 
     Args:
@@ -174,7 +178,7 @@ def test_delete_recovery_point(recovery_manager):
 
 
 # Test de la création d'un point de récupération de type SCHEMA_BACKUP
-def test_create_schema_backup(recovery_manager):
+def test_create_schema_backup(recovery_manager: Any) -> None:
     """Test that a METADATA_BACKUP recovery point can be created and listed by type.
 
     Args:
