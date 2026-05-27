@@ -304,3 +304,94 @@ def test_invalid_primary_key_raises_value_error(sample_df: Any) -> None:
     """
     with pytest.raises(ValueError, match="nonexistent_col"):
         SchemaBuilder(sample_df, primary_keys=["nonexistent_col"])
+
+
+# ---------------------------------------------------------------------------
+# Tests des valeurs manquantes dans les colonnes catégorielles
+# ---------------------------------------------------------------------------
+
+
+# Invariant : un NULL/None dans une colonne catégorielle ne doit jamais avoir
+# de pendant dans la table de dimension (pas de ligne label=None/NaN) et doit
+# rester NULL dans la fact_table.
+def test_null_in_categorical_column_excluded_from_dimension() -> None:
+    """Test that NULL values in a categorical column produce no dimension row.
+
+    A categorical column containing None must result in a dimension table with
+    only the non-null distinct labels. The corresponding row in the fact_table
+    must remain NULL (no synthetic ID).
+    """
+    import polars as pl
+
+    df_with_nulls = pl.DataFrame(
+        {
+            "id": [1, 2, 3, 4, 5],
+            "category": ["A", None, "B", "A", None],
+            "value": [0.1, 0.2, 0.3, 0.4, 0.5],
+        }
+    )
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        builder = SchemaBuilder(
+            df_with_nulls, categorical_threshold=4, primary_keys=["id"]
+        )
+
+    metadata, dim_tables, fact_table = builder.build()
+
+    # La colonne 'category' doit être catégorielle
+    is_cat = metadata.filter(nw.col("name") == "category")["is_categorical"][0]
+    assert is_cat is True
+
+    # La table de dimension ne contient que les labels non-null (A et B)
+    dim_category = dim_tables["category"]
+    labels = dim_category["label"].to_list()
+    assert None not in labels
+    assert "nan" not in labels
+    assert set(labels) == {"A", "B"}
+
+    # La fact_table conserve les NULL aux positions originales (lignes id=2 et id=5)
+    fact_native = fact_table.to_native()
+    category_col = fact_native["category"].to_list()
+    # Les indices 1 et 4 (id=2 et id=5) doivent rester NULL/None
+    assert category_col[1] is None
+    assert category_col[4] is None
+    # Les autres positions doivent avoir un ID entier valide
+    assert category_col[0] is not None
+    assert category_col[2] is not None
+    assert category_col[3] is not None
+
+
+# Test que tous les NULL d'une colonne catégorielle restent NULL dans la fact_table
+def test_all_null_rows_preserved_as_null_in_fact_table() -> None:
+    """Test that every NULL row in a categorical column stays NULL in fact_table.
+
+    The number of NULL values in the categorical column of the fact_table must
+    equal the number of NULL values in the source DataFrame.
+    """
+    import polars as pl
+
+    df_with_nulls = pl.DataFrame(
+        {
+            "id": [1, 2, 3, 4, 5, 6],
+            "status": ["active", None, "inactive", None, "active", None],
+            "value": [0.1, 0.2, 0.3, 0.4, 0.5, 0.6],
+        }
+    )
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        builder = SchemaBuilder(
+            df_with_nulls, categorical_threshold=4, primary_keys=["id"]
+        )
+
+    _, dim_tables, fact_table = builder.build()
+
+    # Comptage des NULL dans la fact_table : doit correspondre au DataFrame source
+    fact_native = fact_table.to_native()
+    status_nulls = sum(1 for v in fact_native["status"].to_list() if v is None)
+    assert status_nulls == 3
+
+    # La table de dimension n'a aucune entrée pour les NULL
+    dim_status = dim_tables["status"]
+    assert None not in dim_status["label"].to_list()
