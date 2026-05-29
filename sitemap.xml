@@ -2,138 +2,138 @@
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
     <url>
          <loc>https://qbolliet.github.io/dt-ducklake-manager/</loc>
-         <lastmod>2026-05-25</lastmod>
+         <lastmod>2026-05-29</lastmod>
     </url>
     <url>
          <loc>https://qbolliet.github.io/dt-ducklake-manager/architecture/</loc>
-         <lastmod>2026-05-25</lastmod>
+         <lastmod>2026-05-29</lastmod>
     </url>
     <url>
          <loc>https://qbolliet.github.io/dt-ducklake-manager/api/_internal/managers/BaseSchemaManager/</loc>
-         <lastmod>2026-05-25</lastmod>
+         <lastmod>2026-05-29</lastmod>
     </url>
     <url>
          <loc>https://qbolliet.github.io/dt-ducklake-manager/api/_internal/managers/DataManager/</loc>
-         <lastmod>2026-05-25</lastmod>
+         <lastmod>2026-05-29</lastmod>
     </url>
     <url>
          <loc>https://qbolliet.github.io/dt-ducklake-manager/api/_internal/managers/DimensionManager/</loc>
-         <lastmod>2026-05-25</lastmod>
+         <lastmod>2026-05-29</lastmod>
     </url>
     <url>
          <loc>https://qbolliet.github.io/dt-ducklake-manager/api/_internal/managers/TransactionContext/</loc>
-         <lastmod>2026-05-25</lastmod>
+         <lastmod>2026-05-29</lastmod>
     </url>
     <url>
          <loc>https://qbolliet.github.io/dt-ducklake-manager/api/_internal/managers/TransactionManager/</loc>
-         <lastmod>2026-05-25</lastmod>
+         <lastmod>2026-05-29</lastmod>
     </url>
     <url>
          <loc>https://qbolliet.github.io/dt-ducklake-manager/api/_internal/managers/TransactionOperation/</loc>
-         <lastmod>2026-05-25</lastmod>
+         <lastmod>2026-05-29</lastmod>
     </url>
     <url>
          <loc>https://qbolliet.github.io/dt-ducklake-manager/api/_internal/managers/TransactionState/</loc>
-         <lastmod>2026-05-25</lastmod>
+         <lastmod>2026-05-29</lastmod>
     </url>
     <url>
          <loc>https://qbolliet.github.io/dt-ducklake-manager/api/connection/CatalogType/</loc>
-         <lastmod>2026-05-25</lastmod>
+         <lastmod>2026-05-29</lastmod>
     </url>
     <url>
          <loc>https://qbolliet.github.io/dt-ducklake-manager/api/connection/DuckLakeConnector/</loc>
-         <lastmod>2026-05-25</lastmod>
+         <lastmod>2026-05-29</lastmod>
     </url>
     <url>
          <loc>https://qbolliet.github.io/dt-ducklake-manager/api/maintenance/DatabaseAuditor/</loc>
-         <lastmod>2026-05-25</lastmod>
+         <lastmod>2026-05-29</lastmod>
     </url>
     <url>
          <loc>https://qbolliet.github.io/dt-ducklake-manager/api/maintenance/DatabaseRecoveryManager/</loc>
-         <lastmod>2026-05-25</lastmod>
+         <lastmod>2026-05-29</lastmod>
     </url>
     <url>
          <loc>https://qbolliet.github.io/dt-ducklake-manager/api/maintenance/DuckLakeMaintenance/</loc>
-         <lastmod>2026-05-25</lastmod>
+         <lastmod>2026-05-29</lastmod>
     </url>
     <url>
          <loc>https://qbolliet.github.io/dt-ducklake-manager/api/maintenance/IssueSeverity/</loc>
-         <lastmod>2026-05-25</lastmod>
+         <lastmod>2026-05-29</lastmod>
     </url>
     <url>
          <loc>https://qbolliet.github.io/dt-ducklake-manager/api/maintenance/IssueType/</loc>
-         <lastmod>2026-05-25</lastmod>
+         <lastmod>2026-05-29</lastmod>
     </url>
     <url>
          <loc>https://qbolliet.github.io/dt-ducklake-manager/api/maintenance/RecoveryOperation/</loc>
-         <lastmod>2026-05-25</lastmod>
+         <lastmod>2026-05-29</lastmod>
     </url>
     <url>
          <loc>https://qbolliet.github.io/dt-ducklake-manager/api/maintenance/RecoveryPoint/</loc>
-         <lastmod>2026-05-25</lastmod>
+         <lastmod>2026-05-29</lastmod>
     </url>
     <url>
          <loc>https://qbolliet.github.io/dt-ducklake-manager/api/maintenance/RecoveryResult/</loc>
-         <lastmod>2026-05-25</lastmod>
+         <lastmod>2026-05-29</lastmod>
     </url>
     <url>
          <loc>https://qbolliet.github.io/dt-ducklake-manager/api/maintenance/RecoveryStrategy/</loc>
-         <lastmod>2026-05-25</lastmod>
+         <lastmod>2026-05-29</lastmod>
     </url>
     <url>
          <loc>https://qbolliet.github.io/dt-ducklake-manager/api/maintenance/ValidationIssue/</loc>
-         <lastmod>2026-05-25</lastmod>
+         <lastmod>2026-05-29</lastmod>
     </url>
     <url>
          <loc>https://qbolliet.github.io/dt-ducklake-manager/api/maintenance/ValidationLevel/</loc>
-         <lastmod>2026-05-25</lastmod>
+         <lastmod>2026-05-29</lastmod>
     </url>
     <url>
          <loc>https://qbolliet.github.io/dt-ducklake-manager/api/maintenance/ValidationReport/</loc>
-         <lastmod>2026-05-25</lastmod>
+         <lastmod>2026-05-29</lastmod>
     </url>
     <url>
          <loc>https://qbolliet.github.io/dt-ducklake-manager/api/operations/AtomicDatabaseOperations/</loc>
-         <lastmod>2026-05-25</lastmod>
+         <lastmod>2026-05-29</lastmod>
     </url>
     <url>
          <loc>https://qbolliet.github.io/dt-ducklake-manager/api/operations/AtomicOperationConfig/</loc>
-         <lastmod>2026-05-25</lastmod>
+         <lastmod>2026-05-29</lastmod>
     </url>
     <url>
          <loc>https://qbolliet.github.io/dt-ducklake-manager/api/operations/AtomicOperationResult/</loc>
-         <lastmod>2026-05-25</lastmod>
+         <lastmod>2026-05-29</lastmod>
     </url>
     <url>
          <loc>https://qbolliet.github.io/dt-ducklake-manager/api/operations/AtomicOperationType/</loc>
-         <lastmod>2026-05-25</lastmod>
+         <lastmod>2026-05-29</lastmod>
     </url>
     <url>
          <loc>https://qbolliet.github.io/dt-ducklake-manager/api/operations/DatabaseDeleter/</loc>
-         <lastmod>2026-05-25</lastmod>
+         <lastmod>2026-05-29</lastmod>
     </url>
     <url>
          <loc>https://qbolliet.github.io/dt-ducklake-manager/api/operations/DatabaseUpdater/</loc>
-         <lastmod>2026-05-25</lastmod>
+         <lastmod>2026-05-29</lastmod>
     </url>
     <url>
          <loc>https://qbolliet.github.io/dt-ducklake-manager/api/schema/DuckLakeTablesBuilder/</loc>
-         <lastmod>2026-05-25</lastmod>
+         <lastmod>2026-05-29</lastmod>
     </url>
     <url>
          <loc>https://qbolliet.github.io/dt-ducklake-manager/api/schema/SchemaBuilder/</loc>
-         <lastmod>2026-05-25</lastmod>
+         <lastmod>2026-05-29</lastmod>
     </url>
     <url>
          <loc>https://qbolliet.github.io/dt-ducklake-manager/api/utils/build_database_duplicate_removal_query/</loc>
-         <lastmod>2026-05-25</lastmod>
+         <lastmod>2026-05-29</lastmod>
     </url>
     <url>
          <loc>https://qbolliet.github.io/dt-ducklake-manager/api/utils/map_python_to_sql_type/</loc>
-         <lastmod>2026-05-25</lastmod>
+         <lastmod>2026-05-29</lastmod>
     </url>
     <url>
          <loc>https://qbolliet.github.io/dt-ducklake-manager/api/utils/remove_dataframe_duplicates/</loc>
-         <lastmod>2026-05-25</lastmod>
+         <lastmod>2026-05-29</lastmod>
     </url>
 </urlset>
