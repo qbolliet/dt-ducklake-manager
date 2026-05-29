@@ -303,3 +303,124 @@ def test_update_database_categorical_becomes_non_categorical(
         row[0] for row in built_ducklake_schema.execute("SHOW TABLES").fetchall()
     ]
     assert "dim_category" not in tables_after
+
+
+# ---------------------------------------------------------------------------
+# Tests des valeurs manquantes dans les colonnes catégorielles lors d'un update
+# ---------------------------------------------------------------------------
+
+
+# Test que les NULL insérés via update_database restent NULL dans fact_table
+# et n'introduisent ni ligne label=None ni placeholder "-1" dans dim_*
+def test_update_with_null_categorical_preserves_null_in_fact_table(
+    updater: DatabaseUpdater, built_ducklake_schema: Any
+) -> None:
+    """Test that NULL values in categorical columns stay NULL after update_database.
+
+    Inserts new rows with NULL in the 'category' column and a brand-new modality.
+    Verifies that:
+      - dim_category contains the new modality but NO 'None' / 'NaN' / '-1' label
+      - fact_table has NULL (not '-1') for the rows whose category was NULL
+    """
+    # DataFrame d'insertion : un NULL en colonne catégorielle + une modalité connue
+    df_with_nulls = pl.DataFrame(
+        {
+            "id": [30, 31, 32],
+            "category": ["A", None, "B"],
+            "value": [1.0, 2.0, 3.0],
+            "date": [datetime(2024, 4, 1), datetime(2024, 4, 2), datetime(2024, 4, 3)],
+            "status": ["active", "inactive", "active"],
+            "high_cardinality": ["val_400", "val_401", "val_402"],
+        }
+    )
+
+    result = updater.update_database(
+        update_df=df_with_nulls,
+        keep="first",
+        use_transaction=False,
+    )
+    assert result is True
+
+    # dim_category ne contient ni None, ni "nan", ni "-1" comme label
+    dim_labels = [
+        row[0]
+        for row in built_ducklake_schema.execute(
+            "SELECT label FROM dim_category"
+        ).fetchall()
+    ]
+    assert None not in dim_labels
+    assert "nan" not in dim_labels
+    assert "-1" not in dim_labels
+
+    # dim_category ne contient pas non plus "-1" en value (placeholder bannis)
+    dim_values = [
+        row[0]
+        for row in built_ducklake_schema.execute(
+            "SELECT value FROM dim_category"
+        ).fetchall()
+    ]
+    assert "-1" not in dim_values
+
+    # La ligne id=31 (category était NULL) doit toujours être NULL dans fact_table
+    category_for_31 = built_ducklake_schema.execute(
+        "SELECT category FROM fact_table WHERE id = 31"
+    ).fetchone()[0]
+    assert category_for_31 is None
+
+    # Comptage global : il doit exister au moins une ligne avec category IS NULL
+    null_count = built_ducklake_schema.execute(
+        "SELECT COUNT(*) FROM fact_table WHERE category IS NULL"
+    ).fetchone()[0]
+    assert null_count >= 1
+
+
+# Test qu'un update entièrement NULL sur une colonne catégorielle n'ajoute aucune
+# ligne à dim_*
+def test_update_only_null_categorical_does_not_pollute_dimension(
+    updater: DatabaseUpdater, built_ducklake_schema: Any
+) -> None:
+    """Test that an update with only NULL categorical values adds no dim_* entry.
+
+    Verifies that dim_category is unchanged after inserting rows whose categorical
+    column is entirely NULL.
+    """
+    # Snapshot de dim_category avant l'update
+    labels_before = sorted(
+        row[0]
+        for row in built_ducklake_schema.execute(
+            "SELECT label FROM dim_category"
+        ).fetchall()
+    )
+
+    df_all_null_cat = pl.DataFrame(
+        {
+            "id": [40, 41],
+            "category": [None, None],
+            "value": [9.0, 9.5],
+            "date": [datetime(2024, 5, 1), datetime(2024, 5, 2)],
+            "status": ["active", "inactive"],
+            "high_cardinality": ["val_500", "val_501"],
+        }
+    )
+
+    result = updater.update_database(
+        update_df=df_all_null_cat,
+        keep="first",
+        use_transaction=False,
+    )
+    assert result is True
+
+    # dim_category doit être strictement inchangée
+    labels_after = sorted(
+        row[0]
+        for row in built_ducklake_schema.execute(
+            "SELECT label FROM dim_category"
+        ).fetchall()
+    )
+    assert labels_before == labels_after
+
+    # Et les rangées insérées doivent être NULL dans fact_table
+    null_for_new_ids = built_ducklake_schema.execute(
+        "SELECT COUNT(*) FROM fact_table WHERE id IN (40, 41) AND category IS NULL"
+    ).fetchone()[0]
+    assert null_for_new_ids == 2
