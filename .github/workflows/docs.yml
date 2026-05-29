@@ -21,11 +21,11 @@ jobs:
     name: Déploiement de la documentation
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
-      - uses: astral-sh/setup-uv@v5
+      - uses: astral-sh/setup-uv@v7
         with:
           python-version: "3.13"
 
@@ -33,7 +33,7 @@ jobs:
         run: uv sync --group docs
 
       - name: Cache MkDocs
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           key: mkdocs-material-${{ hashFiles('mkdocs.yml', 'docs/**') }}
           path: .cache

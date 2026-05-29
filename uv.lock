@@ -269,7 +269,7 @@ docs = [
 [package.metadata]
 requires-dist = [
     { name = "duckdb", specifier = ">=1.5.3,<2" },
-    { name = "narwhals", specifier = ">=1.48.1,<2" },
+    { name = "narwhals", specifier = ">=2.21.2,<3" },
     { name = "polars", specifier = ">=1.39.3,<2" },
     { name = "pyarrow", specifier = ">=23.0.1" },
 ]
@@ -787,11 +787,11 @@ wheels = [
 
 [[package]]
 name = "narwhals"
-version = "1.48.1"
+version = "2.21.2"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/9b/da/fe15ccd311ebb8fbbdacc447ba5888306c0b4a6253f628d60df351c36c7d/narwhals-1.48.1.tar.gz", hash = "sha256:b375cfdfc20b84b5ac0926f34c5c1373eb23ebea48d47bf75e282161cda63e34", size = 515882, upload-time = "2025-07-24T19:02:19.14Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/cf/a0/6198c56d42ef2f3c6ed0c42ba30dbcefdc86a91262d7d449010770ae085b/narwhals-2.21.2.tar.gz", hash = "sha256:5c5b2d0b47aef7c73ea412cfcbcd467f2f2d5be73e3c2ab19d78f4a97718790a", size = 632176, upload-time = "2026-05-16T08:49:08.314Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/cd/cf/411b2083991c6906634910ea0c5e5ea0a01f7f14da4194b39d7ad054c187/narwhals-1.48.1-py3-none-any.whl", hash = "sha256:76e3b069cf20a2746d8e227686b959530e98e8018c594a04e5f4f6f77e0872d9", size = 377332, upload-time = "2025-07-24T19:02:17.548Z" },
+    { url = "https://files.pythonhosted.org/packages/1d/77/928ea2e70641ca177a11140062cc5840d421795f2e82749d408d0cce900a/narwhals-2.21.2-py3-none-any.whl", hash = "sha256:7bb57c3700486039215455b9bf2d64261915cc0fd845cc30272d631df696b251", size = 451201, upload-time = "2026-05-16T08:49:05.536Z" },
 ]
 
 [[package]]
