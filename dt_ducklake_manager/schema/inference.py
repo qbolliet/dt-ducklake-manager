@@ -253,8 +253,11 @@ class SchemaBuilder:
             "name"
         ].to_list()
         for categorical_dimension in categorical_cols:
-            # Extraction des modalités uniques et construction de la table de dimension
-            unique_vals = self.df[categorical_dimension].unique().sort()
+            # Extraction des modalités uniques et construction de la table de dimension.
+            # Exclusion explicite des valeurs manquantes : un NULL/None/NaN dans la
+            # colonne d'origine doit rester NULL dans la fact_table, sans pendant dans
+            # la table de dimension (pas de ligne avec label=None).
+            unique_vals = self.df[categorical_dimension].drop_nulls().unique().sort()
             unique_list = unique_vals.to_list()
 
             # Création de la table de dimension via narwhals (même backend que self.df)

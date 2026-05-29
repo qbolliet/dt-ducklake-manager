@@ -1076,6 +1076,11 @@ class DatabaseUpdater(BaseSchemaManager):
                     )
                     # Sauvegarde de l'ordre des colonnes
                     original_columns = prepared_df.columns
+                    # Comptage des NULL avant le join : un NULL d'origine doit rester
+                    # NULL dans la fact_table (pas de pendant dans la dim_*) ; seuls
+                    # les NULL apparus *après* le join correspondent à des labels non
+                    # mappés (anomalie data qualité à signaler).
+                    pre_join_null_count = int(prepared_df[col_name].is_null().sum())
                     # Jointure narwhals pour remplacer les labels par leurs IDs
                     # Création du DataFrame de mapping avec le même backend que
                     # prepared_df
@@ -1095,14 +1100,15 @@ class DatabaseUpdater(BaseSchemaManager):
                         .select(original_columns)
                     )
 
-                    # Gestion des valeurs non mappées (join left → null si absent)
-                    unmapped_count = prepared_df[col_name].is_null().sum()
+                    # Diagnostic des valeurs non mappées : différence entre les NULL
+                    # post-join et les NULL d'entrée. Les NULL légitimes sont laissés
+                    # tels quels — ils ne doivent jamais avoir d'ID dans la dim_*.
+                    post_join_null_count = int(prepared_df[col_name].is_null().sum())
+                    unmapped_count = post_join_null_count - pre_join_null_count
                     if unmapped_count > 0:
                         self.logger.warning(
-                            f"Found {unmapped_count} unmapped values in {col_name}"
-                        )
-                        prepared_df = prepared_df.with_columns(
-                            nw.col(col_name).fill_null("-1")
+                            f"Found {unmapped_count} unmapped (non-null) values in"
+                            f" {col_name}; they will be stored as NULL in fact_table"
                         )
 
             return prepared_df
