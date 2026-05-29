@@ -187,6 +187,81 @@ def test_cleanup_orphaned_dimension_entries(dim_manager: Any) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Tests des valeurs manquantes dans update_dimension_values()
+# ---------------------------------------------------------------------------
+
+
+# Test qu'une Series ne contenant que des NULL n'ajoute aucune entrée à dim_*
+def test_update_dimension_values_only_nulls(
+    dim_manager: Any, built_ducklake_schema: Any
+) -> None:
+    """Test that update_dimension_values does not add any entry for all-null input.
+
+    A Series whose every value is NULL/None must result in 0 added values, and the
+    dimension table must be strictly unchanged. This guarantees that missing values
+    cannot create a 'None'/'NaN' label in the dim_* table.
+
+    Args:
+        dim_manager: DimensionManager fixture.
+        built_ducklake_schema: DuckDB connection.
+    """
+    # Snapshot de dim_category avant l'appel
+    before = sorted(
+        built_ducklake_schema.execute(
+            "SELECT value, label FROM dim_category"
+        ).fetchall()
+    )
+
+    # Series ne contenant que des None : conversion narwhals via polars
+    only_nulls = nw.from_native(
+        pl.Series("category", [None, None, None], dtype=pl.Utf8), series_only=True
+    )
+    added = dim_manager.update_dimension_values("category", only_nulls)
+
+    # Aucune valeur ajoutée et table de dimension strictement inchangée
+    assert added == 0
+    after = sorted(
+        built_ducklake_schema.execute(
+            "SELECT value, label FROM dim_category"
+        ).fetchall()
+    )
+    assert before == after
+    # Sécurité : aucune ligne label=None dans dim_category
+    labels = [row[0] for row in after]
+    assert None not in labels
+
+
+# Test qu'une Series mixte (NULL + nouvelles valeurs) n'ajoute que les non-null
+def test_update_dimension_values_mixed_null_and_new(
+    dim_manager: Any, built_ducklake_schema: Any
+) -> None:
+    """Test that update_dimension_values adds only non-null new values.
+
+    A mixed input (NULL + a brand-new label) must add exactly the new label and
+    leave NULL out of the dim_* table.
+
+    Args:
+        dim_manager: DimensionManager fixture.
+        built_ducklake_schema: DuckDB connection.
+    """
+    mixed = nw.from_native(
+        pl.Series("category", ["Z", None, "Z", None], dtype=pl.Utf8), series_only=True
+    )
+    added = dim_manager.update_dimension_values("category", mixed)
+
+    # 'Z' est nouvelle (les modalités initiales sont A, B, C dans sample_df)
+    assert added == 1
+    labels = [
+        row[0]
+        for row in built_ducklake_schema.execute(
+            "SELECT label FROM dim_category"
+        ).fetchall()
+    ]
+    assert "Z" in labels
+    assert None not in labels
+
+
+# ---------------------------------------------------------------------------
 # Fixtures supplémentaires pour les tests de conversion
 # ---------------------------------------------------------------------------
 
