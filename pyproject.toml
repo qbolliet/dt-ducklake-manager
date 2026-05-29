@@ -20,7 +20,7 @@ dev = [
     "pandas>=3.0.2",
     "pre-commit>=4.6.0",
     "pytest>=8.3.4",
-    "ruff>=0.15.10",
+    "ruff>=0.15.14",
     "taskipy>=1.14.1",
 ]
 docs = [
