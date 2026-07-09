@@ -38,7 +38,7 @@ class CatalogType(StrEnum):
     POSTGRES = "postgres"
 
 
-# Échappement d'une valeur destinée à un littéral de chaîne SQL
+# Fonction auxiliaire d'échappement d'une valeur destinée à un littéral de chaîne SQL
 def _quote_literal(value: str) -> str:
     """Escape single quotes for safe inclusion inside a SQL string literal.
 
@@ -134,6 +134,12 @@ class DuckLakeConnector:
         schema: str = "main",
         catalog_type: CatalogType | str = CatalogType.DUCKDB,
         meta_secret: str | None = None,
+        s3_secret: str | None = None,
+        s3_region: str | None = None,
+        s3_endpoint: str | None = None,
+        s3_access_key_id: str | None = None,
+        s3_secret_access_key: str | None = None,
+        s3_session_token: str | None = None,
         log_filename: str | os.PathLike[str] | None = os.path.join(
             FILE_PATH.parents[2], "logs/ducklake_connector.log"
         ),
@@ -146,11 +152,25 @@ class DuckLakeConnector:
 
         Args:
             catalog_path (str): Locator of the catalog. For the DuckDB backend, a
-                file path (e.g. ``'data/catalog.ducklake'``). For other backends, a
-                backend-prefixed connection string (e.g.
+                file path, normally **local** (e.g. ``'data/catalog.ducklake'``).
+                An S3 path (e.g. ``'s3://bucket/prefix/catalog.ducklake'``) is
+                accepted and will attach, but is only usable in
+                ``read_only=True`` mode: DuckDB/httpfs cannot open a
+                ``.ducklake``/``.duckdb`` catalog file for writing on S3 (S3
+                objects cannot be modified in place), so any write attempt
+                fails with a "database does not exist" error regardless of
+                whether the file is actually present. For a writable
+                catalog that needs to live on shared/remote storage, use the
+                ``POSTGRES`` backend instead (see :meth:`from_postgres`).
+                For other backends, a backend-prefixed connection string (e.g.
                 ``'postgres:dbname=ducklake'`` or ``'sqlite:catalog.sqlite'``).
             data_path (str): Directory where Parquet data files are stored
-                (e.g. ``'data/files/'``).
+                (e.g. ``'data/files/'`` or ``'s3://bucket/prefix/'``). Unlike
+                ``catalog_path``, an S3 ``data_path`` works normally for both
+                reads and writes. When either ``data_path`` or ``catalog_path``
+                starts with ``s3://``, the ``httpfs`` extension is loaded and
+                an S3 credential secret is created automatically (see
+                ``s3_secret``, ``s3_region``, ``s3_endpoint``).
             read_only (bool): Open the catalog in read-only mode. Useful for
                 dashboard/API layers that must not write. Defaults to False.
             snapshot_version (Optional[int]): Open a historical snapshot by
@@ -174,10 +194,52 @@ class DuckLakeConnector:
             meta_secret (Optional[str]): Name of a DuckDB secret carrying the
                 catalog backend credentials, referenced via ``META_SECRET`` in the
                 ``ATTACH`` statement (PostgreSQL only). Defaults to None.
+            s3_secret (Optional[str]): Name of an S3 DuckDB secret to use for
+                ``data_path``. When ``None`` and ``data_path`` starts with
+                ``s3://``, a session secret named ``'s3_credential_chain'`` is
+                created automatically. Its provider depends on whether explicit
+                credentials are supplied (see ``s3_access_key_id`` below): ``PROVIDER
+                credential_chain`` when they are not, or explicit ``KEY_ID`` /
+                ``SECRET`` / ``SESSION_TOKEN`` fields when they are. Pass an
+                explicit secret name here to reuse an already-existing secret
+                instead, bypassing both auto-creation paths. Defaults to None.
+            s3_region (Optional[str]): Region hint for the auto-created secret
+                (e.g. ``'us-east-1'``). Optional in ``credential_chain`` mode,
+                where the provider can usually resolve it from the environment.
+                Defaults to None.
+            s3_endpoint (Optional[str]): Custom S3 endpoint for the
+                auto-created secret (e.g. an Onyxia/MinIO endpoint such as
+                ``'minio.lab.sspcloud.fr'``). Required whenever ``data_path``
+                lives on a non-AWS S3-compatible store, in both credential
+                modes. Defaults to None.
+            s3_access_key_id (Optional[str]): Explicit AWS access key ID. When
+                provided together with ``s3_secret_access_key``, the auto-created
+                secret uses these credentials directly (``KEY_ID`` / ``SECRET``
+                / ``SESSION_TOKEN`` fields) instead of ``PROVIDER
+                credential_chain``. Useful when the credential chain's
+                resolution proves unreliable for the runtime (e.g. some
+                Onyxia/httpfs combinations do not reliably pick up
+                ``AWS_SESSION_TOKEN`` from the environment), or simply to make
+                credential sourcing explicit and match a ``boto3`` client
+                configured the same way. Defaults to None.
+            s3_secret_access_key (Optional[str]): Explicit AWS secret access key,
+                paired with ``s3_access_key_id``. Defaults to None.
+            s3_session_token (Optional[str]): Explicit AWS session token, for
+                temporary credentials (e.g. Onyxia's injected
+                ``AWS_SESSION_TOKEN``). Only meaningful together with
+                ``s3_access_key_id``/``s3_secret_access_key``; omitted from the secret when
+                ``None``, which is correct for long-lived IAM credentials but
+                will fail against temporary credentials that require it.
+                Defaults to None.
             log_filename (Optional[os.PathLike]): Path to the log file.
 
         Examples:
             >>> connector = DuckLakeConnector('catalog.ducklake', 'data/')
+            >>> conn = connector.connect()
+            >>> # Data on S3, catalog kept local, credentials from the environment
+            >>> connector = DuckLakeConnector(
+            ...     'catalog.ducklake', 's3://bucket/prefix/',
+            ... )
             >>> conn = connector.connect()
         """
         # Stockage des paramètres de connexion
@@ -197,6 +259,49 @@ class DuckLakeConnector:
         self.snapshot_time = snapshot_time
         self.catalog_alias = catalog_alias
         self.schema = schema
+
+        # Détection d'un usage de S3 : sur data_path (fichiers Parquet) et/ou
+        # sur catalog_path (catalogue DuckLake lui-même, backend DUCKDB
+        # uniquement). Déclenche le chargement de httpfs et, sauf secret déjà
+        # fourni, la création automatique d'un secret credential_chain.
+        # Note : un catalogue DUCKDB sur S3 repose sur DuckLake pour gérer les
+        # accès concurrents au niveau applicatif plutôt que sur un vrai
+        # verrou de fichier système ; à réserver à un usage single-writer
+        # (scripts de génération/test), et à éviter dès qu'un second
+        # processus (ex. une API) doit accéder au même catalogue en
+        # parallèle — préférer alors le backend POSTGRES (from_postgres).
+        self._catalog_on_s3 = self.catalog_path.startswith("s3://")
+        self._uses_s3 = self.data_path.startswith("s3://") or self._catalog_on_s3
+        self.s3_region = s3_region
+        self.s3_endpoint = s3_endpoint
+        if s3_secret is not None:
+            # Secret S3 externe déjà créé : aucune création, simple référence par nom
+            self.s3_secret = s3_secret
+            self._s3_secret_sql: str | None = None
+        elif self._uses_s3 and s3_access_key_id is not None and s3_secret_access_key is not None:
+            # Identifiants explicites fournis : secret déterministe (KEY_ID/SECRET/
+            # SESSION_TOKEN), sans passer par la résolution credential_chain.
+            # Reproduit le comportement d'un client boto3 configuré à la main,
+            # utile si credential_chain se révèle peu fiable pour le runtime cible.
+            self.s3_secret = "s3_explicit_credentials"
+            self._s3_secret_sql = self._build_s3_explicit_credentials_sql(
+                self.s3_secret,
+                key_id=s3_access_key_id,
+                secret_key=s3_secret_access_key,
+                session_token=s3_session_token,
+                region=s3_region,
+                endpoint=s3_endpoint,
+            )
+        elif self._uses_s3:
+            # Les credentials S3 seront chargés à partir de leurs variables d'environnement comme c'est le cas 
+            self.s3_secret = "s3_credential_chain"
+            self._s3_secret_sql = self._build_s3_credential_chain_sql(
+                self.s3_secret, region=s3_region, endpoint=s3_endpoint
+            )
+        else:
+            self.s3_secret = None
+            self._s3_secret_sql = None
+
         # SQL de création du secret de session, renseigné par from_postgres lorsque
         # des identifiants bruts sont fournis ; exécuté avant ATTACH par connect/attach.
         # Conservé à part pour ne jamais être journalisé (il contient le mot de passe).
@@ -248,6 +353,9 @@ class DuckLakeConnector:
         # Chargement des extensions requises puis création éventuelle du secret
         self._load_extensions(conn)
         self._apply_secret(conn)
+
+        # Création des répertoires parents manquants dans le cas d'un stockage en local (catalogue et données)
+        self._ensure_paths_exist()
 
         # Construction de la chaîne d'options ATTACH
         attach_sql = self._build_attach_sql()
@@ -336,6 +444,9 @@ class DuckLakeConnector:
         self._load_extensions(conn)
         self._apply_secret(conn)
 
+        # Création des répertoires parents manquants en local (catalogue et données)
+        self._ensure_paths_exist()
+
         # Attachement du catalogue sur la connexion existante
         attach_sql = self._build_attach_sql()
         conn.execute(attach_sql)
@@ -369,6 +480,12 @@ class DuckLakeConnector:
         snapshot_time: str | None = None,
         catalog_alias: str = "db",
         schema: str = "main",
+        s3_secret: str | None = None,
+        s3_region: str | None = None,
+        s3_endpoint: str | None = None,
+        s3_access_key_id: str | None = None,
+        s3_secret_access_key: str | None = None,
+        s3_session_token: str | None = None,
         log_filename: str | os.PathLike[str] | None = None,
     ) -> "DuckLakeConnector":
         """
@@ -411,6 +528,27 @@ class DuckLakeConnector:
             snapshot_time (Optional[str]): Time-travel by ISO-8601 timestamp.
             catalog_alias (str): Alias for the attached catalog. Defaults to ``'db'``.
             schema (str): DuckLake schema to activate. Defaults to ``'main'``.
+            s3_secret (Optional[str]): Name of an existing S3 secret to reuse for
+                ``data_path``, bypassing auto-creation entirely. Defaults to None.
+            s3_region (Optional[str]): Region hint for the auto-created S3 secret.
+                Defaults to None.
+            s3_endpoint (Optional[str]): Custom S3 endpoint for the auto-created
+                secret (e.g. an Onyxia/MinIO endpoint). Required whenever
+                ``data_path`` lives on a non-AWS S3-compatible store, otherwise
+                requests resolve against the default AWS endpoint and fail
+                (typically as a 403, since the bucket does not exist there).
+                Defaults to None.
+            s3_access_key_id (Optional[str]): Explicit AWS access key ID. When given
+                together with ``s3_secret_access_key``, the auto-created S3 secret uses
+                these credentials directly instead of ``PROVIDER
+                credential_chain`` — mirrors a ``boto3`` client configured the
+                same way. Defaults to None.
+            s3_secret_access_key (Optional[str]): Explicit AWS secret access key,
+                paired with ``s3_access_key_id``. Defaults to None.
+            s3_session_token (Optional[str]): Explicit AWS session token for
+                temporary credentials (e.g. Onyxia's injected
+                ``AWS_SESSION_TOKEN``). Only meaningful with
+                ``s3_access_key_id``/``s3_secret_access_key``. Defaults to None.
             log_filename (Optional[os.PathLike]): Path to the log file.
 
         Returns:
@@ -426,6 +564,15 @@ class DuckLakeConnector:
             >>> ro = DuckLakeConnector.from_postgres(
             ...     'data/', dbname='ducklake',
             ...     meta_secret='pg_catalog_secret', read_only=True,
+            ... )
+            >>> # Onyxia/MinIO, explicit S3 credentials (mirrors a boto3 client)
+            >>> onyxia = DuckLakeConnector.from_postgres(
+            ...     's3://bucket/prefix/', dbname='ducklake', host='localhost',
+            ...     user='app', password='***',
+            ...     s3_endpoint=os.environ['AWS_S3_ENDPOINT'],
+            ...     s3_access_key_id=os.environ['AWS_ACCESS_KEY_ID'],
+            ...     s3_secret_access_key=os.environ['AWS_SECRET_ACCESS_KEY'],
+            ...     s3_session_token=os.environ['AWS_SESSION_TOKEN'],
             ... )
         """
         # Cible ATTACH du backend Postgres : le nom de la base figure dans la chaîne
@@ -460,6 +607,12 @@ class DuckLakeConnector:
             schema=schema,
             catalog_type=CatalogType.POSTGRES,
             meta_secret=effective_secret,
+            s3_secret=s3_secret,
+            s3_region=s3_region,
+            s3_endpoint=s3_endpoint,
+            s3_access_key_id=s3_access_key_id,
+            s3_secret_access_key=s3_secret_access_key,
+            s3_session_token=s3_session_token,
             log_filename=log_filename,
         )
         # Mémorisation du SQL de création du secret (exécuté avant ATTACH)
@@ -473,10 +626,12 @@ class DuckLakeConnector:
     # Chargement des extensions DuckDB requises selon le backend de catalogue
     def _load_extensions(self, conn: duckdb.DuckDBPyConnection) -> None:
         """
-        Install and load the DuckDB extensions required by the catalog backend.
+        Install and load the DuckDB extensions required by the catalog backend
+        and by ``data_path``.
 
         ``ducklake`` is always loaded; the PostgreSQL or SQLite extension is added
-        for the corresponding backend. ``INSTALL``/``LOAD`` are idempotent, so the
+        for the corresponding catalog backend, and ``httpfs`` is added whenever
+        ``data_path`` points to S3. ``INSTALL``/``LOAD`` are idempotent, so the
         method is safe to call on an already-prepared connection.
 
         Args:
@@ -494,23 +649,37 @@ class DuckLakeConnector:
             conn.execute("INSTALL sqlite; LOAD sqlite;")
             self.logger.info("SQLite extension loaded")
 
+        # Extension httpfs : nécessaire dès lors que data_path pointe vers S3
+        if self._uses_s3:
+            conn.execute("INSTALL httpfs; LOAD httpfs;")
+            self.logger.info("httpfs extension loaded")
+
     # Création du secret d'identifiants du catalogue lorsqu'il est configuré
     def _apply_secret(self, conn: duckdb.DuckDBPyConnection) -> None:
         """
-        Create the catalog credential secret on the connection, if configured.
+        Create the catalog and S3 credential secrets on the connection, when
+        configured.
 
-        Only the secret *name* is logged: the SQL statement carries the password
-        and must never be written to the logs.
+        Only secret *names* are logged: the SQL statements may carry a password
+        or session token and must never be written to the logs.
 
         Args:
             conn (duckdb.DuckDBPyConnection): Connection on which to create the secret.
         """
-        # Création du secret uniquement si un SQL a été préparé (identifiants en ligne)
+        # Création du secret de catalogue uniquement si un SQL a été préparé
+        # (identifiants Postgres en ligne)
         if self._secret_sql is not None:
             conn.execute(self._secret_sql)
             self.logger.info(
                 f"Catalog credential secret created : '{self.meta_secret}'"
             )
+
+        # Création du secret S3 auto-généré (credential_chain), le cas échéant.
+        # Absent lorsqu'un s3_secret existant a été fourni explicitement : dans
+        # ce cas, le secret est supposé déjà créé ailleurs.
+        if self._s3_secret_sql is not None:
+            conn.execute(self._s3_secret_sql)
+            self.logger.info(f"S3 credential secret created : '{self.s3_secret}'")
 
     # Construction du SQL de création d'un secret PostgreSQL
     @staticmethod
@@ -558,6 +727,101 @@ class DuckLakeConnector:
         params_str = ", ".join(params)
         return f"CREATE OR REPLACE SECRET {secret_name} ({params_str})"
 
+    # Construction du SQL de création d'un secret S3 basé sur credential_chain
+    @staticmethod
+    def _build_s3_credential_chain_sql(
+        secret_name: str,
+        region: str | None = None,
+        endpoint: str | None = None,
+    ) -> str:
+        """
+        Build a ``CREATE OR REPLACE SECRET ... (TYPE s3, PROVIDER
+        credential_chain, ...)`` statement.
+
+        ``PROVIDER credential_chain`` delegates credential resolution to the
+        AWS SDK's default chain (environment variables, shared config/profile
+        files, EC2/ECS/EKS instance role, etc.), so no key is ever embedded in
+        the SQL or logged. This matches environments such as Onyxia, which
+        inject ``AWS_ACCESS_KEY_ID`` / ``AWS_SECRET_ACCESS_KEY`` /
+        ``AWS_SESSION_TOKEN`` (and often ``AWS_S3_ENDPOINT``) as environment
+        variables.
+
+        Args:
+            secret_name (str): Identifier of the secret to create.
+            region (Optional[str]): Region hint (e.g. ``'us-east-1'``). Omitted
+                if ``None``, letting the credential chain resolve it.
+            endpoint (Optional[str]): Custom S3 endpoint (e.g. a MinIO/Onyxia
+                endpoint). Omitted if ``None``.
+
+        Returns:
+            str: The ``CREATE OR REPLACE SECRET`` SQL statement.
+        """
+        # Paramètres du secret : TYPE et PROVIDER toujours présents
+        params: list[str] = ["TYPE s3", "PROVIDER credential_chain"]
+
+        # Champs optionnels : omis si non fournis (repli sur la chaîne AWS standard)
+        if region is not None:
+            params.append(f"REGION '{_quote_literal(region)}'")
+        if endpoint is not None:
+            params.append(f"ENDPOINT '{_quote_literal(endpoint)}'")
+
+        params_str = ", ".join(params)
+        return f"CREATE OR REPLACE SECRET {secret_name} ({params_str})"
+
+    # Construction du SQL de création d'un secret S3 à identifiants explicites
+    @staticmethod
+    def _build_s3_explicit_credentials_sql(
+        secret_name: str,
+        key_id: str,
+        secret_key: str,
+        session_token: str | None = None,
+        region: str | None = None,
+        endpoint: str | None = None,
+    ) -> str:
+        """
+        Build a ``CREATE OR REPLACE SECRET ... (TYPE s3, KEY_ID ..., SECRET
+        ...)`` statement from explicit credentials.
+
+        Unlike :meth:`_build_s3_credential_chain_sql`, this bypasses the AWS
+        SDK's credential resolution entirely: the key, secret, and optional
+        session token are embedded directly in the secret, mirroring a
+        ``boto3`` client constructed with the same fields. Useful when
+        ``PROVIDER credential_chain`` proves unreliable for the target
+        runtime, or when explicit sourcing is simply preferred.
+
+        Args:
+            secret_name (str): Identifier of the secret to create.
+            key_id (str): AWS access key ID.
+            secret_key (str): AWS secret access key.
+            session_token (Optional[str]): AWS session token, required for
+                temporary credentials (e.g. Onyxia's injected
+                ``AWS_SESSION_TOKEN``). Omitted if ``None``.
+            region (Optional[str]): Region hint. Omitted if ``None``.
+            endpoint (Optional[str]): Custom S3 endpoint (e.g. a MinIO/Onyxia
+                endpoint). Omitted if ``None``.
+
+        Returns:
+            str: The ``CREATE OR REPLACE SECRET`` SQL statement.
+        """
+        # Paramètres du secret : TYPE, KEY_ID et SECRET toujours présents
+        params: list[str] = [
+            "TYPE s3",
+            f"KEY_ID '{_quote_literal(key_id)}'",
+            f"SECRET '{_quote_literal(secret_key)}'",
+        ]
+
+        # Champs optionnels : jeton de session (identifiants temporaires),
+        # région et endpoint custom (ex. MinIO/Onyxia)
+        if session_token is not None:
+            params.append(f"SESSION_TOKEN '{_quote_literal(session_token)}'")
+        if region is not None:
+            params.append(f"REGION '{_quote_literal(region)}'")
+        if endpoint is not None:
+            params.append(f"ENDPOINT '{_quote_literal(endpoint)}'")
+
+        params_str = ", ".join(params)
+        return f"CREATE OR REPLACE SECRET {secret_name} ({params_str})"
+
     # Création éventuelle puis activation du schéma cible
     def _activate_schema(self, conn: duckdb.DuckDBPyConnection) -> None:
         """
@@ -583,6 +847,31 @@ class DuckLakeConnector:
         # Activation du schéma cible pour que les requêtes non qualifiées fonctionnent
         conn.execute(f"USE {self.catalog_alias}.{self.schema}")
         self.logger.info(f"Activated scheme : {self.catalog_alias}.{self.schema}")
+
+    # Création des répertoires parents du catalogue et des données si absents
+    def _ensure_paths_exist(self) -> None:
+        """
+        Create the parent directories of ``catalog_path`` and ``data_path`` if
+        needed.
+
+        DuckLake creates the ``.ducklake`` catalog file itself on first
+        ``ATTACH``, but it does not create missing intermediate directories,
+        so the parent directory must already exist. The same applies to
+        ``data_path`` when it is a local directory, where Parquet files will
+        be written. This is a no-op for the PostgreSQL catalog backend (since
+        ``catalog_path`` is then a connection string rather than a filesystem
+        path) and for an S3 ``catalog_path``/``data_path`` (DuckLake/S3
+        creates key prefixes implicitly on write; there is no local directory
+        to create).
+        """
+        # Répertoire parent du fichier de catalogue (backends fichier local uniquement)
+        if self.catalog_type != CatalogType.POSTGRES and not self._catalog_on_s3:
+            catalog_dir = Path(self.catalog_path).parent
+            catalog_dir.mkdir(parents=True, exist_ok=True)
+
+        # Répertoire de stockage des fichiers Parquet (chemins locaux uniquement)
+        if not self._uses_s3:
+            Path(self.data_path).mkdir(parents=True, exist_ok=True)
 
     # Construction de la clause SQL ATTACH avec les options appropriées
     def _build_attach_sql(self) -> str:
