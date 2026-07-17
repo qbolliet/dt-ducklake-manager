@@ -7,6 +7,9 @@ from pathlib import Path
 # DuckDB
 import duckdb
 
+# PostgreSQL
+import psycopg2
+
 # Module d'initialisation du logger
 from ..utils.logger import _init_logger
 
@@ -473,6 +476,8 @@ class DuckLakeConnector:
         port: int | None = None,
         user: str | None = None,
         password: str | None = None,
+        create_db_if_missing: bool = True,
+        admin_dbname: str = "postgres",
         meta_secret: str | None = None,
         secret_name: str = "ducklake_pg_secret",
         read_only: bool = False,
@@ -518,6 +523,18 @@ class DuckLakeConnector:
             user (Optional[str]): PostgreSQL user. Falls back to ``PGUSER`` if None.
             password (Optional[str]): PostgreSQL password. Falls back to
                 ``PGPASSWORD`` if None.
+            create_db_if_missing (bool): Create the ``dbname`` database on the
+                PostgreSQL server if it does not exist yet. PostgreSQL has no
+                ``CREATE DATABASE IF NOT EXISTS`` clause, so this connects to
+                ``admin_dbname`` first, checks ``pg_database``, and issues
+                ``CREATE DATABASE`` only if needed. Requires the connecting
+                role to hold ``CREATEDB`` (or superuser) on the server.
+                Ignored when ``meta_secret`` is set, since credentials are
+                then managed out of band. Defaults to False.
+            admin_dbname (str): Administrative database used to check for and
+                create ``dbname`` when ``create_if_missing`` is True (every
+                PostgreSQL server has one, since ``CREATE DATABASE`` cannot
+                target the database it runs from). Defaults to ``'postgres'``.
             meta_secret (Optional[str]): Name of an existing DuckDB secret to
                 reference. When provided, no secret is created and the
                 ``host``/``port``/``user``/``password`` arguments are ignored.
@@ -574,7 +591,24 @@ class DuckLakeConnector:
             ...     s3_secret_access_key=os.environ['AWS_SECRET_ACCESS_KEY'],
             ...     s3_session_token=os.environ['AWS_SESSION_TOKEN'],
             ... )
+            >>> # Nouveau catalogue, base cible créée automatiquement si absente
+            >>> new_cat = DuckLakeConnector.from_postgres(
+            ...     'data/', dbname='vulnerabilities', host='localhost',
+            ...     user='app', password='***', create_if_missing=True,
+            ... )
         """
+        # Création préalable de la base cible sur le serveur si demandée
+        # (avant toute logique de secret/ATTACH, puisque indépendante de DuckDB)
+        if create_db_if_missing and meta_secret is None:
+            cls._ensure_database_exists(
+                dbname=dbname,
+                admin_dbname=admin_dbname,
+                host=host,
+                port=port,
+                user=user,
+                password=password,
+            )
+
         # Cible ATTACH du backend Postgres : le nom de la base figure dans la chaîne
         # de connexion (non sensible) ; les identifiants passent par le secret.
         catalog_path = f"postgres:dbname={dbname}"
@@ -680,6 +714,82 @@ class DuckLakeConnector:
         if self._s3_secret_sql is not None:
             conn.execute(self._s3_secret_sql)
             self.logger.info(f"S3 credential secret created : '{self.s3_secret}'")
+
+    # Création préalable de la base de données cible si elle n'existe pas encore
+    @classmethod
+    def _ensure_database_exists(
+        cls,
+        dbname: str,
+        admin_dbname: str,
+        host: str | None,
+        port: int | None,
+        user: str | None,
+        password: str | None,
+    ) -> None:
+        """
+        Create ``dbname`` on the PostgreSQL server if it does not already exist.
+
+        PostgreSQL has no ``CREATE DATABASE IF NOT EXISTS`` clause, so existence
+        is checked via ``pg_database`` before issuing ``CREATE DATABASE``. The
+        check-then-create connection targets ``admin_dbname`` (a database is
+        never created from within itself) and runs in ``autocommit`` mode, since
+        ``CREATE DATABASE`` cannot execute inside a transaction block. Any field
+        left as ``None`` is omitted from the connection parameters, letting
+        psycopg2 fall back to the standard libpq environment variables
+        (``PGHOST``, ``PGUSER``, ``PGPASSWORD``, ...), consistent with the
+        fallback behaviour of the rest of :meth:`from_postgres`.
+
+        Args:
+            dbname (str): Name of the database to check for and create.
+            admin_dbname (str): Administrative database used for the
+                check-then-create connection.
+            host (Optional[str]): PostgreSQL host. Falls back to ``PGHOST``.
+            port (Optional[int]): PostgreSQL port. Falls back to ``PGPORT``.
+            user (Optional[str]): PostgreSQL user. Falls back to ``PGUSER``.
+            password (Optional[str]): PostgreSQL password. Falls back to
+                ``PGPASSWORD``.
+
+        Raises:
+            psycopg2.errors.InsufficientPrivilege: If the connecting role lacks
+                the ``CREATEDB`` privilege.
+            psycopg2.OperationalError: If ``admin_dbname`` cannot be reached.
+
+        Examples:
+            >>> DuckLakeConnector._ensure_database_exists(
+            ...     'vulnerabilities', 'postgres', 'localhost', None,
+            ...     'app', '***',
+            ... )
+        """
+        # Assemblage des paramètres de connexion : champs à None omis, pour
+        # laisser psycopg2/libpq se replier sur les variables d'environnement
+        conn_params = {
+            "dbname": admin_dbname,
+            "host": host,
+            "port": port,
+            "user": user,
+            "password": password,
+        }
+        conn_params = {k: v for k, v in conn_params.items() if v is not None}
+
+        # Connexion à la base d'administration, autocommit obligatoire :
+        # CREATE DATABASE ne peut pas s'exécuter dans une transaction
+        admin_conn = psycopg2.connect(**conn_params)
+        admin_conn.autocommit = True
+
+        try:
+            with admin_conn.cursor() as cur:
+                # Vérification de l'existence préalable
+                cur.execute(
+                    "SELECT 1 FROM pg_database WHERE datname = %s;", (dbname,)
+                )
+                if cur.fetchone() is None:
+                    # Création de la base cible. Le nom ne peut pas être passé en
+                    # paramètre lié (CREATE DATABASE ne l'accepte pas) : il est
+                    # donc interpolé, entre guillemets doubles, après échappement.
+                    quoted_dbname = dbname.replace('"', '""')
+                    cur.execute(f'CREATE DATABASE "{quoted_dbname}";')
+        finally:
+            admin_conn.close()
 
     # Construction du SQL de création d'un secret PostgreSQL
     @staticmethod
