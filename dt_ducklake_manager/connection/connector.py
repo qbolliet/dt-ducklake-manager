@@ -1,5 +1,6 @@
 # Importation des modules
 # Modules de base
+import logging
 import os
 from enum import StrEnum
 from pathlib import Path
@@ -10,11 +11,49 @@ import duckdb
 # PostgreSQL
 import psycopg2
 
-# Module d'initialisation du logger
-from ..utils.logger import _init_logger
-
 # Emplacement du fichier
 FILE_PATH = Path(os.path.abspath(__file__))
+
+
+# Fonction d'initialisation du logger
+def _init_logger(filename: str | os.PathLike[str]) -> logging.Logger:
+    """
+    Initializes the logger for logging to a file.
+
+    Parameters:
+        filename (os.PathLike): Path to the log file.
+
+    Returns:
+        logging.Logger: Initialized logger object.
+
+    Note:
+        This function configures logging to output messages to both console and a file.
+    """
+    # Configuration de logging
+    logging.basicConfig(
+        format="%(asctime)s - %(levelname)s - %(message)s",
+        level=logging.INFO,
+    )
+
+    # Vérification de l'existance du dossier pour le fichier de log
+    log_directory = os.path.dirname(filename)
+
+    if (not os.path.exists(log_directory)) & (log_directory != ""):
+        os.makedirs(log_directory)
+
+    # Configuration du fichier de logs
+    file_handler = logging.FileHandler(filename)
+    file_handler.setLevel(logging.INFO)
+
+    # Set a formatter for the file handler
+    formatter = logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
+    file_handler.setFormatter(formatter)
+
+    # Initialisation du logger
+    logger = logging.getLogger()
+    logger.addHandler(file_handler)
+
+    return logger
 
 
 # Énumération des backends de catalogue supportés par DuckLake
@@ -281,7 +320,11 @@ class DuckLakeConnector:
             # Secret S3 externe déjà créé : aucune création, simple référence par nom
             self.s3_secret = s3_secret
             self._s3_secret_sql: str | None = None
-        elif self._uses_s3 and s3_access_key_id is not None and s3_secret_access_key is not None:
+        elif (
+            self._uses_s3
+            and s3_access_key_id is not None
+            and s3_secret_access_key is not None
+        ):
             # Identifiants explicites fournis : secret déterministe (KEY_ID/SECRET/
             # SESSION_TOKEN), sans passer par la résolution credential_chain.
             # Reproduit le comportement d'un client boto3 configuré à la main,
@@ -296,7 +339,7 @@ class DuckLakeConnector:
                 endpoint=s3_endpoint,
             )
         elif self._uses_s3:
-            # Les credentials S3 seront chargés à partir de leurs variables d'environnement comme c'est le cas 
+            # Les credentials S3 seront chargés à partir de leurs variables d'environnement comme c'est le cas
             self.s3_secret = "s3_credential_chain"
             self._s3_secret_sql = self._build_s3_credential_chain_sql(
                 self.s3_secret, region=s3_region, endpoint=s3_endpoint
@@ -478,6 +521,8 @@ class DuckLakeConnector:
         password: str | None = None,
         create_db_if_missing: bool = True,
         admin_dbname: str = "postgres",
+        admin_user: str | None = None,
+        admin_password: str | None = None,
         meta_secret: str | None = None,
         secret_name: str = "ducklake_pg_secret",
         read_only: bool = False,
@@ -535,6 +580,15 @@ class DuckLakeConnector:
                 create ``dbname`` when ``create_if_missing`` is True (every
                 PostgreSQL server has one, since ``CREATE DATABASE`` cannot
                 target the database it runs from). Defaults to ``'postgres'``.
+            admin_user (Optional[str]): PostgreSQL role used for the
+                check-then-create connection in ``_ensure_database_exists``,
+                when it must differ from ``user`` (e.g. the day-to-day
+                application role has no ``CREATEDB`` privilege by design, and
+                a separate privileged role is used only for provisioning).
+                Falls back to ``user`` when None. Ignored when
+                ``create_db_if_missing`` is False or ``meta_secret`` is set.
+            admin_password (Optional[str]): Password paired with
+                ``admin_user``. Falls back to ``password`` when None.
             meta_secret (Optional[str]): Name of an existing DuckDB secret to
                 reference. When provided, no secret is created and the
                 ``host``/``port``/``user``/``password`` arguments are ignored.
@@ -596,17 +650,28 @@ class DuckLakeConnector:
             ...     'data/', dbname='vulnerabilities', host='localhost',
             ...     user='app', password='***', create_if_missing=True,
             ... )
+            >>> # Rôle applicatif sans CREATEDB : identifiants admin dédiés
+            >>> # à la seule étape de création de la base
+            >>> new_cat = DuckLakeConnector.from_postgres(
+            ...     'data/', dbname='vulnerabilities', host='localhost',
+            ...     user='app', password='***',
+            ...     admin_user='postgres', admin_password=os.environ['PG_ADMIN_PASSWORD'],
+            ... )
         """
         # Création préalable de la base cible sur le serveur si demandée
-        # (avant toute logique de secret/ATTACH, puisque indépendante de DuckDB)
+        # (avant toute logique de secret/ATTACH, puisque indépendante de DuckDB).
+        # Connexion de création avec les identifiants admin (rôle privilégié),
+        # mais propriété de la base attribuée au rôle applicatif (`user`), pour
+        # qu'il puisse ensuite créer des objets dans le schéma public.
         if create_db_if_missing and meta_secret is None:
             cls._ensure_database_exists(
                 dbname=dbname,
                 admin_dbname=admin_dbname,
                 host=host,
                 port=port,
-                user=user,
-                password=password,
+                user=admin_user if admin_user is not None else user,
+                password=admin_password if admin_password is not None else password,
+                owner=user,
             )
 
         # Cible ATTACH du backend Postgres : le nom de la base figure dans la chaîne
@@ -725,6 +790,7 @@ class DuckLakeConnector:
         port: int | None,
         user: str | None,
         password: str | None,
+        owner: str | None = None,
     ) -> None:
         """
         Create ``dbname`` on the PostgreSQL server if it does not already exist.
@@ -745,19 +811,32 @@ class DuckLakeConnector:
                 check-then-create connection.
             host (Optional[str]): PostgreSQL host. Falls back to ``PGHOST``.
             port (Optional[int]): PostgreSQL port. Falls back to ``PGPORT``.
-            user (Optional[str]): PostgreSQL user. Falls back to ``PGUSER``.
+            user (Optional[str]): PostgreSQL role used for the check-then-create
+                connection itself (e.g. a privileged admin role). Falls back to
+                ``PGUSER``.
             password (Optional[str]): PostgreSQL password. Falls back to
                 ``PGPASSWORD``.
+            owner (Optional[str]): Role to set as ``OWNER`` of the newly
+                created database, when it differs from ``user`` (typically the
+                day-to-day application role that will actually ATTACH to it
+                afterwards). Required to make the database usable: on
+                PostgreSQL 15+, only the database owner has ``CREATE`` on the
+                ``public`` schema by default (via the ``pg_database_owner``
+                pseudo-role), so a database created without the right owner
+                leaves the application role unable to create any table in it.
+                Ignored if the database already exists. Defaults to ``user``.
 
         Raises:
             psycopg2.errors.InsufficientPrivilege: If the connecting role lacks
-                the ``CREATEDB`` privilege.
+                the ``CREATEDB`` privilege, or lacks ``CREATEROLE``/membership
+                needed to set ``owner``.
             psycopg2.OperationalError: If ``admin_dbname`` cannot be reached.
 
         Examples:
+            >>> # Rôle admin créateur, base possédée par le rôle applicatif
             >>> DuckLakeConnector._ensure_database_exists(
             ...     'vulnerabilities', 'postgres', 'localhost', None,
-            ...     'app', '***',
+            ...     user='postgres_admin', password='***', owner='app',
             ... )
         """
         # Assemblage des paramètres de connexion : champs à None omis, pour
@@ -779,15 +858,24 @@ class DuckLakeConnector:
         try:
             with admin_conn.cursor() as cur:
                 # Vérification de l'existence préalable
-                cur.execute(
-                    "SELECT 1 FROM pg_database WHERE datname = %s;", (dbname,)
-                )
+                cur.execute("SELECT 1 FROM pg_database WHERE datname = %s;", (dbname,))
                 if cur.fetchone() is None:
-                    # Création de la base cible. Le nom ne peut pas être passé en
-                    # paramètre lié (CREATE DATABASE ne l'accepte pas) : il est
-                    # donc interpolé, entre guillemets doubles, après échappement.
+                    # Création de la base cible. Ni le nom, ni le propriétaire ne
+                    # peuvent être passés en paramètre lié (CREATE DATABASE ne
+                    # l'accepte pas) : ils sont donc interpolés, entre guillemets
+                    # doubles, après échappement.
                     quoted_dbname = dbname.replace('"', '""')
-                    cur.execute(f'CREATE DATABASE "{quoted_dbname}";')
+                    # Propriétaire de la base : le rôle applicatif par défaut, pour
+                    # qu'il hérite du droit CREATE sur le schéma public (PG15+,
+                    # via le pseudo-rôle pg_database_owner)
+                    effective_owner = owner if owner is not None else user
+                    if effective_owner is not None:
+                        quoted_owner = effective_owner.replace('"', '""')
+                        cur.execute(
+                            f'CREATE DATABASE "{quoted_dbname}" OWNER "{quoted_owner}";'
+                        )
+                    else:
+                        cur.execute(f'CREATE DATABASE "{quoted_dbname}";')
         finally:
             admin_conn.close()
 
