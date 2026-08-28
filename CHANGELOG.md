@@ -4,6 +4,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0](https://github.com/qbolliet/dt-ducklake-manager/compare/v0.2.0...v0.3.0) (2026-08-28)
+
+
+### Features
+
+* add db creation if not exists ([bdeeaf3](https://github.com/qbolliet/dt-ducklake-manager/commit/bdeeaf3a40cb9d5196203b4eebee52751dce0166))
+* safe default and dedicated admin role for catalog DB creation ([05424aa](https://github.com/qbolliet/dt-ducklake-manager/commit/05424aae079f491ddef1632edaee7928319c0a0b))
+* safe default and dedicated admin role for catalog DB creation ([0d2d1e4](https://github.com/qbolliet/dt-ducklake-manager/commit/0d2d1e49aa6baae565f119a9b2bcd39c618a6270))
+
+
+### Bug Fixes
+
+* s3 + postgres sql connection ([b9c0d7a](https://github.com/qbolliet/dt-ducklake-manager/commit/b9c0d7a353d515bd64a1ddf223c1f5264cf3ba50))
+
 ## [0.2.0](https://github.com/qbolliet/dt-ducklake-manager/compare/v0.1.0...v0.2.0) (2026-05-29)
 
 
