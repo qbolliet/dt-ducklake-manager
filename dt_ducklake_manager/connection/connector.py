@@ -269,10 +269,10 @@ class DuckLakeConnector:
             s3_session_token (Optional[str]): Explicit AWS session token, for
                 temporary credentials (e.g. Onyxia's injected
                 ``AWS_SESSION_TOKEN``). Only meaningful together with
-                ``s3_access_key_id``/``s3_secret_access_key``; omitted from the secret when
-                ``None``, which is correct for long-lived IAM credentials but
-                will fail against temporary credentials that require it.
-                Defaults to None.
+                ``s3_access_key_id``/``s3_secret_access_key``; omitted from the
+                secret when ``None``, which is correct for long-lived IAM
+                credentials but will fail against temporary credentials that
+                require it. Defaults to None.
             log_filename (Optional[os.PathLike]): Path to the log file.
 
         Examples:
@@ -316,6 +316,9 @@ class DuckLakeConnector:
         self._uses_s3 = self.data_path.startswith("s3://") or self._catalog_on_s3
         self.s3_region = s3_region
         self.s3_endpoint = s3_endpoint
+        # Nom du secret S3 effectif : renseigné par l'une des branches ci-dessous,
+        # ou None lorsqu'aucun accès S3 n'est configuré.
+        self.s3_secret: str | None
         if s3_secret is not None:
             # Secret S3 externe déjà créé : aucune création, simple référence par nom
             self.s3_secret = s3_secret
@@ -339,7 +342,8 @@ class DuckLakeConnector:
                 endpoint=s3_endpoint,
             )
         elif self._uses_s3:
-            # Les credentials S3 seront chargés à partir de leurs variables d'environnement comme c'est le cas
+            # Les identifiants S3 seront résolus à partir des variables
+            # d'environnement standard via la chaîne AWS (credential_chain)
             self.s3_secret = "s3_credential_chain"
             self._s3_secret_sql = self._build_s3_credential_chain_sql(
                 self.s3_secret, region=s3_region, endpoint=s3_endpoint
@@ -400,7 +404,8 @@ class DuckLakeConnector:
         self._load_extensions(conn)
         self._apply_secret(conn)
 
-        # Création des répertoires parents manquants dans le cas d'un stockage en local (catalogue et données)
+        # Création des répertoires parents manquants pour un stockage local
+        # (catalogue et données)
         self._ensure_paths_exist()
 
         # Construction de la chaîne d'options ATTACH
@@ -519,7 +524,7 @@ class DuckLakeConnector:
         port: int | None = None,
         user: str | None = None,
         password: str | None = None,
-        create_db_if_missing: bool = True,
+        create_db_if_missing: bool = False,
         admin_dbname: str = "postgres",
         admin_user: str | None = None,
         admin_password: str | None = None,
@@ -577,7 +582,7 @@ class DuckLakeConnector:
                 Ignored when ``meta_secret`` is set, since credentials are
                 then managed out of band. Defaults to False.
             admin_dbname (str): Administrative database used to check for and
-                create ``dbname`` when ``create_if_missing`` is True (every
+                create ``dbname`` when ``create_db_if_missing`` is True (every
                 PostgreSQL server has one, since ``CREATE DATABASE`` cannot
                 target the database it runs from). Defaults to ``'postgres'``.
             admin_user (Optional[str]): PostgreSQL role used for the
@@ -648,14 +653,15 @@ class DuckLakeConnector:
             >>> # Nouveau catalogue, base cible créée automatiquement si absente
             >>> new_cat = DuckLakeConnector.from_postgres(
             ...     'data/', dbname='vulnerabilities', host='localhost',
-            ...     user='app', password='***', create_if_missing=True,
+            ...     user='app', password='***', create_db_if_missing=True,
             ... )
             >>> # Rôle applicatif sans CREATEDB : identifiants admin dédiés
             >>> # à la seule étape de création de la base
             >>> new_cat = DuckLakeConnector.from_postgres(
             ...     'data/', dbname='vulnerabilities', host='localhost',
-            ...     user='app', password='***',
-            ...     admin_user='postgres', admin_password=os.environ['PG_ADMIN_PASSWORD'],
+            ...     user='app', password='***', create_db_if_missing=True,
+            ...     admin_user='postgres',
+            ...     admin_password=os.environ['PG_ADMIN_PASSWORD'],
             ... )
         """
         # Création préalable de la base cible sur le serveur si demandée

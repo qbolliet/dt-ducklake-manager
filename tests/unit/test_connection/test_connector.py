@@ -8,6 +8,9 @@ from typing import Any
 # DuckDB
 import duckdb
 
+# PostgreSQL
+import psycopg2
+
 # Module de tests
 import pytest
 
@@ -396,6 +399,215 @@ def test_apply_secret_does_not_log_password(
     # ... mais ne doit jamais apparaître dans les logs ; seul le nom est journalisé.
     assert "sup3rs3cret" not in caplog.text
     assert "ducklake_pg_secret" in caplog.text
+
+
+# ---------------------------------------------------------------------------
+# Tests de création automatique de la base du catalogue (_ensure_database_exists)
+# ---------------------------------------------------------------------------
+
+
+# Curseur psycopg2 factice : enregistre les requêtes et simule le résultat de
+# la recherche dans pg_database
+class _FakePgCursor:
+    """Minimal psycopg2 cursor stand-in recording executed statements.
+
+    Args:
+        db_exists: Drives ``fetchone()`` after the ``pg_database`` lookup:
+            ``(1,)`` when the catalog database already exists, ``None`` otherwise.
+    """
+
+    def __init__(self, db_exists: bool) -> None:
+        self._db_exists = db_exists
+        self.executed: list[tuple[str, tuple[Any, ...] | None]] = []
+
+    def __enter__(self) -> "_FakePgCursor":
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        return None
+
+    def execute(self, sql: str, params: tuple[Any, ...] | None = None) -> None:
+        self.executed.append((sql, params))
+
+    def fetchone(self) -> tuple[int] | None:
+        return (1,) if self._db_exists else None
+
+
+# Connexion psycopg2 factice exposant le curseur enregistreur
+class _FakePgConn:
+    """Minimal psycopg2 connection stand-in wrapping a :class:`_FakePgCursor`."""
+
+    def __init__(self, cursor: "_FakePgCursor") -> None:
+        self._cursor = cursor
+        self.autocommit = False
+        self.closed = False
+
+    def cursor(self) -> "_FakePgCursor":
+        return self._cursor
+
+    def close(self) -> None:
+        self.closed = True
+
+
+# Test qu'aucune connexion admin n'est ouverte quand create_db_if_missing=False
+def test_from_postgres_no_admin_connection_when_flag_false(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Test that create_db_if_missing=False opens no administrative connection."""
+
+    # Toute tentative de connexion psycopg2 fait échouer le test
+    def _forbidden_connect(**kwargs: Any) -> None:
+        raise AssertionError(
+            "psycopg2.connect ne doit pas être appelé lorsque "
+            "create_db_if_missing est False"
+        )
+
+    monkeypatch.setattr(psycopg2, "connect", _forbidden_connect)
+
+    connector = DuckLakeConnector.from_postgres(
+        "data/",
+        dbname="ducklake",
+        host="localhost",
+        user="app",
+        password="secret",
+    )
+    assert connector.catalog_type == CatalogType.POSTGRES
+
+
+# Test que meta_secret désactive aussi la création de base (identifiants hors bande)
+def test_from_postgres_no_admin_connection_with_meta_secret(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Test that an external meta_secret suppresses the database-creation path."""
+
+    def _forbidden_connect(**kwargs: Any) -> None:
+        raise AssertionError("psycopg2.connect ne doit pas être appelé")
+
+    monkeypatch.setattr(psycopg2, "connect", _forbidden_connect)
+
+    DuckLakeConnector.from_postgres(
+        "data/",
+        dbname="ducklake",
+        meta_secret="external_secret",
+        create_db_if_missing=True,
+    )
+
+
+# Test que CREATE DATABASE n'est pas émis quand la base existe déjà
+def test_ensure_database_exists_skips_create_when_present(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Test that no CREATE DATABASE is issued when pg_database returns a row."""
+    cursor = _FakePgCursor(db_exists=True)
+    fake_conn = _FakePgConn(cursor)
+    captured: dict[str, Any] = {}
+
+    def _fake_connect(**kwargs: Any) -> _FakePgConn:
+        captured.update(kwargs)
+        return fake_conn
+
+    monkeypatch.setattr(psycopg2, "connect", _fake_connect)
+
+    DuckLakeConnector.from_postgres(
+        "data/",
+        dbname="ducklake",
+        host="localhost",
+        user="app",
+        password="secret",
+        create_db_if_missing=True,
+    )
+
+    statements = [sql for sql, _ in cursor.executed]
+    # La connexion cible la base d'administration en autocommit
+    assert captured["dbname"] == "postgres"
+    assert fake_conn.autocommit is True
+    # L'existence est vérifiée mais aucune création n'est déclenchée
+    assert any("pg_database" in sql for sql in statements)
+    assert not any("CREATE DATABASE" in sql for sql in statements)
+    assert fake_conn.closed is True
+
+
+# Test que CREATE DATABASE est émis, avec le bon OWNER, quand la base est absente
+def test_ensure_database_exists_creates_with_owner_when_absent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Test that an absent database triggers CREATE DATABASE ... OWNER <user>."""
+    cursor = _FakePgCursor(db_exists=False)
+    fake_conn = _FakePgConn(cursor)
+
+    monkeypatch.setattr(psycopg2, "connect", lambda **kwargs: fake_conn)
+
+    DuckLakeConnector.from_postgres(
+        "data/",
+        dbname="vulnerabilities",
+        host="localhost",
+        user="app",
+        password="secret",
+        create_db_if_missing=True,
+    )
+
+    create_statements = [sql for sql, _ in cursor.executed if "CREATE DATABASE" in sql]
+    # Le propriétaire est le rôle applicatif (user), pas le rôle de connexion
+    assert create_statements == ['CREATE DATABASE "vulnerabilities" OWNER "app";']
+
+
+# Test que les identifiants admin dédiés servent la connexion de création
+def test_ensure_database_exists_uses_admin_credentials(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Test that admin_user/admin_password drive the check-then-create connection."""
+    cursor = _FakePgCursor(db_exists=False)
+    fake_conn = _FakePgConn(cursor)
+    captured: dict[str, Any] = {}
+
+    def _fake_connect(**kwargs: Any) -> _FakePgConn:
+        captured.update(kwargs)
+        return fake_conn
+
+    monkeypatch.setattr(psycopg2, "connect", _fake_connect)
+
+    DuckLakeConnector.from_postgres(
+        "data/",
+        dbname="vulnerabilities",
+        host="localhost",
+        user="app",
+        password="secret",
+        create_db_if_missing=True,
+        admin_user="postgres",
+        admin_password="admin_pw",
+    )
+
+    # Connexion ouverte avec le rôle privilégié...
+    assert captured["user"] == "postgres"
+    assert captured["password"] == "admin_pw"
+    # ... mais la base reste possédée par le rôle applicatif
+    create_statements = [sql for sql, _ in cursor.executed if "CREATE DATABASE" in sql]
+    assert create_statements == ['CREATE DATABASE "vulnerabilities" OWNER "app";']
+
+
+# Test que les paramètres None sont omis (repli sur les variables libpq)
+def test_ensure_database_exists_omits_none_params(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Test that None connection fields are dropped so libpq env vars apply."""
+    cursor = _FakePgCursor(db_exists=True)
+    fake_conn = _FakePgConn(cursor)
+    captured: dict[str, Any] = {}
+
+    def _fake_connect(**kwargs: Any) -> _FakePgConn:
+        captured.update(kwargs)
+        return fake_conn
+
+    monkeypatch.setattr(psycopg2, "connect", _fake_connect)
+
+    DuckLakeConnector.from_postgres(
+        "data/",
+        dbname="ducklake",
+        create_db_if_missing=True,
+    )
+
+    # Seule la base d'administration est transmise ; host/port/user/password omis
+    assert captured == {"dbname": "postgres"}
 
 
 # ---------------------------------------------------------------------------
