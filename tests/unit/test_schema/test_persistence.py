@@ -78,6 +78,15 @@ def test_ducklake_builder_initialization(sample_df: pl.DataFrame) -> None:
         builder2 = DuckLakeTablesBuilder(sample_df, connection=conn)
         assert builder2.conn is conn
 
+        # Alias du catalogue : défaut 'db' et valeur explicite conservée au même
+        # titre que le schéma
+        assert DuckLakeTablesBuilder(sample_df).catalog_alias == "db"
+        builder3 = DuckLakeTablesBuilder(
+            sample_df, schema="predictions", catalog_alias="my_lake"
+        )
+        assert builder3.catalog_alias == "my_lake"
+        assert builder3.schema == "predictions"
+
 
 # ---------------------------------------------------------------------------
 # Tests de create_duckdb_metadata_table()

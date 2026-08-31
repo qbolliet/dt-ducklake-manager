@@ -42,6 +42,7 @@ class DataManager(BaseSchemaManager):
         log_filename: str | os.PathLike[str] | None = None,
         batch_size: int = 10000,
         schema: str = "main",
+        catalog_alias: str = "db",
     ):
         """
         Initialize the data manager.
@@ -55,6 +56,8 @@ class DataManager(BaseSchemaManager):
             batch_size: Size of batches for processing large datasets.
             schema: DuckLake schema holding the fact table to operate on. Defaults
                 to ``'main'``.
+            catalog_alias: Alias of the attached DuckLake catalog, carried
+                alongside ``schema``. Defaults to ``'db'``.
 
         Example:
             >>> conn = DuckLakeConnector('catalog.ducklake', 'data/').connect()
@@ -67,6 +70,7 @@ class DataManager(BaseSchemaManager):
             categorical_threshold=categorical_threshold,
             log_filename=log_filename,
             schema=schema,
+            catalog_alias=catalog_alias,
         )
 
         # Configuration pour le traitement par lots

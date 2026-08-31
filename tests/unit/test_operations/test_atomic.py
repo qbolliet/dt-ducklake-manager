@@ -180,6 +180,39 @@ def test_atomic_operations_initialization(atomic_ops: Any) -> None:
     assert atomic_ops is not None
 
 
+# Test que catalog_alias est propagé à tous les gestionnaires sous-jacents
+def test_atomic_operations_propagates_catalog_alias(
+    built_ducklake_schema: Any,
+) -> None:
+    """Test that ``catalog_alias`` reaches every underlying manager.
+
+    Args:
+        built_ducklake_schema: Fixture providing a DuckDB connection with a built
+        schema.
+    """
+    atomic_ops = AtomicDatabaseOperations(
+        connection=built_ducklake_schema, catalog_alias="my_lake"
+    )
+    assert atomic_ops.catalog_alias == "my_lake"
+    assert atomic_ops.transaction_mgr.catalog_alias == "my_lake"
+    assert atomic_ops.updater.catalog_alias == "my_lake"
+    assert atomic_ops.deleter.catalog_alias == "my_lake"
+    assert atomic_ops.recovery_mgr.catalog_alias == "my_lake"
+    assert atomic_ops.auditor.catalog_alias == "my_lake"
+
+
+# Test que catalog_alias vaut 'db' par défaut
+def test_atomic_operations_default_catalog_alias(built_ducklake_schema: Any) -> None:
+    """Test that ``catalog_alias`` defaults to 'db'.
+
+    Args:
+        built_ducklake_schema: Fixture providing a DuckDB connection with a built
+        schema.
+    """
+    atomic_ops = AtomicDatabaseOperations(connection=built_ducklake_schema)
+    assert atomic_ops.catalog_alias == "db"
+
+
 # Test de get_operation_status
 def test_get_operation_status_returns_dict(atomic_ops: Any) -> None:
     """Test that get_operation_status returns a dict with expected structure.

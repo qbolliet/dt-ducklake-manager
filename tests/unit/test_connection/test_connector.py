@@ -193,6 +193,68 @@ def test_attach_on_existing_connection(ducklake_paths: tuple[str, str]) -> None:
     existing_conn.close()
 
 
+# Test que attach(activate_schema=True) active bien le catalogue cible
+def test_attach_activate_schema_true_activates_catalog(
+    ducklake_paths: tuple[str, str],
+) -> None:
+    """Test that attach() with the default ``activate_schema=True`` runs the ``USE``.
+
+    Args:
+        ducklake_paths: Fixture providing (catalog_path, data_path).
+    """
+    catalog, data_dir = ducklake_paths
+    conn = duckdb.connect(":memory:")
+    conn.execute("INSTALL ducklake; LOAD ducklake;")
+
+    DuckLakeConnector(catalog, data_dir, catalog_alias="lake_a").attach(conn)
+
+    # Le USE {alias}.{schema} a fait du catalogue attaché le catalogue courant
+    current = conn.execute("SELECT current_catalog()").fetchone()
+    assert current is not None
+    assert current[0] == "lake_a"
+    conn.close()
+
+
+# Test qu'attach(activate_schema=False) ne vole pas le catalogue courant
+def test_attach_activate_schema_false_keeps_current_catalog(tmp_path: Path) -> None:
+    """Test that attach(activate_schema=False) does not steal the current catalog.
+
+    Attaching a *secondary* catalog to a connection must not change the session's
+    current catalog: the ``USE`` normally issued for the target schema is skipped.
+
+    Args:
+        tmp_path: pytest temporary directory.
+    """
+    # Deux catalogues DuckLake distincts
+    cat1 = str(tmp_path / "primary.ducklake")
+    data1 = str(tmp_path / "data1")
+    cat2 = str(tmp_path / "secondary.ducklake")
+    data2 = str(tmp_path / "data2")
+    os.makedirs(data1)
+    os.makedirs(data2)
+
+    conn = duckdb.connect(":memory:")
+    conn.execute("INSTALL ducklake; LOAD ducklake;")
+
+    # Premier catalogue : attaché normalement, devient le catalogue courant
+    DuckLakeConnector(cat1, data1, catalog_alias="lake_a").attach(conn)
+    before = conn.execute("SELECT current_catalog()").fetchone()
+    assert before is not None and before[0] == "lake_a"
+
+    # Second catalogue : attaché sans activation, le catalogue courant est préservé
+    DuckLakeConnector(cat2, data2, catalog_alias="lake_b").attach(
+        conn, activate_schema=False
+    )
+    after = conn.execute("SELECT current_catalog()").fetchone()
+    assert after is not None and after[0] == "lake_a"
+
+    # Le second catalogue reste néanmoins attaché et interrogeable via son alias
+    rows = conn.execute("SELECT database_name FROM duckdb_databases()").fetchall()
+    databases = [row[0] for row in rows]
+    assert "lake_b" in databases
+    conn.close()
+
+
 # ---------------------------------------------------------------------------
 # Tests de _build_attach_sql()
 # ---------------------------------------------------------------------------

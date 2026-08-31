@@ -42,7 +42,7 @@ class DatabaseDeleter(BaseSchemaManager):
         auditor (DatabaseAuditor): Validates database state and operations
         enable_validation (bool): Whether to enable validation
         auto_cleanup (bool): Whether to automatically clean up orphaned data
-        ducklake_catalog_alias (str): Alias of the attached DuckLake catalog
+        catalog_alias (str): Alias of the attached DuckLake catalog
         schema (str): DuckLake schema name
     """
 
@@ -54,7 +54,7 @@ class DatabaseDeleter(BaseSchemaManager):
         log_filename: str | os.PathLike[str] | None = None,
         enable_validation: bool = True,
         auto_cleanup: bool = True,
-        ducklake_catalog_alias: str = "db",
+        catalog_alias: str = "db",
         schema: str = "main",
     ):
         """
@@ -68,7 +68,7 @@ class DatabaseDeleter(BaseSchemaManager):
             log_filename: Path to log file.
             enable_validation: Whether to enable pre/post operation validation.
             auto_cleanup: Whether to automatically clean up orphaned data.
-            ducklake_catalog_alias: Alias used in the DuckLake ATTACH statement.
+            catalog_alias: Alias used in the DuckLake ATTACH statement.
                 Defaults to ``'db'``.
             schema: DuckLake schema to delete from. A single catalog can host several
                 schemas; all tables are qualified by this one, and compaction calls
@@ -86,6 +86,7 @@ class DatabaseDeleter(BaseSchemaManager):
             categorical_threshold=categorical_threshold,
             log_filename=log_filename,
             schema=schema,
+            catalog_alias=catalog_alias,
         )
 
         # Initialisation des gestionnaires spécialisés
@@ -94,6 +95,7 @@ class DatabaseDeleter(BaseSchemaManager):
             categorical_threshold=categorical_threshold,
             log_filename=log_filename,
             schema=schema,
+            catalog_alias=catalog_alias,
         )
 
         self.data_mgr = DataManager(
@@ -101,13 +103,14 @@ class DatabaseDeleter(BaseSchemaManager):
             categorical_threshold=categorical_threshold,
             log_filename=log_filename,
             schema=schema,
+            catalog_alias=catalog_alias,
         )
 
         self.transaction_mgr = TransactionManager(
             connection=connection,
             categorical_threshold=categorical_threshold,
             log_filename=log_filename,
-            ducklake_catalog_alias=ducklake_catalog_alias,
+            catalog_alias=catalog_alias,
             schema=schema,
         )
 
@@ -117,6 +120,7 @@ class DatabaseDeleter(BaseSchemaManager):
                 categorical_threshold=categorical_threshold,
                 log_filename=log_filename,
                 schema=schema,
+                catalog_alias=catalog_alias,
             )
             if enable_validation
             else None
@@ -126,9 +130,9 @@ class DatabaseDeleter(BaseSchemaManager):
         self.enable_validation = enable_validation
         self.auto_cleanup = auto_cleanup
 
-        # Configuration DuckLake pour les appels de compaction.
-        # L'alias du catalogue ; le schéma est porté par self.schema (classe de base).
-        self.ducklake_catalog_alias = ducklake_catalog_alias
+        # Configuration DuckLake pour les appels de compaction :
+        # l'alias du catalogue (self.catalog_alias) et le schéma (self.schema) sont
+        # tous deux portés par la classe de base BaseSchemaManager.
 
     # Méthode de validation de l'opération de suppression avant son exécution
     def validate_operation(self, operation_type: str, **kwargs: Any) -> bool:
@@ -399,7 +403,7 @@ class DatabaseDeleter(BaseSchemaManager):
             >>> deleter._run_ducklake_compaction('my_fact_table')
         """
         # Extraction des alias et du schéma
-        alias = self.ducklake_catalog_alias
+        alias = self.catalog_alias
         schema = self.schema
         try:
             # Fusion des petits fichiers delta adjacents

@@ -31,6 +31,9 @@ class DuckLakeMaintenance:
         conn (duckdb.DuckDBPyConnection): DuckDB connection with the DuckLake catalog
             already attached.
         catalog_alias (str): Alias used in the ``ATTACH`` statement (default ``'db'``).
+        schema (str): DuckLake schema this maintenance instance is associated with,
+            carried alongside ``catalog_alias`` so the catalog alias and the schema
+            always travel together (parity with the other schema-aware managers).
         logger (logging.Logger): Logger instance.
 
     Examples:
@@ -39,6 +42,8 @@ class DuckLakeMaintenance:
         >>> conn = DuckLakeConnector('catalog.ducklake', 'data/').connect()
         >>> maint = DuckLakeMaintenance(conn)
         >>> maint.full_maintenance('main', 'fact_table')
+        >>> # Instance liée à un schéma dédié du même catalogue
+        >>> maint = DuckLakeMaintenance(conn, schema='predictions')
     """
 
     # Initialisation
@@ -46,6 +51,7 @@ class DuckLakeMaintenance:
         self,
         connection: duckdb.DuckDBPyConnection,
         catalog_alias: str = "db",
+        schema: str = "main",
         log_filename: str | os.PathLike[str] | None = os.path.join(
             FILE_PATH.parents[2], "logs/ducklake_maintenance.log"
         ),
@@ -59,15 +65,20 @@ class DuckLakeMaintenance:
                 via ``DuckLakeConnector.connect()`` or equivalent.
             catalog_alias (str): Alias used in the ``ATTACH`` statement. Must match
                 the alias passed to ``DuckLakeConnector``. Defaults to ``'db'``.
+            schema (str): DuckLake schema this instance is associated with, carried
+                alongside ``catalog_alias`` so the catalog alias and the schema
+                always travel together. Defaults to ``'main'``.
             log_filename (Optional[os.PathLike]): Path to the log file.
 
         Examples:
             >>> maint = DuckLakeMaintenance(conn)
             >>> maint = DuckLakeMaintenance(conn, catalog_alias='my_lake')
+            >>> maint = DuckLakeMaintenance(conn, schema='predictions')
         """
-        # Stockage de la connexion et de l'alias du catalogue
+        # Stockage de la connexion, de l'alias du catalogue et du schéma associé
         self.conn = connection
         self.catalog_alias = catalog_alias
+        self.schema = schema
 
         # Initialisation du logger
         if log_filename is None:

@@ -34,6 +34,9 @@ class BaseSchemaManager(ABC):
         conn (duckdb.DuckDBPyConnection): Database connection
         categorical_threshold (int): Threshold for categorical determination
         schema (str): DuckLake schema holding this result set's tables
+        catalog_alias (str): Alias of the attached DuckLake catalog (``ATTACH ...
+            AS <alias>``), carried alongside ``schema`` so table references can be
+            fully qualified by the catalog.
         logger: Logger instance for operation tracking
     """
 
@@ -44,6 +47,7 @@ class BaseSchemaManager(ABC):
         categorical_threshold: int | None = 50,
         log_filename: str | os.PathLike[str] | None = None,
         schema: str = "main",
+        catalog_alias: str = "db",
     ):
         """
         Initialize the base schema manager.
@@ -57,6 +61,11 @@ class BaseSchemaManager(ABC):
             schema: DuckLake schema holding the ``fact_table``, ``metadata`` and
                 ``dim_*`` tables to operate on. A single catalog can host several
                 schemas (one per result set). Defaults to ``'main'``.
+            catalog_alias: Alias of the attached DuckLake catalog, matching the
+                one passed to ``DuckLakeConnector`` (``ATTACH ... AS <alias>``).
+                Carried alongside ``schema`` so that table references can be
+                qualified by the catalog rather than resolved against the
+                connection's current catalog. Defaults to ``'db'``.
 
         Example:
             >>> conn = DuckLakeConnector('catalog.ducklake', 'data/').connect()
@@ -76,6 +85,11 @@ class BaseSchemaManager(ABC):
         # schéma, permettant à plusieurs jeux de résultats de coexister dans un même
         # catalogue.
         self.schema = schema
+
+        # Alias du catalogue DuckLake attaché : conservé au même titre que le schéma
+        # afin de pouvoir qualifier les tables par le catalogue (indispensable dès
+        # que plusieurs catalogues sont attachés à la même connexion).
+        self.catalog_alias = catalog_alias
 
         # Initialisation du logger pour traçabilité des opérations
         if log_filename is None:

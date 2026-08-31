@@ -45,6 +45,8 @@ class DuckLakeTablesBuilder:
         schema_builder (SchemaBuilder): Instance used for schema inference.
         conn (duckdb.DuckDBPyConnection): DuckLake-attached DuckDB connection.
         schema (str): DuckLake schema into which the tables are written.
+        catalog_alias (str): Alias of the attached DuckLake catalog, carried
+            alongside ``schema``.
         logger (logging.Logger): Logger shared with the SchemaBuilder.
 
     Examples:
@@ -65,6 +67,7 @@ class DuckLakeTablesBuilder:
         primary_keys: list[str] | None = None,
         connection: duckdb.DuckDBPyConnection | None = None,
         schema: str = "main",
+        catalog_alias: str = "db",
         log_filename: str | os.PathLike[str] | None = os.path.join(
             FILE_PATH.parents[2], "logs/ducklake_tables_builder.log"
         ),
@@ -86,6 +89,10 @@ class DuckLakeTablesBuilder:
             schema (str): DuckLake schema into which the metadata, dimension and fact
                 tables are written. A single catalog can host several schemas.
                 Defaults to ``'main'``.
+            catalog_alias (str): Alias of the attached DuckLake catalog, matching
+                the one passed to ``DuckLakeConnector``. Carried alongside
+                ``schema`` so table references can be qualified by the catalog.
+                Defaults to ``'db'``.
             log_filename (Optional[os.PathLike]): Path to the log file.
 
         Examples:
@@ -117,6 +124,10 @@ class DuckLakeTablesBuilder:
         # Schéma DuckLake cible : les tables sont qualifiées par ce schéma, permettant
         # à plusieurs jeux de résultats de coexister dans un même catalogue.
         self.schema = schema
+
+        # Alias du catalogue DuckLake attaché : conservé au même titre que le schéma,
+        # afin de pouvoir qualifier les tables par le catalogue.
+        self.catalog_alias = catalog_alias
 
     # Méthode de création de la table des méta-données
     def create_duckdb_metadata_table(

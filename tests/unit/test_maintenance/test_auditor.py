@@ -270,6 +270,22 @@ def test_database_auditor_initialization_with_connection(
     assert auditor is not None
 
 
+# Test que l'alias du catalogue est conservé au même titre que le schéma
+def test_database_auditor_catalog_alias(built_ducklake_schema: Any) -> None:
+    """Test that ``catalog_alias`` defaults to 'db' and is stored when provided.
+
+    Args:
+        built_ducklake_schema: Fixture providing a DuckDB connection with a built
+        schema.
+    """
+    assert DatabaseAuditor(connection=built_ducklake_schema).catalog_alias == "db"
+    custom = DatabaseAuditor(
+        connection=built_ducklake_schema, schema="predictions", catalog_alias="my_lake"
+    )
+    assert custom.catalog_alias == "my_lake"
+    assert custom.schema == "predictions"
+
+
 # Test de validate_database au niveau BASIC
 def test_validate_database_basic_level(built_ducklake_schema: Any) -> None:
     """Test that validate_database with BASIC level returns a ValidationReport.

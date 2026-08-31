@@ -104,7 +104,7 @@ class TransactionManager(BaseSchemaManager):
     Attributes:
         transaction_timeout (int): Maximum batch duration in seconds before automatic
             rollback is triggered.
-        ducklake_catalog_alias (str): Alias of the DuckLake catalog used to capture
+        catalog_alias (str): Alias of the DuckLake catalog used to capture
             the pre-operation snapshot version.
         schema (str): DuckLake schema name used to capture the snapshot.
     """
@@ -116,7 +116,7 @@ class TransactionManager(BaseSchemaManager):
         categorical_threshold: int | None = 50,
         log_filename: str | os.PathLike[str] | None = None,
         transaction_timeout: int = 300,
-        ducklake_catalog_alias: str = "db",
+        catalog_alias: str = "db",
         schema: str = "main",
     ):
         """
@@ -130,7 +130,7 @@ class TransactionManager(BaseSchemaManager):
             log_filename: Path to log file.
             transaction_timeout: Maximum batch duration in seconds before automatic
                 rollback is triggered. Defaults to 300.
-            ducklake_catalog_alias: Alias of the DuckLake catalog used to capture
+            catalog_alias: Alias of the DuckLake catalog used to capture
                 the pre-operation snapshot version. Defaults to ``'db'``.
             schema: DuckLake schema name used to capture the snapshot and to qualify
                 the result set's tables. Defaults to ``'main'``.
@@ -145,11 +145,11 @@ class TransactionManager(BaseSchemaManager):
             categorical_threshold=categorical_threshold,
             log_filename=log_filename,
             schema=schema,
+            catalog_alias=catalog_alias,
         )
 
         # Configuration du gestionnaire de batches
         self.transaction_timeout = transaction_timeout
-        self.ducklake_catalog_alias = ducklake_catalog_alias
 
         # Gestion des contextes de transaction applicatifs
         self._active_transactions: dict[str, TransactionContext] = {}
@@ -259,7 +259,7 @@ class TransactionManager(BaseSchemaManager):
             pre_snapshot: int | None = None
             try:
                 result = self.conn.execute(
-                    f"SELECT MAX(snapshot_id) FROM {self.ducklake_catalog_alias}"
+                    f"SELECT MAX(snapshot_id) FROM {self.catalog_alias}"
                     f".ducklake_snapshots('{self.schema}')"
                 ).fetchone()
                 pre_snapshot = result[0] if result else None

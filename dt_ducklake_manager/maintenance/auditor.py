@@ -191,6 +191,8 @@ class DatabaseAuditor:
         conn (duckdb.DuckDBPyConnection): Database connection
         categorical_threshold (int): Threshold for categorical determination
         schema (str): DuckLake schema audited by this instance
+        catalog_alias (str): Alias of the attached DuckLake catalog, carried
+            alongside ``schema``.
         logger: Logger instance for audit tracking
     """
 
@@ -201,6 +203,7 @@ class DatabaseAuditor:
         categorical_threshold: int | None = 50,
         log_filename: str | os.PathLike[str] | None = None,
         schema: str = "main",
+        catalog_alias: str = "db",
     ):
         """
         Initialize the database auditor.
@@ -213,6 +216,9 @@ class DatabaseAuditor:
             log_filename: Path to log file.
             schema: DuckLake schema to audit. A catalog can host several schemas;
                 each is audited independently. Defaults to ``'main'``.
+            catalog_alias: Alias of the attached DuckLake catalog, matching the one
+                passed to ``DuckLakeConnector``. Carried alongside ``schema``.
+                Defaults to ``'db'``.
 
         Example:
             >>> conn = DuckLakeConnector('catalog.ducklake', 'data/').connect()
@@ -230,6 +236,9 @@ class DatabaseAuditor:
         # Schéma DuckLake audité : toutes les requêtes qualifient les tables par ce
         # schéma pour cibler le bon jeu de résultats dans le catalogue.
         self.schema = schema
+
+        # Alias du catalogue DuckLake attaché : conservé au même titre que le schéma.
+        self.catalog_alias = catalog_alias
 
         # Initialisation du logger pour traçabilité des audits
         if log_filename is None:

@@ -51,6 +51,15 @@ def test_dimension_manager_initialization(built_ducklake_schema: Any) -> None:
     assert mgr.categorical_threshold == 10
     assert mgr.max_workers == 2
 
+    # Alias du catalogue : défaut 'db', valeur explicite conservée
+    assert mgr.catalog_alias == "db"
+    assert (
+        DimensionManager(
+            connection=built_ducklake_schema, catalog_alias="my_lake"
+        ).catalog_alias
+        == "my_lake"
+    )
+
 
 # ---------------------------------------------------------------------------
 # Tests de validate_operation()

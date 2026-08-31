@@ -40,6 +40,40 @@ def test_updater_initialization_without_validation(built_ducklake_schema: Any) -
     assert updater.auditor is None
 
 
+# Test que catalog_alias est propagé à tous les sous-gestionnaires
+def test_updater_propagates_catalog_alias(built_ducklake_schema: Any) -> None:
+    """Test that ``catalog_alias`` reaches every specialized sub-manager.
+
+    Args:
+        built_ducklake_schema: Fixture providing a DuckDB connection with a built
+        schema.
+    """
+    updater = DatabaseUpdater(
+        connection=built_ducklake_schema,
+        catalog_alias="my_lake",
+        schema="predictions",
+    )
+    assert updater.catalog_alias == "my_lake"
+    assert updater.dimension_mgr.catalog_alias == "my_lake"
+    assert updater.data_mgr.catalog_alias == "my_lake"
+    assert updater.transaction_mgr.catalog_alias == "my_lake"
+    assert updater.auditor is not None
+    assert updater.auditor.catalog_alias == "my_lake"
+
+
+# Test que catalog_alias vaut 'db' par défaut
+def test_updater_default_catalog_alias(built_ducklake_schema: Any) -> None:
+    """Test that ``catalog_alias`` defaults to 'db'.
+
+    Args:
+        built_ducklake_schema: Fixture providing a DuckDB connection with a built
+        schema.
+    """
+    updater = DatabaseUpdater(connection=built_ducklake_schema)
+    assert updater.catalog_alias == "db"
+    assert updater.transaction_mgr.catalog_alias == "db"
+
+
 # ---------------------------------------------------------------------------
 # Tests de validate_operation()
 # ---------------------------------------------------------------------------

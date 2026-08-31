@@ -134,6 +134,7 @@ class AtomicDatabaseOperations:
         default_batch_size: int = 10000,
         default_max_workers: int = 4,
         schema: str = "main",
+        catalog_alias: str = "db",
     ):
         """
         Initialize the atomic operations manager.
@@ -149,6 +150,8 @@ class AtomicDatabaseOperations:
             default_max_workers: Default number of parallel workers.
             schema: DuckLake schema targeted by all atomic operations. A single
                 catalog can host several schemas. Defaults to ``'main'``.
+            catalog_alias: Alias of the attached DuckLake catalog, propagated to
+                every underlying manager alongside ``schema``. Defaults to ``'db'``.
 
         Example:
             >>> conn = DuckLakeConnector('catalog.ducklake', 'data/').connect()
@@ -164,6 +167,10 @@ class AtomicDatabaseOperations:
         # Schéma DuckLake cible des opérations atomiques
         self.schema = schema
 
+        # Alias du catalogue DuckLake attaché : propagé à chaque gestionnaire
+        # sous-jacent au même titre que le schéma.
+        self.catalog_alias = catalog_alias
+
         # Initialisation du logger
         if log_filename is None:
             log_filename = os.path.join(
@@ -177,6 +184,7 @@ class AtomicDatabaseOperations:
             categorical_threshold=categorical_threshold,
             log_filename=log_filename,
             schema=schema,
+            catalog_alias=catalog_alias,
         )
 
         self.updater = DatabaseUpdater(
@@ -187,6 +195,7 @@ class AtomicDatabaseOperations:
             batch_size=default_batch_size,
             enable_validation=True,
             schema=schema,
+            catalog_alias=catalog_alias,
         )
 
         self.deleter = DatabaseDeleter(
@@ -196,14 +205,24 @@ class AtomicDatabaseOperations:
             enable_validation=True,
             auto_cleanup=True,
             schema=schema,
+            catalog_alias=catalog_alias,
         )
 
         self.recovery_mgr = DatabaseRecoveryManager(
-            connection, backup_dir, categorical_threshold, log_filename, schema=schema
+            connection,
+            backup_dir,
+            categorical_threshold,
+            log_filename,
+            schema=schema,
+            catalog_alias=catalog_alias,
         )
 
         self.auditor = DatabaseAuditor(
-            connection, categorical_threshold, log_filename, schema=schema
+            connection,
+            categorical_threshold,
+            log_filename,
+            schema=schema,
+            catalog_alias=catalog_alias,
         )
 
         # Configuration par défaut

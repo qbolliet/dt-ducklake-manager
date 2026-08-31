@@ -88,6 +88,15 @@ def test_data_manager_initialization(built_ducklake_schema: Any) -> None:
     assert mgr is not None
     assert mgr.batch_size == 500
 
+    # Alias du catalogue : défaut 'db', valeur explicite conservée
+    assert mgr.catalog_alias == "db"
+    assert (
+        DataManager(
+            connection=built_ducklake_schema, catalog_alias="my_lake"
+        ).catalog_alias
+        == "my_lake"
+    )
+
 
 # ---------------------------------------------------------------------------
 # Tests de validate_operation()

@@ -190,7 +190,11 @@ class DatabaseRecoveryManager:
 
         # Initialisation des composants
         self.auditor = DatabaseAuditor(
-            connection, categorical_threshold, log_filename, schema=schema
+            connection,
+            categorical_threshold,
+            log_filename,
+            schema=schema,
+            catalog_alias=catalog_alias,
         )
 
         # Initialisation du logger
@@ -902,7 +906,10 @@ class DatabaseRecoveryManager:
                     # création/mise à jour de la table de dimension.
                     # update_dimension_values crée la table si elle n'existe pas encore.
                     dim_mgr = DimensionManager(
-                        self.conn, self.categorical_threshold, schema=self.schema
+                        self.conn,
+                        self.categorical_threshold,
+                        schema=self.schema,
+                        catalog_alias=self.catalog_alias,
                     )
                     fact_table = self._qualified("fact_table")
                     values_pl = self.conn.execute(
@@ -992,7 +999,10 @@ class DatabaseRecoveryManager:
             # Reconstruction des tables de dimension corrompues
             # Initialisation du gestionnaire des dimensions
             dim_mgr = DimensionManager(
-                self.conn, self.categorical_threshold, schema=self.schema
+                self.conn,
+                self.categorical_threshold,
+                schema=self.schema,
+                catalog_alias=self.catalog_alias,
             )
 
             # Étape 1: Nettoyage des entrées orphelines
@@ -1094,6 +1104,7 @@ class DatabaseRecoveryManager:
                 enable_validation=False,
                 auto_cleanup=True,
                 schema=self.schema,
+                catalog_alias=self.catalog_alias,
             )
             # Nettoyage de la base de données
             cleanup_results = deleter.cleanup_database(comprehensive=True)
@@ -1691,7 +1702,10 @@ class DatabaseRecoveryManager:
             dim_table = self._qualified(dim_name)
             fact_table = self._qualified("fact_table")
             dim_mgr = DimensionManager(
-                self.conn, self.categorical_threshold, schema=self.schema
+                self.conn,
+                self.categorical_threshold,
+                schema=self.schema,
+                catalog_alias=self.catalog_alias,
             )
 
             # Cas 1: Table de dimension manquante → création

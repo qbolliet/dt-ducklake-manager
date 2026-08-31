@@ -38,6 +38,7 @@ class DimensionManager(BaseSchemaManager):
         log_filename: str | os.PathLike[str] | None = None,
         max_workers: int = 4,
         schema: str = "main",
+        catalog_alias: str = "db",
     ):
         """
         Initialize the dimension manager.
@@ -51,6 +52,8 @@ class DimensionManager(BaseSchemaManager):
             max_workers: Maximum number of parallel workers.
             schema: DuckLake schema holding the dimension and fact tables. Defaults
                 to ``'main'``.
+            catalog_alias: Alias of the attached DuckLake catalog, carried
+                alongside ``schema``. Defaults to ``'db'``.
 
         Example:
             >>> conn = DuckLakeConnector('catalog.ducklake', 'data/').connect()
@@ -63,6 +66,7 @@ class DimensionManager(BaseSchemaManager):
             categorical_threshold=categorical_threshold,
             log_filename=log_filename,
             schema=schema,
+            catalog_alias=catalog_alias,
         )
 
         # Configuration pour le traitement parallèle

@@ -54,7 +54,7 @@ class DatabaseUpdater(BaseSchemaManager):
         max_workers: int = 4,
         batch_size: int = 10000,
         enable_validation: bool = True,
-        ducklake_catalog_alias: str = "db",
+        catalog_alias: str = "db",
         schema: str = "main",
     ):
         """
@@ -69,7 +69,7 @@ class DatabaseUpdater(BaseSchemaManager):
             max_workers: Maximum number of parallel workers.
             batch_size: Size of batches for processing.
             enable_validation: Whether to enable pre/post operation validation.
-            ducklake_catalog_alias: Alias used in the DuckLake ATTACH statement.
+            catalog_alias: Alias used in the DuckLake ATTACH statement.
                 Passed to maintenance and snapshot calls. Defaults to ``'db'``.
             schema: DuckLake schema to update. A single catalog can host several
                 schemas; all tables are qualified by this one, and maintenance and
@@ -86,6 +86,7 @@ class DatabaseUpdater(BaseSchemaManager):
             categorical_threshold=categorical_threshold,
             log_filename=log_filename,
             schema=schema,
+            catalog_alias=catalog_alias,
         )
 
         # Initialisation des gestionnaires spécialisés
@@ -95,6 +96,7 @@ class DatabaseUpdater(BaseSchemaManager):
             log_filename=log_filename,
             max_workers=max_workers,
             schema=schema,
+            catalog_alias=catalog_alias,
         )
 
         self.data_mgr = DataManager(
@@ -103,13 +105,14 @@ class DatabaseUpdater(BaseSchemaManager):
             log_filename=log_filename,
             batch_size=batch_size,
             schema=schema,
+            catalog_alias=catalog_alias,
         )
 
         self.transaction_mgr = TransactionManager(
             connection=connection,
             categorical_threshold=categorical_threshold,
             log_filename=log_filename,
-            ducklake_catalog_alias=ducklake_catalog_alias,
+            catalog_alias=catalog_alias,
             schema=schema,
         )
 
@@ -119,6 +122,7 @@ class DatabaseUpdater(BaseSchemaManager):
                 categorical_threshold=categorical_threshold,
                 log_filename=log_filename,
                 schema=schema,
+                catalog_alias=catalog_alias,
             )
             if enable_validation
             else None
@@ -129,9 +133,9 @@ class DatabaseUpdater(BaseSchemaManager):
         self.batch_size = batch_size
         self.enable_validation = enable_validation
 
-        # Configuration DuckLake pour les appels de maintenance (compaction).
-        # L'alias du catalogue ; le schéma est porté par self.schema (classe de base).
-        self.ducklake_catalog_alias = ducklake_catalog_alias
+        # Configuration DuckLake pour les appels de maintenance (compaction) :
+        # l'alias du catalogue (self.catalog_alias) et le schéma (self.schema) sont
+        # tous deux portés par la classe de base BaseSchemaManager.
 
     # Méthode de validation d'une opération
     def validate_operation(self, operation_type: str, **kwargs: Any) -> bool:
@@ -922,7 +926,7 @@ class DatabaseUpdater(BaseSchemaManager):
         maintain optimal read performance. Failures are non-fatal: a warning is
         logged and execution continues normally.
 
-        The catalog alias and schema are read from ``self.ducklake_catalog_alias``
+        The catalog alias and schema are read from ``self.catalog_alias``
         and ``self.schema``, which can be set at construction time.
 
         Args:
@@ -933,7 +937,7 @@ class DatabaseUpdater(BaseSchemaManager):
             >>> updater._run_ducklake_compaction('my_fact_table')
         """
         # Extraction des alias et du schéma
-        alias = self.ducklake_catalog_alias
+        alias = self.catalog_alias
         schema = self.schema
         try:
             # Fusion des petits fichiers delta adjacents

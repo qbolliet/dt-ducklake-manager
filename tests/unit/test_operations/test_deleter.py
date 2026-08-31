@@ -36,6 +36,37 @@ def test_deleter_initialization_without_validation(built_ducklake_schema: Any) -
     assert deleter.enable_validation is False
 
 
+# Test que catalog_alias est propagé aux sous-gestionnaires
+def test_deleter_propagates_catalog_alias(built_ducklake_schema: Any) -> None:
+    """Test that ``catalog_alias`` reaches every specialized sub-manager.
+
+    Args:
+        built_ducklake_schema: Fixture providing a DuckDB connection with a built
+        schema.
+    """
+    deleter = DatabaseDeleter(
+        connection=built_ducklake_schema, catalog_alias="my_lake"
+    )
+    assert deleter.catalog_alias == "my_lake"
+    assert deleter.dimension_mgr.catalog_alias == "my_lake"
+    assert deleter.data_mgr.catalog_alias == "my_lake"
+    assert deleter.transaction_mgr.catalog_alias == "my_lake"
+    assert deleter.auditor is not None
+    assert deleter.auditor.catalog_alias == "my_lake"
+
+
+# Test que catalog_alias vaut 'db' par défaut
+def test_deleter_default_catalog_alias(built_ducklake_schema: Any) -> None:
+    """Test that ``catalog_alias`` defaults to 'db'.
+
+    Args:
+        built_ducklake_schema: Fixture providing a DuckDB connection with a built
+        schema.
+    """
+    deleter = DatabaseDeleter(connection=built_ducklake_schema)
+    assert deleter.catalog_alias == "db"
+
+
 # ---------------------------------------------------------------------------
 # Tests de validate_operation()
 # ---------------------------------------------------------------------------

@@ -110,6 +110,18 @@ def test_init_custom_catalog_alias(ducklake_conn: Any) -> None:
     assert maint.catalog_alias == "my_lake"
 
 
+# Test que le schéma est conservé au même titre que l'alias du catalogue
+def test_init_schema_default_and_custom(ducklake_conn: Any) -> None:
+    """Test that ``schema`` defaults to 'main' and is stored when provided.
+
+    Args:
+        ducklake_conn: Fixture providing (connection, table_name).
+    """
+    conn, _ = ducklake_conn
+    assert DuckLakeMaintenance(conn).schema == "main"
+    assert DuckLakeMaintenance(conn, schema="predictions").schema == "predictions"
+
+
 # ---------------------------------------------------------------------------
 # Tests des méthodes individuelles
 # ---------------------------------------------------------------------------

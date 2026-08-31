@@ -114,6 +114,21 @@ def test_transaction_manager_initialization(built_ducklake_schema: Any) -> None:
     assert mgr.transaction_timeout == 120
 
 
+# Test que l'alias du catalogue est exposé sous le nom uniformisé catalog_alias
+def test_transaction_manager_catalog_alias(built_ducklake_schema: Any) -> None:
+    """Test that ``catalog_alias`` defaults to 'db' and is stored when provided.
+
+    Args:
+        built_ducklake_schema: Fixture providing a DuckDB connection with a built
+        schema.
+    """
+    assert TransactionManager(connection=built_ducklake_schema).catalog_alias == "db"
+    mgr = TransactionManager(
+        connection=built_ducklake_schema, catalog_alias="my_lake"
+    )
+    assert mgr.catalog_alias == "my_lake"
+
+
 # ---------------------------------------------------------------------------
 # Tests de begin_transaction()
 # ---------------------------------------------------------------------------

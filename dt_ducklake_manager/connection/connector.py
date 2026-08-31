@@ -468,27 +468,41 @@ class DuckLakeConnector:
         return ""
 
     # Attachement d'un catalogue DuckLake à une connexion DuckDB existante
-    def attach(self, conn: duckdb.DuckDBPyConnection) -> duckdb.DuckDBPyConnection:
+    def attach(
+        self,
+        conn: duckdb.DuckDBPyConnection,
+        activate_schema: bool = True,
+    ) -> duckdb.DuckDBPyConnection:
         """
         Attach the DuckLake catalog to an already-open DuckDB connection.
 
         Useful when sharing a connection across multiple catalogs. Required
         extensions are (idempotently) loaded and the credential secret is created
-        when configured, so the call also works for the PostgreSQL backend. The
-        ``USE`` statement is then executed to activate the configured schema.
+        when configured, so the call also works for the PostgreSQL backend.
 
         Args:
             conn (duckdb.DuckDBPyConnection): Existing DuckDB connection.
+            activate_schema (bool): When True (default), the target schema is
+                created if needed and activated with ``USE
+                {catalog_alias}.{schema}``. Set to False when attaching a
+                **secondary** catalog to a connection that must keep its current
+                catalog: the ``USE`` issued for the target schema would otherwise
+                steal the session's default catalog. Defaults to True.
 
         Returns:
             duckdb.DuckDBPyConnection: The same connection, now with the catalog
-            attached and the schema activated.
+            attached (and, unless ``activate_schema`` is False, the schema
+            activated).
 
         Examples:
             >>> import duckdb
             >>> conn = duckdb.connect(':memory:')
             >>> connector = DuckLakeConnector('catalog.ducklake', 'data/')
             >>> connector.attach(conn)
+            >>> # Attacher un second catalogue sans changer le catalogue courant
+            >>> other = DuckLakeConnector('other.ducklake', 'data2/',
+            ...     catalog_alias='other')
+            >>> other.attach(conn, activate_schema=False)
         """
         # Préparation de la connexion existante : chargement des extensions
         # (idempotent) puis création éventuelle du secret d'identifiants
@@ -501,8 +515,12 @@ class DuckLakeConnector:
         # Attachement du catalogue sur la connexion existante
         attach_sql = self._build_attach_sql()
         conn.execute(attach_sql)
-        # Création éventuelle puis activation du schéma cible
-        self._activate_schema(conn)
+        # Création éventuelle puis activation du schéma cible.
+        # Ignorée lorsque activate_schema est False : dans un contexte
+        # multi-catalogues, le USE d'un catalogue secondaire volerait le
+        # catalogue courant de la connexion.
+        if activate_schema:
+            self._activate_schema(conn)
         self.logger.info(
             f"DuckLake catalog attached to the existing connection:"
             f"'{self.catalog_path}'"

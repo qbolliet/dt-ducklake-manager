@@ -279,6 +279,30 @@ def test_default_schema_is_main(
     assert mgr._qualified("metadata") == "main.metadata"
 
 
+# Test que l'alias du catalogue est conservé au même titre que le schéma
+def test_catalog_alias_default_and_custom(
+    built_ducklake_schema: duckdb.DuckDBPyConnection,
+) -> None:
+    """Test that ``catalog_alias`` defaults to 'db' and is stored when provided.
+
+    The base manager carries the catalog alias alongside the schema so that later
+    passes can qualify table references by the catalog.
+
+    Args:
+        built_ducklake_schema: Fixture providing a DuckDB connection with a built
+        schema.
+    """
+    # Valeur par défaut
+    default_mgr = DimensionManager(connection=built_ducklake_schema)
+    assert default_mgr.catalog_alias == "db"
+
+    # Valeur explicite propagée jusqu'à la classe de base
+    custom_mgr = DimensionManager(
+        connection=built_ducklake_schema, catalog_alias="my_lake"
+    )
+    assert custom_mgr.catalog_alias == "my_lake"
+
+
 # Test que _table_exists est isolé par schéma : une table d'un schéma n'est pas vue
 # depuis un autre schéma du même catalogue
 def test_table_exists_isolated_by_schema(
