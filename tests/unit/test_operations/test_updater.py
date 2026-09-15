@@ -75,7 +75,6 @@ def test_updater_propagates_catalog_alias(built_ducklake_schema: Any) -> None:
     )
     assert updater.catalog_alias == "my_lake"
     assert updater.data_mgr.catalog_alias == "my_lake"
-    assert updater.transaction_mgr.catalog_alias == "my_lake"
     assert updater.auditor is not None
     assert updater.auditor.catalog_alias == "my_lake"
 
@@ -90,7 +89,7 @@ def test_updater_default_catalog_alias(built_ducklake_schema: Any) -> None:
     """
     updater = DatabaseUpdater(connection=built_ducklake_schema)
     assert updater.catalog_alias == "db"
-    assert updater.transaction_mgr.catalog_alias == "db"
+    assert updater.data_mgr.catalog_alias == "db"
 
 
 # ---------------------------------------------------------------------------
@@ -997,3 +996,221 @@ def test_add_columns_on_real_ducklake_catalog(tmp_path: Any) -> None:
     ).fetchone()[0]
     assert row_count == 3
     conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Tests des chemins transactionnels (§7) : un BEGIN/COMMIT par opération
+# ---------------------------------------------------------------------------
+
+
+# Fonction auxiliaire de capture de l'état complet de la base
+def _snapshot_state(conn: Any) -> dict[str, Any]:
+    """Capture the full state of the schema, for before/after comparison.
+
+    Args:
+        conn: DuckDB connection holding a built schema.
+
+    Returns:
+        dict: row count, sorted fact table content, metadata content and the
+        ``dataset_metadata`` timestamp.
+    """
+    return {
+        "count": conn.execute("SELECT COUNT(*) FROM fact_table").fetchone()[0],
+        "facts": conn.execute("SELECT * FROM fact_table ORDER BY id").pl().to_dicts(),
+        "metadata": conn.execute("SELECT * FROM metadata ORDER BY name")
+        .pl()
+        .to_dicts(),
+        "updated_at": conn.execute(
+            "SELECT updated_at FROM dataset_metadata"
+        ).fetchone(),
+    }
+
+
+# Test qu'un échec de la mise à jour de la table des faits annule tout l'update
+def test_update_rolls_back_on_fact_table_failure(
+    updater: DatabaseUpdater, update_df: pl.DataFrame
+) -> None:
+    """Test that a failed fact table step leaves the database untouched.
+
+    The fact table update is the 4th of six steps: the metadata update that
+    precedes it must be rolled back too.
+
+    Args:
+        updater: DatabaseUpdater fixture.
+        update_df: DataFrame with two new rows.
+    """
+    before = _snapshot_state(updater.conn)
+
+    # Échec simulé de l'étape de mise à jour de la table des faits
+    updater._update_fact_table_direct = lambda df: False  # type: ignore[method-assign]
+
+    assert updater.update_database(update_df, keep="first") is False
+
+    # La base est strictement identique à son état initial
+    assert _snapshot_state(updater.conn) == before
+
+
+# Test qu'une exception en milieu d'update annule également tout l'update
+def test_update_rolls_back_on_exception(
+    updater: DatabaseUpdater, update_df: pl.DataFrame
+) -> None:
+    """Test that an exception raised mid-update restores the initial state.
+
+    Args:
+        updater: DatabaseUpdater fixture.
+        update_df: DataFrame with two new rows.
+    """
+    before = _snapshot_state(updater.conn)
+
+    # Exception simulée au sein de l'étape de mise à jour de la table des faits
+    def _boom(df: Any) -> bool:
+        raise RuntimeError("disque plein")
+
+    updater._update_fact_table_direct = _boom  # type: ignore[method-assign]
+
+    assert updater.update_database(update_df, keep="first") is False
+    assert _snapshot_state(updater.conn) == before
+
+
+# Test qu'un échec de la dernière étape annule aussi l'upsert des faits
+def test_update_rolls_back_on_last_step_failure(
+    updater: DatabaseUpdater, update_df: pl.DataFrame
+) -> None:
+    """Test that a failure on the last step also rolls the fact upsert back.
+
+    ``_update_categorical_flags`` runs after the rows have been written: its
+    failure must undo them.
+
+    Args:
+        updater: DatabaseUpdater fixture.
+        update_df: DataFrame with two new rows.
+    """
+    before = _snapshot_state(updater.conn)
+
+    updater._update_categorical_flags = lambda: False  # type: ignore[method-assign]
+
+    assert updater.update_database(update_df, keep="first") is False
+    assert _snapshot_state(updater.conn) == before
+
+
+# Test que des problèmes critiques post-update déclenchent l'annulation
+def test_update_rolls_back_on_critical_validation_issues(
+    updater: DatabaseUpdater, update_df: pl.DataFrame
+) -> None:
+    """Test that critical post-update validation issues roll the update back.
+
+    Args:
+        updater: DatabaseUpdater fixture.
+        update_df: DataFrame with two new rows.
+    """
+    before = _snapshot_state(updater.conn)
+
+    # Rapport de validation simulant deux problèmes critiques
+    class _CriticalReport:
+        def get_critical_issues_count(self) -> int:
+            return 2
+
+        def get_issues_by_severity(self, severity: Any) -> list[Any]:
+            return []
+
+    assert updater.auditor is not None
+    updater.auditor.validate_database = (  # type: ignore[method-assign]
+        lambda level=None: _CriticalReport()
+    )
+
+    assert updater.update_database(update_df, keep="first") is False
+    assert _snapshot_state(updater.conn) == before
+
+
+# Test que sans transaction, l'état partiel d'un update échoué subsiste
+def test_update_without_transaction_keeps_partial_state(
+    updater: DatabaseUpdater, update_df: pl.DataFrame
+) -> None:
+    """Test that use_transaction=False leaves partial state behind on failure.
+
+    Documents the real difference between the two modes: in autocommit, what was
+    written before the failing step survives.
+
+    Args:
+        updater: DatabaseUpdater fixture.
+        update_df: DataFrame with two new rows.
+    """
+    # Doublons présents en base : leur suppression précède l'étape des faits
+    updater.conn.execute(
+        "INSERT INTO fact_table (id, category, value, date, status,"
+        " high_cardinality) SELECT id, category, value, date, status,"
+        " high_cardinality FROM fact_table WHERE id = 1"
+    )
+    count_with_duplicate = updater.conn.execute(
+        "SELECT COUNT(*) FROM fact_table"
+    ).fetchone()[0]
+
+    updater._update_fact_table_direct = lambda d: False  # type: ignore[method-assign]
+
+    assert (
+        updater.update_database(update_df, keep="first", use_transaction=False) is False
+    )
+
+    # La déduplication, elle, a bien persisté : l'état est partiel
+    count_after = updater.conn.execute("SELECT COUNT(*) FROM fact_table").fetchone()[0]
+    assert count_after < count_with_duplicate
+
+
+# Test que les deux modes produisent le même état final en cas de succès
+def test_update_transaction_and_direct_agree_on_success(
+    built_ducklake_schema: Any, sample_df: pl.DataFrame, update_df: pl.DataFrame
+) -> None:
+    """Test that a successful update yields the same state in both modes.
+
+    Args:
+        built_ducklake_schema: Fixture providing a built schema.
+        sample_df: DataFrame the schema was built from, reused to rebuild it.
+        update_df: DataFrame with two new rows.
+    """
+    # Mise à jour transactionnelle
+    updater = DatabaseUpdater(connection=built_ducklake_schema, categorical_threshold=4)
+    assert updater.update_database(update_df, keep="first") is True
+    transactional = _snapshot_state(updater.conn)
+
+    # Même mise à jour, sans transaction, sur une base reconstruite à l'identique
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        builder = DuckLakeTablesBuilder(
+            sample_df, categorical_threshold=4, primary_keys=["id"]
+        )
+    builder.build_schema()
+    direct_updater = DatabaseUpdater(connection=builder.conn, categorical_threshold=4)
+    assert (
+        direct_updater.update_database(update_df, keep="first", use_transaction=False)
+        is True
+    )
+    direct = _snapshot_state(direct_updater.conn)
+
+    # Les contenus coïncident (l'horodatage, lui, diffère par construction)
+    assert transactional["count"] == direct["count"]
+    assert transactional["facts"] == direct["facts"]
+    assert transactional["metadata"] == direct["metadata"]
+
+
+# Test qu'un échec d'add_columns ne laisse ni la colonne ni ses métadonnées
+def test_add_columns_rolls_back_column_and_metadata(updater: DatabaseUpdater) -> None:
+    """Test that a failed add_columns leaves neither column nor metadata row.
+
+    Args:
+        updater: DatabaseUpdater fixture.
+    """
+    before = _snapshot_state(updater.conn)
+
+    # Échec simulé du rafraîchissement du statut catégoriel, après l'UPDATE
+    def _boom() -> list[str]:
+        raise RuntimeError("échec après écriture")
+
+    updater._refresh_categorical_flags = _boom  # type: ignore[method-assign]
+
+    score_df = pl.DataFrame({"id": [1, 2, 3], "score": [10.0, 20.0, 30.0]})
+    with pytest.raises(RuntimeError, match="échec après écriture"):
+        updater.add_columns(score_df)
+
+    # Ni la colonne, ni sa ligne de métadonnées, ni les valeurs ne subsistent
+    assert "score" not in updater._get_fact_table_columns()
+    assert _snapshot_state(updater.conn) == before

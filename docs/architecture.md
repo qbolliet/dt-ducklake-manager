@@ -201,6 +201,44 @@ tables by its `schema`, and `DuckLakeConnector` creates the schema on first use.
 
 ---
 
+## 3. Transactions and recovery
+
+**Every public write operation is one DuckDB transaction.**
+`update_database`, `add_columns`, `delete_rows` and `delete_columns` each open a
+single `BEGIN` / `COMMIT` block (`BaseSchemaManager._transaction`) and `ROLLBACK`
+on any exception, so a failure mid-operation leaves the schema exactly as it was
+— fact table, `metadata` rows and added columns alike, since DuckDB rolls DDL
+back along with DML. There is no application-level transaction machinery: no
+registered operations, no savepoints, no compensating `rollback_func`.
+
+`use_transaction=False` keeps the same ordered steps but runs them in autocommit
+mode: faster, and a failure then leaves whatever was already written in place.
+
+**Post-write maintenance runs after the commit, never inside it.**
+`merge_adjacent_files` and `rewrite_data_files` are called once the transaction
+has closed: they are optimizations, and a compaction failure must never undo a
+successful write.
+
+**Time travel is the recovery mechanism.** No backup file is written, because
+DuckLake already persists the full snapshot history. To recover from a bad write
+that was itself committed:
+
+```python
+recovery = DatabaseRecoveryManager(conn)
+print(recovery.list_ducklake_snapshots())          # pick a snapshot_id
+old = DuckLakeConnector(catalog, data, snapshot_version=17).connect()
+```
+
+then read the tables from `old` and reinsert them into the current catalog.
+`RecoveryStrategy.USE_SNAPSHOT_HISTORY` returns that procedure step by step. The
+other strategies (`REPAIR_SCHEMA`, `CLEAN_ORPHANED_DATA`, `VALIDATE_AND_FIX`)
+repair structural inconsistencies in place and never touch the history.
+Snapshot expiry (`expire_snapshots`) is planned maintenance with an explicit
+retention — never a side effect of a write, because it is what destroys the
+ability to recover.
+
+---
+
 ## Retained decisions
 
 On the **logical axis** (section 1), the implementation keeps **isolation over

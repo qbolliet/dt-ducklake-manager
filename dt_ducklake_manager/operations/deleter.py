@@ -11,10 +11,6 @@ import duckdb
 # Import des gestionnaires
 from .._internal.managers.base import BaseSchemaManager
 from .._internal.managers.data import DataManager
-from .._internal.managers.transaction import (
-    TransactionManager,
-    TransactionOperation,
-)
 from ..maintenance.auditor import DatabaseAuditor, ValidationLevel
 from ..maintenance.compaction import DuckLakeMaintenance
 
@@ -30,13 +26,15 @@ class DatabaseDeleter(BaseSchemaManager):
     """
     Database deleter using modular architecture.
 
-    Provides atomic, transactional deletion operations on DuckDB databases with proper
-    validation, error recovery, and state consistency. Uses specialized managers
-    for different aspects of database operations.
+    Every public deletion runs as a single DuckDB transaction (``BEGIN`` /
+    ``COMMIT``, ``ROLLBACK`` on exception) opened by
+    :meth:`BaseSchemaManager._transaction`; post-write compaction runs after the
+    commit. Recovery beyond a failed operation relies on DuckLake time travel
+    (``DatabaseRecoveryManager.list_ducklake_snapshots`` and
+    ``DuckLakeConnector(..., snapshot_version=N)``), not on application backups.
 
     Attributes:
         data_mgr (DataManager): Manages fact table operations
-        transaction_mgr (TransactionManager): Manages transactions and rollback
         auditor (DatabaseAuditor): Validates database state and operations
         enable_validation (bool): Whether to enable validation
         auto_cleanup (bool): Whether to automatically clean up orphaned data
@@ -94,14 +92,6 @@ class DatabaseDeleter(BaseSchemaManager):
             log_filename=log_filename,
             schema=schema,
             catalog_alias=catalog_alias,
-        )
-
-        self.transaction_mgr = TransactionManager(
-            connection=connection,
-            categorical_threshold=categorical_threshold,
-            log_filename=log_filename,
-            catalog_alias=catalog_alias,
-            schema=schema,
         )
 
         self.auditor = (
@@ -186,7 +176,10 @@ class DatabaseDeleter(BaseSchemaManager):
 
         Args:
             filters: Filter conditions (string SQL condition or structured filters)
-            use_transaction: Whether to use database transactions
+            use_transaction: Whether to run every step inside a single DuckDB
+                transaction, so that a failure mid-deletion leaves the fact table
+                exactly as it was. Defaults to True. When False the steps run in
+                autocommit mode and a failure leaves partial state behind.
             perform_cleanup: Whether to cleanup orphaned data (None = use auto_cleanup
                 setting)
             compact_after_update: Whether to run DuckLake compaction (merge small delta
@@ -220,168 +213,95 @@ class DatabaseDeleter(BaseSchemaManager):
             f"{perform_cleanup})"
         )
 
-        # Suppression des lignes
-        if use_transaction:
-            # De manière transactionnelle
-            rows_deleted = self._delete_rows_transactional(
-                filters, perform_cleanup, compact_after_update
-            )
-        else:
-            # Directement
-            rows_deleted = self._delete_rows_direct(
-                filters, perform_cleanup, compact_after_update
-            )
+        # Bloc transactionnel unique : la suppression et son nettoyage forment un
+        # tout, annulé en bloc sur exception.
+        try:
+            with self._transaction("delete_rows", use_transaction=use_transaction):
+                rows_deleted = self._run_delete_rows(filters, perform_cleanup)
+        except Exception as e:
+            # Logging
+            self.logger.error(f"Error during row deletion: {e}")
+            return -1
 
-        # Horodatage de la dernière écriture réussie (échec signalé par -1)
-        if rows_deleted >= 0:
-            self._touch_dataset_metadata()
+        # Logging
+        self.logger.info(
+            f"Row deletion completed successfully: {rows_deleted} rows deleted"
+        )
+
+        # Horodatage de la dernière écriture réussie
+        self._touch_dataset_metadata()
+
+        # Compaction DuckLake optionnelle après le commit (réécriture des delete
+        # files) : la maintenance ne fait jamais partie de la transaction.
+        if rows_deleted > 0 and compact_after_update:
+            self._run_ducklake_compaction()
 
         return rows_deleted
 
-    # Méthode de suppression des lignes de manière transactionnelle
-    def _delete_rows_transactional(
+    # Méthode d'exécution de la suppression des lignes
+    def _run_delete_rows(
         self,
         filters: str | list[Any] | dict[Any, Any] | None,
         perform_cleanup: bool,
-        compact_after_update: bool,
     ) -> int:
-        """Transactional row deletion with rollback support."""
+        """Run the ordered steps of a row deletion.
 
-        # Début de la transaction
-        tx_id = self.transaction_mgr.begin_transaction(
-            "Row deletion with cleanup and validation"
-        )
+        Steps, in order: deletion of the matching rows, orphaned-data cleanup (when
+        requested), post-deletion validation. Called from inside the transaction
+        opened by ``delete_rows``: a failure raises, so the deletion is rolled back
+        and the rows return.
 
-        try:
-            # Comptage initial pour le rollback
-            _row = self.conn.execute(
-                f"SELECT COUNT(*) FROM {self._qualified('fact_table')}"
-            ).fetchone()
-            initial_count = _row[0] if _row is not None else 0
+        Args:
+            filters: Filter conditions (SQL string or structured filters).
+            perform_cleanup: Whether to drop null-only columns and refresh
+                categorical flags after the deletion.
 
-            # Étape 1: Suppression des lignes
-            operation = TransactionOperation(
-                operation_type="delete_rows",
-                operation_func=self.data_mgr.delete_rows,
-                operation_args=(filters,),
-                rollback_func=self._restore_deleted_rows,
-                rollback_args=(filters, initial_count),
-                description="Delete rows from fact table",
-            )
+        Returns:
+            Number of rows deleted.
 
-            # Annulation si l'opération ne peut pas être ajoutée ou exécutée
-            if not self.transaction_mgr.add_operation(tx_id, **operation.__dict__):
-                self.transaction_mgr.rollback_transaction(tx_id)
-                return -1
+        Raises:
+            RuntimeError: If post-deletion validation finds critical issues, naming
+                the step reached.
+        """
+        # Comptage initial : le nombre de lignes supprimées est mesuré sur la table elle-même,
+        # la valeur retournée par data_mgr ne couvrant pas les suppressions en
+        # cascade éventuelles.
+        _row = self.conn.execute(
+            f"SELECT COUNT(*) FROM {self._qualified('fact_table')}"
+        ).fetchone()
+        initial_count = _row[0] if _row is not None else 0
 
-            if not self.transaction_mgr.execute_operation(tx_id):
-                self.transaction_mgr.rollback_transaction(tx_id)
-                return -1
+        # Étape 1 : suppression des lignes
+        self.data_mgr.delete_rows(filters)
 
-            # Calcul du nombre de lignes supprimées
-            _row2 = self.conn.execute(
-                f"SELECT COUNT(*) FROM {self._qualified('fact_table')}"
-            ).fetchone()
-            current_count = _row2[0] if _row2 is not None else 0
-            rows_deleted = initial_count - current_count
+        # Comptage du nombre de lignes effectivement supprimées
+        _row2 = self.conn.execute(
+            f"SELECT COUNT(*) FROM {self._qualified('fact_table')}"
+        ).fetchone()
+        current_count = _row2[0] if _row2 is not None else 0
+        rows_deleted = initial_count - current_count
 
-            if rows_deleted == 0:
-                # Pas de suppression, commit simple
-                self.transaction_mgr.commit_transaction(tx_id)
-                return 0
+        # Aucune suppression : rien à nettoyer ni à valider
+        if rows_deleted == 0:
+            return 0
 
-            # Création d'un savepoint avant le nettoyage
-            self.transaction_mgr.create_savepoint(tx_id, "before_cleanup")
+        # Étape 2 : nettoyage des données orphelines si activé.
+        # Non critique : un échec est journalisé sans annuler la suppression.
+        if perform_cleanup and not self._cleanup_orphaned_data_comprehensive():
+            self.logger.warning("Cleanup failed, but row deletion completed")
 
-            # Étape 2: Nettoyage des données orphelines si activé
-            if perform_cleanup:
-                operation = TransactionOperation(
-                    operation_type="cleanup_orphaned",
-                    operation_func=self._cleanup_orphaned_data_comprehensive,
-                    operation_args=(),
-                    rollback_func=self._restore_orphaned_data,
-                    description="Clean up null-only columns and refresh flags",
+        # Étape 3 : validation post-suppression
+        if self.enable_validation and self.auditor:
+            validation_report = self.auditor.validate_database(ValidationLevel.BASIC)
+            critical_issues = validation_report.get_critical_issues_count()
+            # Problèmes critiques : annulation de la suppression
+            if critical_issues > 0:
+                raise RuntimeError(
+                    f"post-deletion validation found {critical_issues} critical"
+                    " issue(s)"
                 )
 
-                if not self.transaction_mgr.add_operation(tx_id, **operation.__dict__):
-                    # Annulation du nettoyage
-                    self.transaction_mgr.rollback_to_savepoint(tx_id, "before_cleanup")
-                    # Logging
-                    self.logger.warning("Cleanup failed, but row deletion completed")
-                else:
-                    self.transaction_mgr.execute_operation(
-                        tx_id
-                    )  # Non-critique si échoue
-
-            # Validation post-suppression
-            if self.enable_validation and self.auditor:
-                # Audit d ela base de données
-                validation_report = self.auditor.validate_database(
-                    ValidationLevel.BASIC
-                )
-                # Identification des problèmes critiques
-                critical_issues = validation_report.get_critical_issues_count()
-                if critical_issues > 0:
-                    # Logging
-                    self.logger.error(
-                        "Critical issues found after deletion, rolling back"
-                    )
-                    # Annulation de la transaction
-                    self.transaction_mgr.rollback_transaction(tx_id)
-                    return -1
-
-            # Commit de la transaction
-            if self.transaction_mgr.commit_transaction(tx_id):
-                # Logging
-                self.logger.info(
-                    f"Row deletion completed successfully: {rows_deleted} rows deleted"
-                )
-                # Compaction DuckLake optionnelle après commit (réécriture des delete
-                # files)
-                if compact_after_update:
-                    self._run_ducklake_compaction()
-                return rows_deleted
-            else:
-                # Logging
-                self.logger.error("Failed to commit deletion transaction")
-                return -1
-
-        except Exception as e:
-            # Logging
-            self.logger.error(f"Error during transactional deletion: {e}")
-            # Annulation de la transaction
-            self.transaction_mgr.rollback_transaction(tx_id)
-            return -1
-
-    # Méthode de suppression directe des lignes
-    def _delete_rows_direct(
-        self,
-        filters: str | list[Any] | dict[Any, Any] | None,
-        perform_cleanup: bool,
-        compact_after_update: bool,
-    ) -> int:
-        """Direct deletion without transaction management."""
-        try:
-            # Exécution de la suppression via data manager
-            rows_deleted = self.data_mgr.delete_rows(filters)
-
-            if rows_deleted > 0 and perform_cleanup:
-                # Nettoyage des données orphelines
-                self._cleanup_orphaned_data_comprehensive()
-
-            # Logging
-            self.logger.info(
-                f"Row deletion completed (direct mode): {rows_deleted} rows deleted"
-            )
-            # Compaction DuckLake optionnelle (réécriture des delete files)
-            if rows_deleted > 0 and compact_after_update:
-                self._run_ducklake_compaction()
-            return rows_deleted
-
-        except Exception as e:
-            # Logging
-            self.logger.error(f"Error during direct deletion: {e}")
-            return -1
+        return rows_deleted
 
     # Méthode auxiliaire de compaction DuckLake
     def _run_ducklake_compaction(
@@ -456,7 +376,9 @@ class DatabaseDeleter(BaseSchemaManager):
 
         Args:
             columns: List of column names to delete
-            use_transaction: Whether to use database transactions
+            use_transaction: Whether to run every deletion inside a single DuckDB
+                transaction, so that a failure leaves the fact table and its
+                ``metadata`` rows exactly as they were. Defaults to True.
             validate_dependencies: Whether to validate column dependencies
             cascade: Whether to allow deleting a column that is the parent of
                 another column, detaching its children (``parent_name`` set to
@@ -493,13 +415,15 @@ class DatabaseDeleter(BaseSchemaManager):
         # Logging
         self.logger.info(f"Starting columns deletion (transaction: {use_transaction})")
 
-        # Suppression des colonnes
-        if use_transaction:
-            # Avec transaction
-            results = self._delete_columns_transactional(columns, cascade=cascade)
-        else:
-            # Directement
-            results = self._delete_columns_direct(columns, cascade=cascade)
+        # Bloc transactionnel unique : sur exception, ni les colonnes ni leurs
+        # lignes metadata ne sont perdues.
+        try:
+            with self._transaction("delete_columns", use_transaction=use_transaction):
+                results = self._run_delete_columns(columns, cascade=cascade)
+        except Exception as e:
+            # Logging
+            self.logger.error(f"Error during column deletion: {e}")
+            return {col: False for col in columns}
 
         # Horodatage dès qu'au moins une colonne a effectivement été supprimée
         if any(results.values()):
@@ -507,180 +431,93 @@ class DatabaseDeleter(BaseSchemaManager):
 
         return results
 
-    # Méthode de suppression de colonnes de manière transactionnelle
-    def _delete_columns_transactional(
-        self, columns: list[str], cascade: bool = False
-    ) -> dict[str, bool]:
-        """Transactional column deletion with rollback support."""
+    # Méthode d'exécution de la suppression des colonnes
+    def _run_delete_columns(self, columns: list[str], cascade: bool) -> dict[str, bool]:
+        """Run the ordered steps of a column deletion.
 
-        # Début de la transaction
-        tx_id = self.transaction_mgr.begin_transaction(
-            "Column deletion with dependency management"
+        For every column that exists in the fact table: children detachment (when
+        ``cascade``), ``ALTER TABLE ... DROP COLUMN``, metadata row removal and
+        ``cluster_by`` update. A column that fails is marked False and the loop
+        goes on; only critical post-deletion validation issues abort the whole
+        operation. Called from inside the transaction opened by ``delete_columns``.
+
+        Args:
+            columns: Column names requested for deletion.
+            cascade: Whether to detach the children of a hierarchy parent instead
+                of refusing its deletion.
+
+        Returns:
+            Dictionary mapping every requested column name to its success status.
+
+        Raises:
+            RuntimeError: If post-deletion validation finds critical issues, naming
+                the step reached.
+        """
+        # Initialisation du dictionnaire résultat
+        results: dict[str, bool] = {}
+
+        # Filtrage des colonnes existantes
+        existing_columns = self._get_fact_table_columns()
+        valid_columns = [col for col in columns if col in existing_columns]
+
+        # Vérification que les colonnes sont valides
+        if not valid_columns:
+            # Logging
+            self.logger.warning("No valid columns found for deletion")
+            return {col: False for col in columns}
+
+        # Traitement de chaque colonne
+        for column in valid_columns:
+            try:
+                # Détachement des colonnes enfants d'une hiérarchie avant
+                # suppression (cascade=True uniquement)
+                if cascade:
+                    self._clear_child_parent_references(column)
+
+                # Suppression de la colonne de la fact table
+                if not self._drop_fact_table_column(column):
+                    results[column] = False
+                    continue
+
+                # Suppression de la ligne de méta-données correspondante
+                self.delete_column_metadata(column)
+
+                # Retrait de la colonne de cluster_by si elle en faisait partie
+                self._remove_from_cluster_by(column)
+
+                results[column] = True
+
+            except Exception as e:
+                # Logging
+                self.logger.error(f"Error processing column {column}: {e}")
+                results[column] = False
+                # Continue avec les autres colonnes
+
+        # Validation post-suppression
+        if self.enable_validation and self.auditor:
+            validation_report = self.auditor.validate_database(ValidationLevel.BASIC)
+            critical_issues = validation_report.get_critical_issues_count()
+            # Problèmes critiques : annulation de l'ensemble des suppressions
+            if critical_issues > 0:
+                raise RuntimeError(
+                    f"post-deletion validation found {critical_issues} critical"
+                    " issue(s)"
+                )
+
+        # Calcul du nombre de suppressions
+        successful_deletions = sum(results.values())
+        # Logging
+        self.logger.info(
+            f"Column deletion completed: {successful_deletions}"
+            f"/{len(valid_columns)} columns deleted"
         )
 
-        # Initialisation du dictionnaire résultat
-        results = {}
+        # Ajout des colonnes non trouvées au résultat
+        for col in columns:
+            if col not in results:
+                results[col] = False
 
-        try:
-            # Filtrage des colonnes existantes
-            existing_columns = self._get_fact_table_columns()
-            valid_columns = [col for col in columns if col in existing_columns]
-
-            # Vérification que les colonnes sont valides
-            if not valid_columns:
-                # Logging
-                self.logger.warning("No valid columns found for deletion")
-                # Commit de la transaction
-                self.transaction_mgr.commit_transaction(tx_id)
-                return {col: False for col in columns}
-
-            # Traitement de chaque colonne
-            for column in valid_columns:
-                try:
-                    # Détachement des colonnes enfants d'une hiérarchie avant
-                    # suppression (cascade=True uniquement)
-                    if cascade:
-                        self._clear_child_parent_references(column)
-
-                    # Étape 1: Suppression de la colonne de la fact table
-                    operation = TransactionOperation(
-                        operation_type="drop_column",
-                        operation_func=self._drop_fact_table_column,
-                        operation_args=(column,),
-                        rollback_func=self._restore_fact_table_column,
-                        rollback_args=(column,),
-                        description=f"Drop column {column} from fact table",
-                    )
-
-                    self.transaction_mgr.add_operation(tx_id, **operation.__dict__)
-                    self.transaction_mgr.execute_operation(tx_id)
-
-                    # Étape 2: Suppression des métadonnées
-                    operation = TransactionOperation(
-                        operation_type="drop_metadata",
-                        operation_func=self.delete_column_metadata,
-                        operation_args=(column,),
-                        rollback_func=self._restore_column_metadata,
-                        rollback_args=(column,),
-                        description=f"Drop metadata for column {column}",
-                    )
-
-                    self.transaction_mgr.add_operation(tx_id, **operation.__dict__)
-                    self.transaction_mgr.execute_operation(tx_id)
-
-                    # Retrait de la colonne de cluster_by si elle en faisait partie
-                    self._remove_from_cluster_by(column)
-
-                    results[column] = True
-
-                except Exception as e:
-                    # Logging
-                    self.logger.error(f"Error processing column {column}: {e}")
-                    results[column] = False
-                    # Continue avec les autres colonnes
-
-            # Validation post-suppression
-            if self.enable_validation and self.auditor:
-                # Audit de la base de données
-                validation_report = self.auditor.validate_database(
-                    ValidationLevel.BASIC
-                )
-
-                # Identification des problèmes critiques
-                critical_issues = validation_report.get_critical_issues_count()
-                if critical_issues > 0:
-                    # Logging
-                    self.logger.error(
-                        "Critical issues found after column deletion, rolling back"
-                    )
-                    # Annulation de la transaction
-                    self.transaction_mgr.rollback_transaction(tx_id)
-                    return {col: False for col in columns}
-
-            # Commit de la transaction
-            if self.transaction_mgr.commit_transaction(tx_id):
-                # Calcul du nombre de suppressions
-                successful_deletions = sum(results.values())
-                # Logging
-                self.logger.info(
-                    f"Column deletion completed: {successful_deletions}"
-                    f"/{len(valid_columns)} columns deleted"
-                )
-
-                # Ajout des colonnes non trouvées au résultat
-                for col in columns:
-                    if col not in results:
-                        results[col] = False
-
-                return results
-            else:
-                # Logging
-                self.logger.error("Failed to commit column deletion transaction")
-                return {col: False for col in columns}
-
-        except Exception as e:
-            # Logging
-            self.logger.error(f"Error during transactional column deletion: {e}")
-            # Annulation de la transaction
-            self.transaction_mgr.rollback_transaction(tx_id)
-            return {col: False for col in columns}
-
-    # Suppression des colonnes sans transaction
-    def _delete_columns_direct(
-        self, columns: list[str], cascade: bool = False
-    ) -> dict[str, bool]:
-        """Direct column deletion without transaction management."""
-        results = {}
-
-        try:
-            # Filtrage des colonnes existantes
-            existing_columns = self._get_fact_table_columns()
-            valid_columns = [col for col in columns if col in existing_columns]
-
-            # Parcours des colonnes
-            for column in valid_columns:
-                try:
-                    # Détachement des colonnes enfants d'une hiérarchie avant
-                    # suppression (cascade=True uniquement)
-                    if cascade:
-                        self._clear_child_parent_references(column)
-
-                    # Suppression de la colonne
-                    dropped_columns = self.data_mgr.drop_columns([column])
-
-                    # Suppression des métadonnées
-                    self.delete_column_metadata(column)
-
-                    # Retrait de la colonne de cluster_by si elle en faisait partie
-                    if dropped_columns:
-                        self._remove_from_cluster_by(column)
-
-                    results[column] = len(dropped_columns) > 0
-
-                except Exception as e:
-                    # Logging
-                    self.logger.error(f"Error deleting column {column}: {e}")
-                    results[column] = False
-
-            # Ajout des colonnes non trouvées au résultat
-            for col in columns:
-                if col not in results:
-                    results[col] = False
-
-            # Calcul du nombre de colonnes supprimées
-            successful_deletions = sum(results.values())
-            # Logging
-            self.logger.info(
-                f"Column deletion completed (direct mode): {successful_deletions}"
-                f"/{len(columns)} columns deleted"
-            )
-
-            return results
-
-        except Exception as e:
-            # Logging
-            self.logger.error(f"Error during direct column deletion: {e}")
-            return {col: False for col in columns}
+        return results
 
     # Méthodes de suppression sécurisées
     # Méthode auxiliaire de suppression d'une colonne de la table des faits
@@ -729,53 +566,6 @@ class DatabaseDeleter(BaseSchemaManager):
             # Logging
             self.logger.error(f"Error during comprehensive cleanup: {e}")
             return {}
-
-    # Méthodes de rollback
-    # Méthode auxiliaire de restauration des lignes supprimées
-    def _restore_deleted_rows(
-        self, filters: str | list[Any] | dict[Any, Any] | None, initial_count: int
-    ) -> bool:
-        """Restore deleted rows (placeholder - handled by DuckDB transaction)."""
-        # Logging
-        self.logger.info("Deleted rows restoration handled by database transaction")
-        return True
-
-    # Méthode auxiliaire de restauration d'une colonne de la table des faits
-    def _restore_fact_table_column(self, column: str) -> bool:
-        """Restore a fact table column (placeholder - handled by DuckDB transaction)."""
-        # Logging
-        self.logger.info(
-            f"Fact table column restoration for {column} handled by database"
-            f" transaction"
-        )
-        return True
-
-    # Méthode auxiliaire de restauration d'une colonne de la table des méta-données
-    def _restore_column_metadata(self, column: str) -> bool:
-        """Restore column metadata (placeholder - handled by DuckDB transaction).
-
-        Args:
-            column: Name of the column whose metadata to restore.
-
-        Returns:
-            True (actual restoration handled by database transaction rollback).
-        """
-        # Logging
-        self.logger.info(
-            f"Column metadata restoration for {column} handled by database transaction"
-        )
-        return True
-
-    # Méthode auxiliaire de restauration de données orphelines
-    def _restore_orphaned_data(self) -> bool:
-        """Restore orphaned data (placeholder - handled by DuckDB transaction).
-
-        Returns:
-            True (actual restoration handled by database transaction rollback).
-        """
-        # Logging
-        self.logger.info("Orphaned data restoration handled by database transaction")
-        return True
 
     # Méthodes d'analyse des dépendances
     # Méthode auxiliaire d'analyse des dépendances associées à une colonne
@@ -980,14 +770,13 @@ class DatabaseDeleter(BaseSchemaManager):
             status = {
                 "timestamp": datetime.now().isoformat(),
                 "health_status": "unknown",
+                # Toujours 0 : les transactions sont portées par DuckDB
+                # (BEGIN/COMMIT par opération) et ne font plus l'objet d'un suivi
+                # applicatif. Clé conservée pour la stabilité du dictionnaire.
                 "active_transactions": 0,
                 "validation_enabled": self.enable_validation,
                 "auto_cleanup": self.auto_cleanup,
             }
-
-            # Vérification des transactions actives
-            active_txs = self.transaction_mgr.list_active_transactions()
-            status["active_transactions"] = len(active_txs)
 
             # Vérification de la santé de la base de données
             if self.auditor:

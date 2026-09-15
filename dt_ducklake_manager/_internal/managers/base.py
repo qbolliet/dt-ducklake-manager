@@ -3,8 +3,11 @@
 import json
 import os
 import threading
+import time
 import warnings
 from abc import ABC, abstractmethod
+from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import datetime
 from typing import Any
 
@@ -109,6 +112,83 @@ class BaseSchemaManager(ABC):
         # Cache thread-safe pour optimiser les accès aux métadonnées
         self._metadata_cache: nw.DataFrame[Any] | None = None
         self._cache_lock = threading.RLock()
+
+        # Indicateur de transaction DuckDB ouverte par ce gestionnaire.
+        # Garde de ré-entrance : DuckDB rejette un BEGIN imbriqué, et une opération
+        # publique peut en appeler une autre (ex. delete_columns depuis le nettoyage
+        # de delete_rows).
+        self._in_transaction = False
+
+    # Point d'accroche transactionnel unique des opérations publiques
+    @contextmanager
+    def _transaction(
+        self, operation: str, use_transaction: bool = True
+    ) -> Iterator[None]:
+        """Run one public operation inside a single DuckDB transaction.
+
+        Opens a ``BEGIN`` on entry, ``COMMIT`` on normal exit and ``ROLLBACK`` on
+        any exception, which is then re-raised to the caller. This is the single
+        entry/exit hook of every public write operation (``update_database``,
+        ``add_columns``, ``delete_rows``, ``delete_columns``): post-write
+        maintenance (``rewrite_data_files``, ``merge_adjacent_files``) must run
+        **after** the commit, hence outside of this block.
+
+        A nested call — a public operation invoked from within another one — reuses
+        the transaction already open instead of issuing a second ``BEGIN``, which
+        DuckDB rejects.
+
+        Args:
+            operation: Name of the operation, used in the log lines (e.g.
+                ``'update'``, ``'delete_rows'``).
+            use_transaction: Whether to actually wrap the block in a transaction.
+                When False the block runs in autocommit mode: each statement is
+                durable as soon as it executes and a failure leaves partial state.
+                Defaults to True.
+
+        Yields:
+            None: control returns to the caller's ``with`` block.
+
+        Raises:
+            Exception: any exception raised inside the block, re-raised after the
+                ``ROLLBACK``.
+
+        Examples:
+            >>> with manager._transaction('update'):
+            ...     manager._update_metadata_safe(df)
+        """
+        # Transaction déjà ouverte ou mode autocommit : exécution directe du bloc,
+        # la gestion transactionnelle revient à l'appelant (ou à personne).
+        if not use_transaction or self._in_transaction:
+            yield
+            return
+
+        # Ouverture de la transaction
+        start_time = time.time()
+        self.conn.begin()
+        self._in_transaction = True
+        # Logging
+        self.logger.debug(f"BEGIN {operation} ({self.schema})")
+
+        try:
+            yield
+        except Exception as e:
+            # Annulation : la base revient à son état d'avant le BEGIN
+            self.conn.rollback()
+            self._in_transaction = False
+            # Logging : l'étape atteinte est portée par le message de l'exception
+            self.logger.error(
+                f"ROLLBACK {operation} ({self.schema}) after"
+                f" {time.time() - start_time:.2f}s: {e}"
+            )
+            raise
+        else:
+            # Validation de la transaction
+            self.conn.commit()
+            self._in_transaction = False
+            # Logging
+            self.logger.debug(
+                f"COMMIT {operation} ({self.schema}) in {time.time() - start_time:.2f}s"
+            )
 
     # Méthode de qualification d'un nom de table par le schéma (et le catalogue)
     def _qualified(self, table: str) -> str:

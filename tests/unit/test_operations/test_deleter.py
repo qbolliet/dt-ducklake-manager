@@ -71,7 +71,6 @@ def test_deleter_propagates_catalog_alias(built_ducklake_schema: Any) -> None:
     deleter = DatabaseDeleter(connection=built_ducklake_schema, catalog_alias="my_lake")
     assert deleter.catalog_alias == "my_lake"
     assert deleter.data_mgr.catalog_alias == "my_lake"
-    assert deleter.transaction_mgr.catalog_alias == "my_lake"
     assert deleter.auditor is not None
     assert deleter.auditor.catalog_alias == "my_lake"
 
@@ -502,3 +501,198 @@ def test_delete_columns_does_not_change_file_count(tmp_path: Any) -> None:
     ).fetchone()[0]
     assert file_count_after == file_count_before
     conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Tests des chemins transactionnels (§7) : un BEGIN/COMMIT par opération
+# ---------------------------------------------------------------------------
+
+
+# Fonction auxiliaire de capture de l'état complet de la base
+def _snapshot_state(conn: Any) -> dict[str, Any]:
+    """Capture the full state of the schema, for before/after comparison.
+
+    Args:
+        conn: DuckDB connection holding a built schema.
+
+    Returns:
+        dict: row count, sorted fact table content and metadata content.
+    """
+    return {
+        "count": conn.execute("SELECT COUNT(*) FROM fact_table").fetchone()[0],
+        "facts": conn.execute("SELECT * FROM fact_table ORDER BY id").pl().to_dicts(),
+        "metadata": conn.execute("SELECT * FROM metadata ORDER BY name")
+        .pl()
+        .to_dicts(),
+    }
+
+
+# Test qu'un échec après suppression restaure les lignes supprimées
+def test_delete_rows_rolls_back_on_exception(deleter: DatabaseDeleter) -> None:
+    """Test that a failure after the DELETE restores every deleted row.
+
+    Args:
+        deleter: DatabaseDeleter fixture.
+    """
+    before = _snapshot_state(deleter.conn)
+
+    # Exception simulée dans le nettoyage, après la suppression des lignes
+    def _boom() -> dict[str, Any]:
+        raise RuntimeError("échec après suppression")
+
+    deleter._cleanup_orphaned_data_comprehensive = _boom  # type: ignore[method-assign]
+
+    assert deleter.delete_rows(filters=[("id", "=", 1)]) == -1
+
+    # Les lignes supprimées sont revenues
+    assert _snapshot_state(deleter.conn) == before
+
+
+# Test que des problèmes critiques post-suppression annulent la suppression
+def test_delete_rows_rolls_back_on_critical_validation_issues(
+    deleter: DatabaseDeleter,
+) -> None:
+    """Test that critical post-deletion issues roll the deletion back.
+
+    Args:
+        deleter: DatabaseDeleter fixture.
+    """
+    before = _snapshot_state(deleter.conn)
+
+    # Rapport de validation simulant un problème critique
+    class _CriticalReport:
+        def get_critical_issues_count(self) -> int:
+            return 1
+
+        def get_issues_by_severity(self, severity: Any) -> list[Any]:
+            return []
+
+    assert deleter.auditor is not None
+    deleter.auditor.validate_database = (  # type: ignore[method-assign]
+        lambda level=None: _CriticalReport()
+    )
+
+    assert deleter.delete_rows(filters=[("id", "=", 1)]) == -1
+    assert _snapshot_state(deleter.conn) == before
+
+
+# Test que sans transaction, la suppression subsiste malgré l'échec du nettoyage
+def test_delete_rows_without_transaction_keeps_partial_state(
+    deleter: DatabaseDeleter,
+) -> None:
+    """Test that use_transaction=False leaves the deletion in place on failure.
+
+    Args:
+        deleter: DatabaseDeleter fixture.
+    """
+    initial_count = deleter.conn.execute("SELECT COUNT(*) FROM fact_table").fetchone()[
+        0
+    ]
+
+    def _boom() -> dict[str, Any]:
+        raise RuntimeError("échec après suppression")
+
+    deleter._cleanup_orphaned_data_comprehensive = _boom  # type: ignore[method-assign]
+
+    assert deleter.delete_rows(filters=[("id", "=", 1)], use_transaction=False) == -1
+
+    # La ligne supprimée ne revient pas : l'état est partiel
+    count_after = deleter.conn.execute("SELECT COUNT(*) FROM fact_table").fetchone()[0]
+    assert count_after == initial_count - 1
+
+
+# Test qu'une suppression réussie survit au commit
+def test_delete_rows_commits_on_success(deleter: DatabaseDeleter) -> None:
+    """Test that a successful transactional deletion is committed.
+
+    Args:
+        deleter: DatabaseDeleter fixture.
+    """
+    initial_count = deleter.conn.execute("SELECT COUNT(*) FROM fact_table").fetchone()[
+        0
+    ]
+
+    assert deleter.delete_rows(filters=[("id", "=", 1)]) == 1
+
+    count_after = deleter.conn.execute("SELECT COUNT(*) FROM fact_table").fetchone()[0]
+    assert count_after == initial_count - 1
+
+
+# Test qu'une colonne en échec n'empêche pas la suppression des autres
+def test_delete_columns_isolates_failing_column(deleter: DatabaseDeleter) -> None:
+    """Test that a column failing to drop does not abort the other deletions.
+
+    Args:
+        deleter: DatabaseDeleter fixture.
+    """
+    # Échec simulé pour la seule colonne 'status'
+    original_drop = deleter._drop_fact_table_column
+
+    def _selective_drop(column: str) -> bool:
+        if column == "status":
+            return False
+        return original_drop(column)
+
+    deleter._drop_fact_table_column = _selective_drop  # type: ignore[method-assign]
+
+    results = deleter.delete_columns(["status", "high_cardinality"])
+
+    # La colonne en échec est signalée, l'autre est bien supprimée
+    assert results == {"status": False, "high_cardinality": True}
+    remaining = deleter._get_fact_table_columns()
+    assert "status" in remaining
+    assert "high_cardinality" not in remaining
+
+
+# Test que des problèmes critiques annulent toutes les suppressions de colonnes
+def test_delete_columns_rolls_back_on_critical_validation_issues(
+    deleter: DatabaseDeleter,
+) -> None:
+    """Test that critical post-deletion issues restore every dropped column.
+
+    Args:
+        deleter: DatabaseDeleter fixture.
+    """
+    before = _snapshot_state(deleter.conn)
+
+    # Rapport de validation simulant un problème critique
+    class _CriticalReport:
+        def get_critical_issues_count(self) -> int:
+            return 3
+
+        def get_issues_by_severity(self, severity: Any) -> list[Any]:
+            return []
+
+    assert deleter.auditor is not None
+    deleter.auditor.validate_database = (  # type: ignore[method-assign]
+        lambda level=None: _CriticalReport()
+    )
+
+    results = deleter.delete_columns(["status", "high_cardinality"])
+
+    # Aucune suppression n'est retenue, colonnes et métadonnées sont intactes
+    assert results == {"status": False, "high_cardinality": False}
+    assert _snapshot_state(deleter.conn) == before
+
+
+# Test qu'une exception lors de la suppression de colonnes restaure tout
+def test_delete_columns_rolls_back_on_exception(deleter: DatabaseDeleter) -> None:
+    """Test that an exception mid-loop restores columns and metadata rows.
+
+    Args:
+        deleter: DatabaseDeleter fixture.
+    """
+    before = _snapshot_state(deleter.conn)
+
+    # Exception non rattrapée par la boucle : levée par la validation finale
+    assert deleter.auditor is not None
+
+    def _boom(level: Any = None) -> Any:
+        raise RuntimeError("auditeur indisponible")
+
+    deleter.auditor.validate_database = _boom  # type: ignore[method-assign]
+
+    results = deleter.delete_columns(["status"])
+
+    assert results == {"status": False}
+    assert _snapshot_state(deleter.conn) == before

@@ -13,7 +13,6 @@ from narwhals.typing import IntoDataFrame
 # Import des gestionnaires
 from .._internal.managers.base import BaseSchemaManager
 from .._internal.managers.data import DataManager
-from .._internal.managers.transaction import TransactionManager, TransactionOperation
 from ..maintenance.auditor import DatabaseAuditor, IssueSeverity, ValidationLevel
 from ..maintenance.compaction import DuckLakeMaintenance
 
@@ -34,13 +33,15 @@ class DatabaseUpdater(BaseSchemaManager):
     """
     Refactored database updater using the new modular architecture.
 
-    Provides atomic, transactional updates to DuckDB databases with proper
-    validation, error recovery, and state consistency. Uses specialized managers
-    for different aspects of database operations.
+    Every public write operation runs as a single DuckDB transaction (``BEGIN`` /
+    ``COMMIT``, ``ROLLBACK`` on exception) opened by
+    :meth:`BaseSchemaManager._transaction`; post-write maintenance runs after the
+    commit. Recovery beyond a failed operation relies on DuckLake time travel
+    (``DatabaseRecoveryManager.list_ducklake_snapshots`` and
+    ``DuckLakeConnector(..., snapshot_version=N)``), not on application backups.
 
     Attributes:
         data_mgr (DataManager): Manages fact table operations
-        transaction_mgr (TransactionManager): Manages transactions and rollback
         auditor (DatabaseAuditor): Validates database state and operations
         max_workers (int): Maximum number of parallel workers
         batch_size (int): Size of batches for processing large datasets
@@ -98,14 +99,6 @@ class DatabaseUpdater(BaseSchemaManager):
             batch_size=batch_size,
             schema=schema,
             catalog_alias=catalog_alias,
-        )
-
-        self.transaction_mgr = TransactionManager(
-            connection=connection,
-            categorical_threshold=categorical_threshold,
-            log_filename=log_filename,
-            catalog_alias=catalog_alias,
-            schema=schema,
         )
 
         self.auditor = (
@@ -199,7 +192,10 @@ class DatabaseUpdater(BaseSchemaManager):
             check_duplicates_update: Whether to check duplicates in update DataFrame
             keep: Which duplicates to keep when removing duplicates
             use_batch_processing: Whether to use batch processing for large datasets
-            use_transaction: Whether to use database transactions
+            use_transaction: Whether to run every step inside a single DuckDB
+                transaction, so that a failure mid-update leaves the database
+                exactly as it was. Defaults to True. When False the steps run in
+                autocommit mode and a failure leaves partial state behind.
             compact_after_update: Whether to run DuckLake compaction (merge small delta
                 files and rewrite delete files) immediately after a successful update.
                 Adds write latency but keeps read performance optimal. Defaults to True.
@@ -271,26 +267,41 @@ class DatabaseUpdater(BaseSchemaManager):
             f"{use_transaction})"
         )
 
-        # Utilisation de la transaction pour la mise à jour de la base de données
-        if use_transaction:
-            return self._update_database_transactional(
-                update_df,
-                check_duplicates_db,
-                check_duplicates_update,
-                keep,
-                use_batch_processing,
-                compact_after_update,
-            )
-        # Sinon mise à jour directe
-        else:
-            return self._update_database_direct(
-                update_df,
-                check_duplicates_db,
-                check_duplicates_update,
-                keep,
-                use_batch_processing,
-                compact_after_update,
-            )
+        # Bloc transactionnel unique : toutes les étapes ou aucune.
+        try:
+            with self._transaction("update", use_transaction=use_transaction):
+                self._run_update_steps(
+                    update_df,
+                    check_duplicates_db,
+                    check_duplicates_update,
+                    keep,
+                    use_batch_processing,
+                )
+        except Exception as e:
+            # Logging
+            self.logger.error(f"Error during database update: {e}")
+            # Avertissement sur les colonnes ajoutées hors transaction : ajoutées
+            # avant l'upsert (les étapes suivantes en dépendent), elles subsistent.
+            if new_columns:
+                self.logger.warning(
+                    f"Update failed after adding column(s) {sorted(new_columns)};"
+                    " those columns remain in the fact table"
+                )
+            return False
+
+        # Logging
+        self.logger.info("Database update completed successfully")
+        # Invalidation du cache des méta-données
+        self._invalidate_metadata_cache()
+        # Horodatage de la dernière écriture réussie.
+        # Placé après le commit : un échec d'horodatage, purement descriptif,
+        # ne doit jamais annuler une écriture de données.
+        self._touch_dataset_metadata()
+        # Compaction DuckLake optionnelle après le commit (fusion des petits fichiers
+        # delta) : la maintenance ne fait jamais partie de la transaction.
+        if compact_after_update:
+            self._run_ducklake_compaction()
+        return True
 
     # Méthode auxiliaire d'ajout explicite des colonnes inconnues d'un update_df
     def _add_new_columns_from_update(
@@ -340,281 +351,71 @@ class DatabaseUpdater(BaseSchemaManager):
         # Logging
         self.logger.info(f"Added new column(s) from update_df: {new_columns}")
 
-    # Méthode de mise à jour de la base de données de manière transactionnelle
-    def _update_database_transactional(
+    # Méthode d'exécution ordonnée des étapes d'une mise à jour
+    def _run_update_steps(
         self,
         update_df: nw.DataFrame[Any],
         check_duplicates_db: bool,
         check_duplicates_update: bool,
         keep: Literal["any", "none", "first", "last"],
         use_batch_processing: bool,
-        compact_after_update: bool,
-    ) -> bool:
-        """Perform transactional database update with validation and rollback.
+    ) -> None:
+        """Run the ordered steps of a database update.
 
-        Executes the update within a transaction, allowing rollback on failure.
-        Steps: preprocess → duplicate removal → metadata → fact table →
-        categorical flags.
-
-        Args:
-            update_df: DataFrame containing the update data.
-            check_duplicates_db: Whether to check and remove duplicates in database.
-            check_duplicates_update: Whether to check and remove duplicates in update
-            data.
-            keep: Duplicate handling strategy ('first', 'last', or False).
-            use_batch_processing: Whether to use batch processing for large datasets.
-            compact_after_update: Whether to run DuckLake compaction after commit.
-
-        Returns:
-            True if update succeeded and committed, False otherwise.
-        """
-
-        # Début de la transaction
-        tx_id = self.transaction_mgr.begin_transaction(
-            "Database update with validation and rollback"
-        )
-
-        try:
-            # Étape 1: Suppression des doublons dans les données de mise à jour
-            if check_duplicates_update:
-                # Initialisation de l'opération de transaction
-                operation = TransactionOperation(
-                    operation_type="preprocess",
-                    operation_func=self._remove_update_duplicates,
-                    operation_args=(update_df, keep),
-                    description="Remove duplicates from update data",
-                )
-
-                # Annulation de la transaction si l'opération ne peut être ajoutée
-                if not self.transaction_mgr.add_operation(tx_id, **operation.__dict__):
-                    self.transaction_mgr.rollback_transaction(tx_id)
-                    return False
-
-                # Annulation de la transaction si l'opération ne peut être exécutée
-                if not self.transaction_mgr.execute_operation(tx_id):
-                    self.transaction_mgr.rollback_transaction(tx_id)
-                    return False
-
-                # Récupération des données nettoyées
-                update_df = self._get_cleaned_update_data(update_df, keep)
-
-            # Étape 2: Suppression des doublons dans la base de données
-            if check_duplicates_db:
-                # Initialisation de l'opération de transacti
-                operation = TransactionOperation(
-                    operation_type="cleanup",
-                    operation_func=self._remove_database_duplicates,
-                    operation_args=(keep,),
-                    rollback_func=self._restore_database_state,
-                    description="Remove duplicates from existing database",
-                )
-
-                # Annulation de la transaction si l'opération ne peut être ajoutée
-                if not self.transaction_mgr.add_operation(tx_id, **operation.__dict__):
-                    self.transaction_mgr.rollback_transaction(tx_id)
-                    return False
-
-                # Annulation de la transaction si l'opération ne peut être exécutée
-                if not self.transaction_mgr.execute_operation(tx_id):
-                    self.transaction_mgr.rollback_transaction(tx_id)
-                    return False
-
-            # Création d'un savepoint avant les modifications majeures
-            self.transaction_mgr.create_savepoint(tx_id, "before_major_updates")
-
-            # Étape 3: Mise à jour des métadonnées
-            # Initialisation de l'opération de transaction
-            operation = TransactionOperation(
-                operation_type="metadata_update",
-                operation_func=self._update_metadata_safe,
-                operation_args=(update_df,),
-                rollback_func=self._rollback_metadata_changes,
-                description="Update metadata table",
-            )
-
-            # Annulation de la transaction si l'opération ne peut être ajoutée
-            if not self.transaction_mgr.add_operation(tx_id, **operation.__dict__):
-                self.transaction_mgr.rollback_transaction(tx_id)
-                return False
-
-            # Annulation de la transaction si l'opération ne peut être exécutée
-            if not self.transaction_mgr.execute_operation(tx_id):
-                self.transaction_mgr.rollback_transaction(tx_id)
-                return False
-
-            # Étape 4: Mise à jour de la table de faits (avant le recalcul du
-            # statut catégoriel, qui lit l'état post-upsert)
-            # Mise à jour en batch si spécifié
-            if use_batch_processing and len(update_df) > self.batch_size:
-                # Initialisation de l'opération de transaction
-                operation = TransactionOperation(
-                    operation_type="fact_update_batch",
-                    operation_func=self._update_fact_table_batch,
-                    operation_args=(update_df,),
-                    rollback_func=self._rollback_fact_changes,
-                    description="Update fact table (batch processing)",
-                )
-            else:
-                # Initialisation de l'opération de transaction
-                operation = TransactionOperation(
-                    operation_type="fact_update_direct",
-                    operation_func=self._update_fact_table_direct,
-                    operation_args=(update_df,),
-                    rollback_func=self._rollback_fact_changes,
-                    description="Update fact table (direct)",
-                )
-
-            # Annulation de la transaction si l'opération ne peut être ajoutée
-            if not self.transaction_mgr.add_operation(tx_id, **operation.__dict__):
-                self.transaction_mgr.rollback_transaction(tx_id)
-                return False
-
-            # Annulation de la transaction si l'opération ne peut être exécutée
-            if not self.transaction_mgr.execute_operation(tx_id):
-                self.transaction_mgr.rollback_transaction(tx_id)
-                return False
-
-            # Étape 5: Actualisation du statut catégoriel des colonnes VARCHAR
-            # (après la table de faits : le comptage porte sur l'état post-upsert)
-            # Initialisation de l'opération de transaction
-            operation = TransactionOperation(
-                operation_type="categorical_flags",
-                operation_func=self._update_categorical_flags,
-                operation_args=(),
-                rollback_func=self._rollback_metadata_changes,
-                description="Refresh categorical flags in metadata",
-            )
-
-            # Annulation de la transaction si l'opération ne peut être ajoutée
-            if not self.transaction_mgr.add_operation(tx_id, **operation.__dict__):
-                self.transaction_mgr.rollback_transaction(tx_id)
-                return False
-
-            # Annulation de la transaction si l'opération ne peut être exécutée
-            if not self.transaction_mgr.execute_operation(tx_id):
-                self.transaction_mgr.rollback_transaction(tx_id)
-                return False
-
-            # Validation post-update
-            if self.enable_validation and self.auditor:
-                # Validation de la base de données
-                validation_report = self.auditor.validate_database(
-                    ValidationLevel.STANDARD
-                )
-
-                # Vérification des problèmes critiques
-                if validation_report.get_critical_issues_count() > 0:
-                    # Logging
-                    self.logger.error(
-                        "Critical issues found after update, rolling back"
-                    )
-                    # Annulation de la transaction
-                    self.transaction_mgr.rollback_transaction(tx_id)
-                    return False
-
-            # Commit de la transaction
-            if self.transaction_mgr.commit_transaction(tx_id):
-                # Logging
-                self.logger.info("Database update completed successfully")
-                # Invalidation du cache
-                self._invalidate_metadata_cache()
-                # Horodatage de la dernière écriture réussie.
-                # Placé après le commit : un échec d'horodatage, purement
-                # descriptif, ne doit jamais annuler une écriture de données.
-                self._touch_dataset_metadata()
-                # Compaction DuckLake optionnelle après commit (fusion des petits
-                # fichiers delta)
-                if compact_after_update:
-                    self._run_ducklake_compaction()
-                return True
-            else:
-                # Logging
-                self.logger.error("Failed to commit transaction")
-                return False
-
-        except Exception as e:
-            # Logging
-            self.logger.error(f"Error during transactional update: {e}")
-            # Annulation de la transaction
-            self.transaction_mgr.rollback_transaction(tx_id)
-            return False
-
-    # Méthode auxiliaire de mise à jour directe de la base de données
-    def _update_database_direct(
-        self,
-        update_df: nw.DataFrame[Any],
-        check_duplicates_db: bool,
-        check_duplicates_update: bool,
-        keep: Literal["any", "none", "first", "last"],
-        use_batch_processing: bool,
-        compact_after_update: bool,
-    ) -> bool:
-        """Perform direct database update without transaction wrapping.
-
-        Suitable for simple updates where rollback capability is not needed.
-        Faster but no automatic rollback on partial failure.
+        Steps, in order: update-data deduplication, database deduplication,
+        metadata update, fact table upsert, categorical flag refresh, post-update
+        validation. Called from inside the transaction opened by
+        ``update_database``: every failure raises, so the whole update is rolled
+        back and the database returns to its pre-update state.
 
         Args:
             update_df: DataFrame containing the update data.
-            check_duplicates_db: Whether to check and remove duplicates in database.
-            check_duplicates_update: Whether to check and remove duplicates in update
-            data.
-            keep: Duplicate handling strategy ('first', 'last', or False).
+            check_duplicates_db: Whether to remove duplicates from the fact table.
+            check_duplicates_update: Whether to remove duplicates from ``update_df``.
+            keep: Duplicate handling strategy ('any', 'none', 'first', 'last').
             use_batch_processing: Whether to use batch processing for large datasets.
 
-        Returns:
-            True if update completed successfully, False otherwise.
+        Raises:
+            RuntimeError: If any step fails, naming the step reached. The exception
+                message is what the caller logs as the step at which the update
+                stopped.
         """
-        try:
-            # Suppression des doublons dans les données de mise à jour
-            if check_duplicates_update:
-                update_df = remove_dataframe_duplicates(
-                    update_df, keep, self.logger, "update"
+        # Étape 1 : suppression des doublons dans les données de mise à jour
+        if check_duplicates_update:
+            update_df = self._get_cleaned_update_data(update_df, keep)
+
+        # Étape 2 : suppression des doublons dans la base de données
+        if check_duplicates_db and not self._remove_database_duplicates(keep):
+            raise RuntimeError("database duplicate removal failed")
+
+        # Étape 3 : mise à jour des métadonnées
+        if not self._update_metadata_safe(update_df):
+            raise RuntimeError("metadata update failed")
+
+        # Étape 4 : mise à jour de la table de faits (avant le recalcul du statut
+        # catégoriel, qui lit l'état post-upsert)
+        if use_batch_processing and len(update_df) > self.batch_size:
+            if not self._update_fact_table_batch(update_df):
+                raise RuntimeError("fact table update failed (batch processing)")
+        else:
+            if not self._update_fact_table_direct(update_df):
+                raise RuntimeError("fact table update failed (direct)")
+
+        # Étape 5 : actualisation du statut catégoriel des colonnes VARCHAR
+        # (le comptage porte sur l'état post-upsert de la table de faits)
+        if not self._update_categorical_flags():
+            raise RuntimeError("categorical flag refresh failed")
+
+        # Étape 6 : validation post-update
+        if self.enable_validation and self.auditor:
+            validation_report = self.auditor.validate_database(ValidationLevel.STANDARD)
+            # Problèmes critiques : annulation de l'ensemble de la mise à jour
+            if validation_report.get_critical_issues_count() > 0:
+                raise RuntimeError(
+                    "post-update validation found"
+                    f" {validation_report.get_critical_issues_count()} critical"
+                    " issue(s)"
                 )
-
-            # Suppression des doublons dans la base de données
-            if check_duplicates_db:
-                self._remove_database_duplicates(keep)
-
-            # Mise à jour des métadonnées
-            if not self._update_metadata_safe(update_df):
-                return False
-
-            # Mise à jour de la table de faits (avant le recalcul du statut
-            # catégoriel, qui lit l'état post-upsert)
-            # Mise à jour par batch si spécifié
-            if use_batch_processing and len(update_df) > self.batch_size:
-                if not self._update_fact_table_batch(update_df):
-                    return False
-            else:
-                if not self._update_fact_table_direct(update_df):
-                    return False
-
-            # Actualisation du statut catégoriel des colonnes VARCHAR
-            # (le comptage porte sur l'état post-upsert de la table de faits)
-            if not self._update_categorical_flags():
-                return False
-
-            # Nettoyage final
-            self._cleanup_orphaned_data()
-
-            # Logging
-            self.logger.info("Database update completed successfully (direct mode)")
-            # Invalidation du cache des méta-données
-            self._invalidate_metadata_cache()
-            # Horodatage de la dernière écriture réussie.
-            # Placé après le succès : un échec d'horodatage, purement descriptif,
-            # ne doit jamais annuler une écriture de données.
-            self._touch_dataset_metadata()
-            # Compaction DuckLake optionnelle (fusion des petits fichiers delta)
-            if compact_after_update:
-                self._run_ducklake_compaction()
-            return True
-
-        except Exception as e:
-            # Logging
-            self.logger.error(f"Error during direct update: {e}")
-            return False
 
     # Méthodes de mise à jour sécurisées
     # Méthode auxiliaire de mise à jour des méta-données
@@ -948,67 +749,7 @@ class DatabaseUpdater(BaseSchemaManager):
             f" (delete_threshold={delete_threshold})"
         )
 
-    # Méthodes de rollback
-    # Méthode auxiliaire de rollback des changements de métadonnées
-    def _rollback_metadata_changes(self) -> bool:
-        """Rollback metadata changes by invalidating cache.
-
-        Returns:
-            True if rollback succeeded, False on error.
-        """
-        try:
-            # Invalidation du cache pour forcer le rechargement
-            self._invalidate_metadata_cache()
-            # Logging
-            self.logger.info("Metadata changes rolled back")
-            return True
-        except Exception as e:
-            # Logging
-            self.logger.error(f"Error rolling back metadata changes: {e}")
-            return False
-
-    # Méthode auxiliaire de rollback des changements de la fact table.
-    def _rollback_fact_changes(self) -> bool:
-        """Rollback fact table changes (handled by DuckDB transaction).
-
-        Returns:
-            True if rollback succeeded, False on error.
-        """
-        try:
-            # Les changements de fact table sont gérés par la transaction DuckDB
-            # Logging
-            self.logger.info("Fact table changes rolled back")
-            return True
-        except Exception as e:
-            # Logging
-            self.logger.error(f"Error rolling back fact table changes: {e}")
-            return False
-
     # Méthodes utilitaires
-    # Méthode auxiliaire de suppression des doublons des données de mise à jour
-    def _remove_update_duplicates(
-        self,
-        update_df: nw.DataFrame[Any],
-        keep: Literal["any", "none", "first", "last"],
-    ) -> bool:
-        """Remove duplicates from update DataFrame.
-
-        Args:
-            update_df: DataFrame to deduplicate.
-            keep: Strategy for keeping duplicates ('first', 'last', or False).
-
-        Returns:
-            True if deduplication succeeded, False on error.
-        """
-        try:
-            # Cette méthode modifie le DataFrame en place via la référence
-            _ = remove_dataframe_duplicates(update_df, keep, self.logger, "update")
-            return True
-        except Exception as e:
-            # Logging
-            self.logger.error(f"Error removing update duplicates: {e}")
-            return False
-
     # Méthode auxiliaire de nettoyage des données mises à jour
     def _get_cleaned_update_data(
         self,
@@ -1080,18 +821,6 @@ class DatabaseUpdater(BaseSchemaManager):
             # Logging
             self.logger.error(f"Error removing database duplicates: {e}")
             return False
-
-    # Méthode auxuliaire de restoration de la base de données
-    def _restore_database_state(self) -> bool:
-        """Restore database state (placeholder - handled by DuckDB transaction).
-
-        Returns:
-            True (actual restoration handled by database transaction rollback).
-        """
-        # Cette méthode est un placeholder pour la restauration d'état
-        # En pratique, cela serait géré par la transaction DuckDB
-        self.logger.info("Database state restoration handled by transaction")
-        return True
 
     # Méthode auxiliaire de nettoyage des données orphelines
     def _cleanup_orphaned_data(self) -> None:
@@ -1226,98 +955,96 @@ class DatabaseUpdater(BaseSchemaManager):
 
         # Transaction DuckDB unique : sur échec, ni les colonnes ni les lignes
         # metadata ne subsistent (ALTER TABLE est transactionnel dans DuckDB).
-        self.conn.begin()
         try:
-            # ALTER TABLE ... ADD COLUMN pour chaque colonne réellement nouvelle
-            for column in columns_to_add:
-                sql_type = map_python_to_sql_type(df_nw.schema[column])
-                self.conn.execute(
-                    f"ALTER TABLE {fact_table} ADD COLUMN {quote_ident(column)}"
-                    f" {sql_type} DEFAULT NULL"
-                )
-                # Ligne de méta-données (is_primary_key=FALSE, is_categorical
-                # inféré du DataFrame)
-                self._add_column_to_metadata(column, df_nw)
+            with self._transaction("add_columns"):
+                # ALTER TABLE ... ADD COLUMN pour chaque colonne réellement nouvelle
+                for column in columns_to_add:
+                    sql_type = map_python_to_sql_type(df_nw.schema[column])
+                    self.conn.execute(
+                        f"ALTER TABLE {fact_table} ADD COLUMN {quote_ident(column)}"
+                        f" {sql_type} DEFAULT NULL"
+                    )
+                    # Ligne de méta-données (is_primary_key=FALSE, is_categorical
+                    # inféré du DataFrame)
+                    self._add_column_to_metadata(column, df_nw)
 
-            # Champs d'UI (nouvelles colonnes et colonnes overwrite confondues)
-            for column in new_columns:
-                fields = normalized_metadata.get(column)
-                if fields:
-                    self.update_column_metadata(column, **fields)
+                # Champs d'UI (nouvelles colonnes et colonnes overwrite confondues)
+                for column in new_columns:
+                    fields = normalized_metadata.get(column)
+                    if fields:
+                        self.update_column_metadata(column, **fields)
 
-            # Enregistrement d'une vue temporaire pour la jointure
-            self.conn.register(view_name, nw.to_native(df_nw))
+                # Enregistrement d'une vue temporaire pour la jointure
+                self.conn.register(view_name, nw.to_native(df_nw))
 
-            # Condition de jointure sur les clés primaires (identifiants qualifiés
-            # et quotés des deux côtés)
-            join_condition = " AND ".join(
-                f"f.{quote_ident(k)} = t.{quote_ident(k)}" for k in primary_keys
-            )
-
-            # Comptage des combinaisons de df sans correspondance en base : pas
-            # d'insertion (ce n'est pas un upsert), seulement un avertissement
-            # journalisé avec un échantillon.
-            unmatched_rows = self.conn.execute(f"""
-                SELECT {", ".join(quote_ident(k) for k in primary_keys)}
-                FROM {view_name} t
-                WHERE NOT EXISTS (
-                    SELECT 1 FROM {fact_table} f WHERE {join_condition}
-                )
-                LIMIT 5
-            """).fetchall()
-            _unmatched_row = self.conn.execute(f"""
-                SELECT COUNT(*) FROM {view_name} t
-                WHERE NOT EXISTS (
-                    SELECT 1 FROM {fact_table} f WHERE {join_condition}
-                )
-            """).fetchone()
-            unmatched_count = _unmatched_row[0] if _unmatched_row is not None else 0
-            if unmatched_count > 0:
-                self.logger.warning(
-                    f"add_columns: {unmatched_count} key combination(s) in df have"
-                    f" no match in fact_table and will not be inserted (sample:"
-                    f" {unmatched_rows})"
+                # Condition de jointure sur les clés primaires (identifiants qualifiés
+                # et quotés des deux côtés)
+                join_condition = " AND ".join(
+                    f"f.{quote_ident(k)} = t.{quote_ident(k)}" for k in primary_keys
                 )
 
-            # Volume avant écriture : une UPDATE touchant toutes les lignes est une
-            # réécriture complète de la table (copy-on-write).
-            _total_row = self.conn.execute(
-                f"SELECT COUNT(*) FROM {fact_table}"
-            ).fetchone()
-            total_rows = _total_row[0] if _total_row is not None else 0
-            rows_updated = len(df_nw) - unmatched_count
-            self.logger.info(
-                f"add_columns: about to UPDATE {rows_updated} of {total_rows}"
-                f" fact_table row(s) (copy-on-write rewrite of touched files)"
-            )
+                # Comptage des combinaisons de df sans correspondance en base : pas
+                # d'insertion (ce n'est pas un upsert), seulement un avertissement
+                # journalisé avec un échantillon.
+                unmatched_rows = self.conn.execute(f"""
+                    SELECT {", ".join(quote_ident(k) for k in primary_keys)}
+                    FROM {view_name} t
+                    WHERE NOT EXISTS (
+                        SELECT 1 FROM {fact_table} f WHERE {join_condition}
+                    )
+                    LIMIT 5
+                """).fetchall()
+                _unmatched_row = self.conn.execute(f"""
+                    SELECT COUNT(*) FROM {view_name} t
+                    WHERE NOT EXISTS (
+                        SELECT 1 FROM {fact_table} f WHERE {join_condition}
+                    )
+                """).fetchone()
+                unmatched_count = _unmatched_row[0] if _unmatched_row is not None else 0
+                if unmatched_count > 0:
+                    self.logger.warning(
+                        f"add_columns: {unmatched_count} key combination(s) in df have"
+                        f" no match in fact_table and will not be inserted (sample:"
+                        f" {unmatched_rows})"
+                    )
 
-            # UN SEUL UPDATE ... FROM pour toutes les colonnes concernées (noms non
-            # qualifiés côté gauche du SET : DuckDB rejette les qualificateurs de
-            # table dans la clause SET d'un UPDATE ... FROM)
-            set_clause = ", ".join(
-                f"{quote_ident(c)} = t.{quote_ident(c)}" for c in new_columns
-            )
-            self.conn.execute(f"""
-                UPDATE {fact_table} f
-                SET {set_clause}
-                FROM {view_name} t
-                WHERE {join_condition}
-            """)
+                # Volume avant écriture : une UPDATE touchant toutes les lignes est une
+                # réécriture complète de la table (copy-on-write).
+                _total_row = self.conn.execute(
+                    f"SELECT COUNT(*) FROM {fact_table}"
+                ).fetchone()
+                total_rows = _total_row[0] if _total_row is not None else 0
+                rows_updated = len(df_nw) - unmatched_count
+                self.logger.info(
+                    f"add_columns: about to UPDATE {rows_updated} of {total_rows}"
+                    f" fact_table row(s) (copy-on-write rewrite of touched files)"
+                )
 
-            self.conn.execute(f"DROP VIEW {view_name}")
+                # Un seul UPDATE ... FROM pour toutes les colonnes concernées (noms non
+                # qualifiés côté gauche du SET : DuckDB rejette les qualificateurs de
+                # table dans la clause SET d'un UPDATE ... FROM)
+                set_clause = ", ".join(
+                    f"{quote_ident(c)} = t.{quote_ident(c)}" for c in new_columns
+                )
+                self.conn.execute(f"""
+                    UPDATE {fact_table} f
+                    SET {set_clause}
+                    FROM {view_name} t
+                    WHERE {join_condition}
+                """)
 
-            # Actualisation du statut catégoriel des colonnes VARCHAR concernées
-            # (ajout d'une colonne catégorielle, ou overwrite d'une colonne
-            # existante dont la cardinalité a changé)
-            self._refresh_categorical_flags()
+                self.conn.execute(f"DROP VIEW {view_name}")
 
-            # dataset_metadata.updated_at
-            self._touch_dataset_metadata()
+                # Actualisation du statut catégoriel des colonnes VARCHAR concernées
+                # (ajout d'une colonne catégorielle, ou overwrite d'une colonne
+                # existante dont la cardinalité a changé)
+                self._refresh_categorical_flags()
 
-            self.conn.commit()
-
+                # dataset_metadata.updated_at
+                self._touch_dataset_metadata()
         except Exception:
-            self.conn.rollback()
+            # Nettoyage de la vue temporaire : elle survit au ROLLBACK, qui ne
+            # porte que sur le catalogue.
             try:
                 self.conn.execute(f"DROP VIEW IF EXISTS {view_name}")
             except Exception:
@@ -1411,15 +1138,14 @@ class DatabaseUpdater(BaseSchemaManager):
             status = {
                 "timestamp": datetime.now(),
                 "health_status": "unknown",
+                # Toujours 0 : les transactions sont portées par DuckDB
+                # (BEGIN/COMMIT par opération) et ne font plus l'objet d'un suivi
+                # applicatif. Clé conservée pour la stabilité du dictionnaire.
                 "active_transactions": 0,
                 "validation_enabled": self.enable_validation,
                 "batch_size": self.batch_size,
                 "max_workers": self.max_workers,
             }
-
-            # Vérification des transactions actives
-            active_txs = self.transaction_mgr.list_active_transactions()
-            status["active_transactions"] = len(active_txs)
 
             # Vérification de la santé de la base de données
             if self.auditor:
@@ -1485,11 +1211,6 @@ class DatabaseUpdater(BaseSchemaManager):
 
             # Nettoyage des données orphelines
             self._cleanup_orphaned_data()
-
-            # Nettoyage des anciennes transactions
-            cleaned_txs = self.transaction_mgr.cleanup_old_transactions()
-            if cleaned_txs > 0:
-                self.logger.info(f"Cleaned up {cleaned_txs} old transactions")
 
             # Logging
             self.logger.info("Database optimization completed")

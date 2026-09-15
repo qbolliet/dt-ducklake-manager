@@ -849,3 +849,114 @@ def test_remove_from_cluster_by_noop_when_absent(manager: DataManager) -> None:
     """
     manager._remove_from_cluster_by("category")
     assert manager._get_cluster_by_columns() == ["id"]
+
+
+# ===========================================================================
+# Tests de _transaction() : point d'accroche transactionnel unique
+# ===========================================================================
+
+
+# Test qu'une transaction validée rend les écritures durables
+def test_transaction_commits_on_success(manager: DataManager) -> None:
+    """Test that a block leaving _transaction normally is committed.
+
+    Args:
+        manager: DataManager fixture with a built schema.
+    """
+    with manager._transaction("test_commit"):
+        manager.conn.execute("DELETE FROM fact_table WHERE id = 1")
+
+    # L'écriture survit à la sortie du bloc
+    assert manager.conn.execute("SELECT COUNT(*) FROM fact_table").fetchone()[0] == 4
+    # La transaction est refermée
+    assert manager._in_transaction is False
+
+
+# Test qu'une exception annule l'ensemble des écritures du bloc
+def test_transaction_rolls_back_on_exception(manager: DataManager) -> None:
+    """Test that an exception inside _transaction rolls every write back.
+
+    Args:
+        manager: DataManager fixture with a built schema.
+    """
+    initial_count = manager.conn.execute("SELECT COUNT(*) FROM fact_table").fetchone()[
+        0
+    ]
+
+    with pytest.raises(RuntimeError, match="boom"):
+        with manager._transaction("test_rollback"):
+            manager.conn.execute("DELETE FROM fact_table WHERE id = 1")
+            manager.conn.execute("DELETE FROM fact_table WHERE id = 2")
+            raise RuntimeError("boom")
+
+    # La base est revenue à son état initial
+    count = manager.conn.execute("SELECT COUNT(*) FROM fact_table").fetchone()[0]
+    assert count == initial_count
+    assert manager._in_transaction is False
+
+
+# Test qu'un ALTER TABLE est lui aussi annulé (DDL transactionnel dans DuckDB)
+def test_transaction_rolls_back_ddl(manager: DataManager) -> None:
+    """Test that a column added inside a rolled-back transaction does not survive.
+
+    Args:
+        manager: DataManager fixture with a built schema.
+    """
+    with pytest.raises(RuntimeError):
+        with manager._transaction("test_rollback_ddl"):
+            manager.conn.execute("ALTER TABLE fact_table ADD COLUMN score DOUBLE")
+            raise RuntimeError("boom")
+
+    assert "score" not in manager._get_fact_table_columns()
+
+
+# Test que use_transaction=False laisse les écritures partielles en place
+def test_transaction_disabled_keeps_partial_state(manager: DataManager) -> None:
+    """Test that use_transaction=False runs in autocommit mode.
+
+    Without a transaction, a failure mid-block leaves whatever was already
+    written behind — the documented difference between the two modes.
+
+    Args:
+        manager: DataManager fixture with a built schema.
+    """
+    initial_count = manager.conn.execute("SELECT COUNT(*) FROM fact_table").fetchone()[
+        0
+    ]
+
+    with pytest.raises(RuntimeError):
+        with manager._transaction("test_autocommit", use_transaction=False):
+            manager.conn.execute("DELETE FROM fact_table WHERE id = 1")
+            raise RuntimeError("boom")
+
+    # La suppression a bien persisté
+    count = manager.conn.execute("SELECT COUNT(*) FROM fact_table").fetchone()[0]
+    assert count == initial_count - 1
+
+
+# Test qu'un appel imbriqué ne rouvre pas de transaction
+def test_transaction_nested_call_reuses_outer(manager: DataManager) -> None:
+    """Test that a nested _transaction reuses the transaction already open.
+
+    DuckDB rejects a BEGIN inside a BEGIN; the nested block must neither fail nor
+    commit early, so an exception raised after it still rolls everything back.
+
+    Args:
+        manager: DataManager fixture with a built schema.
+    """
+    initial_count = manager.conn.execute("SELECT COUNT(*) FROM fact_table").fetchone()[
+        0
+    ]
+
+    with pytest.raises(RuntimeError):
+        with manager._transaction("outer"):
+            manager.conn.execute("DELETE FROM fact_table WHERE id = 1")
+            # Bloc imbriqué : aucun BEGIN supplémentaire, aucun commit prématuré
+            with manager._transaction("inner"):
+                manager.conn.execute("DELETE FROM fact_table WHERE id = 2")
+            assert manager._in_transaction is True
+            raise RuntimeError("boom")
+
+    # Les deux suppressions sont annulées ensemble
+    count = manager.conn.execute("SELECT COUNT(*) FROM fact_table").fetchone()[0]
+    assert count == initial_count

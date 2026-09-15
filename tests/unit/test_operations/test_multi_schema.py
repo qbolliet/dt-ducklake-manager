@@ -151,7 +151,6 @@ def test_catalog_alias_travels_with_schema(
     for mgr in (
         updater,
         updater.data_mgr,
-        updater.transaction_mgr,
         updater.auditor,
     ):
         assert mgr.schema == schema_name
