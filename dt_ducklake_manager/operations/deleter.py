@@ -12,7 +12,7 @@ import duckdb
 from .._internal.managers.base import BaseSchemaManager
 from .._internal.managers.data import DataManager
 from ..maintenance.auditor import DatabaseAuditor, ValidationLevel
-from ..maintenance.compaction import DuckLakeMaintenance
+from ..reporting import OperationReport
 
 # Import des utilitaires
 from ..utils.sql import _build_where_clause
@@ -170,7 +170,10 @@ class DatabaseDeleter(BaseSchemaManager):
         use_transaction: bool = True,
         perform_cleanup: bool | None = None,
         compact_after_update: bool = True,
-    ) -> int:
+        run_id: str | None = None,
+        commit_message: str | None = None,
+        commit_info: dict[str, Any] | None = None,
+    ) -> OperationReport:
         """
         Delete rows from fact table based on filters with atomic operations.
 
@@ -185,23 +188,35 @@ class DatabaseDeleter(BaseSchemaManager):
             compact_after_update: Whether to run DuckLake compaction (merge small delta
                 files and rewrite delete files) immediately after a successful deletion.
                 Adds write latency but keeps read performance optimal. Defaults to True.
+            run_id: Run identifier recorded on the resulting DuckLake snapshot
+                (``ducklake_set_commit_message``). Ignored (skipped with a DEBUG
+                log) on a connection with no real DuckLake catalog attached.
+            commit_message: Commit message recorded alongside ``run_id``.
+            commit_info: Extra JSON-serializable fields merged into the commit's
+                ``extra_info``.
 
         Returns:
-            Number of rows deleted, -1 if operation failed
+            OperationReport: report describing what was actually deleted. A
+            pre-transaction validation failure returns a report with a warning and
+            ``rows_deleted == 0`` rather than raising.
 
         Example:
             >>> # Using string filter
-            >>> deleted = deleter.delete_rows("status = 'inactive'")
+            >>> report = deleter.delete_rows("status = 'inactive'")
             >>>
             >>> # Using structured filter
             >>> filters = [('status', '=', 'inactive'), ('date', '<', '2023-01-01')]
-            >>> deleted = deleter.delete_rows(filters, use_transaction=True,
+            >>> report = deleter.delete_rows(filters, use_transaction=True,
             compact_after_update=False)
         """
         # Validation préalable
         if not self.validate_operation("delete", filters=filters):
+            # Logging
             self.logger.error("Pre-delete validation failed")
-            return -1
+            # Rapport
+            return self._early_failure_report(
+                "delete_rows", run_id, "Pre-delete validation failed"
+            )
 
         # Configuration du nettoyage
         if perform_cleanup is None:
@@ -216,12 +231,20 @@ class DatabaseDeleter(BaseSchemaManager):
         # Bloc transactionnel unique : la suppression et son nettoyage forment un
         # tout, annulé en bloc sur exception.
         try:
-            with self._transaction("delete_rows", use_transaction=use_transaction):
-                rows_deleted = self._run_delete_rows(filters, perform_cleanup)
+            with self._transaction(
+                "delete_rows",
+                use_transaction=use_transaction,
+                run_id=run_id,
+                commit_message=commit_message,
+                commit_info=commit_info,
+            ) as report:
+                rows_deleted = self._run_delete_rows(filters, perform_cleanup, report)
         except Exception as e:
             # Logging
             self.logger.error(f"Error during row deletion: {e}")
-            return -1
+            final_report = self.last_report
+            assert final_report is not None  # posé par _transaction sur tout échec
+            return final_report
 
         # Logging
         self.logger.info(
@@ -233,16 +256,21 @@ class DatabaseDeleter(BaseSchemaManager):
 
         # Compaction DuckLake optionnelle après le commit (réécriture des delete
         # files) : la maintenance ne fait jamais partie de la transaction.
+        final_report = self.last_report
+        assert final_report is not None  # posé par _transaction sur tout succès
         if rows_deleted > 0 and compact_after_update:
-            self._run_ducklake_compaction()
+            self._run_ducklake_compaction(report=final_report)
 
-        return rows_deleted
+        self._finalize_report_after_write(final_report)
+        self.logger.info(final_report.summary())
+        return final_report
 
     # Méthode d'exécution de la suppression des lignes
     def _run_delete_rows(
         self,
         filters: str | list[Any] | dict[Any, Any] | None,
         perform_cleanup: bool,
+        report: OperationReport,
     ) -> int:
         """Run the ordered steps of a row deletion.
 
@@ -255,6 +283,8 @@ class DatabaseDeleter(BaseSchemaManager):
             filters: Filter conditions (SQL string or structured filters).
             perform_cleanup: Whether to drop null-only columns and refresh
                 categorical flags after the deletion.
+            report: In-progress report of the enclosing transaction, appended to
+                (``columns_dropped``, ``metadata_changes``) by the cleanup step.
 
         Returns:
             Number of rows deleted.
@@ -280,6 +310,10 @@ class DatabaseDeleter(BaseSchemaManager):
         ).fetchone()
         current_count = _row2[0] if _row2 is not None else 0
         rows_deleted = initial_count - current_count
+        # Valeur exacte, calculée en Python : sert de repli tant que
+        # _transaction n'a pas pu obtenir la mesure DuckLake réelle (table_changes),
+        # qui la remplacera si elle est disponible.
+        report.rows_deleted = rows_deleted
 
         # Aucune suppression : rien à nettoyer ni à valider
         if rows_deleted == 0:
@@ -287,7 +321,7 @@ class DatabaseDeleter(BaseSchemaManager):
 
         # Étape 2 : nettoyage des données orphelines si activé.
         # Non critique : un échec est journalisé sans annuler la suppression.
-        if perform_cleanup and not self._cleanup_orphaned_data_comprehensive():
+        if perform_cleanup and not self._cleanup_orphaned_data_comprehensive(report):
             self.logger.warning("Cleanup failed, but row deletion completed")
 
         # Étape 3 : validation post-suppression
@@ -303,57 +337,6 @@ class DatabaseDeleter(BaseSchemaManager):
 
         return rows_deleted
 
-    # Méthode auxiliaire de compaction DuckLake
-    def _run_ducklake_compaction(
-        self,
-        fact_table: str = "fact_table",
-        delete_threshold: float = 0.1,
-    ) -> None:
-        """Trigger DuckLake compaction on the fact table after a successful deletion.
-
-        Merges small adjacent Parquet delta files and rewrites files whose
-        deleted-row share exceeds ``delete_threshold`` (tombstone removal), to
-        maintain optimal read performance. Delegates to ``DuckLakeMaintenance``;
-        failures are non-fatal there (a warning is logged, zero-file results are
-        logged explicitly) so this method itself never raises.
-
-        Never calls ``expire_snapshots``, ``cleanup_files`` or
-        ``delete_orphaned_files``: those destroy time travel or are irreversible, and
-        are reserved for planned maintenance (``DuckLakeMaintenance.full_maintenance``)
-        with an explicit retention.
-
-        Args:
-            fact_table: Name of the fact table to compact. Defaults to ``'fact_table'``.
-            delete_threshold: Rewrite files whose deleted-row share exceeds this
-                fraction (0-1). Defaults to 0.1 — without an explicit value this
-                procedure is a measured no-op. Particularly relevant here since a
-                deletion is exactly what raises a file's deleted-row share.
-
-        Examples:
-            >>> deleter._run_ducklake_compaction()
-            >>> deleter._run_ducklake_compaction('my_fact_table', delete_threshold=0.3)
-        """
-        # Initialisation du mainteneur
-        maintenance = DuckLakeMaintenance(
-            self.conn, catalog_alias=self.catalog_alias, schema=self.schema
-        )
-        # merge_files/rewrite_data_files sont déjà non bloquantes (try/except interne,
-        # compteurs réels journalisés y compris les zéros) : aucun try/except
-        # supplémentaire n'est nécessaire ici.
-        _, _, merge_processed, merge_created = maintenance.merge_files(
-            self.schema, fact_table
-        )
-        _, _, rewrite_processed, rewrite_created = maintenance.rewrite_data_files(
-            self.schema, fact_table, delete_threshold=delete_threshold
-        )
-        # Logging
-        self.logger.info(
-            f"Compaction DuckLake finished for '{fact_table}' : merge"
-            f" {merge_processed} -> {merge_created} file(s), rewrite"
-            f" {rewrite_processed} -> {rewrite_created} file(s)"
-            f" (delete_threshold={delete_threshold})"
-        )
-
     # Méthode principale de suppression de colonnes
     def delete_columns(
         self,
@@ -361,7 +344,10 @@ class DatabaseDeleter(BaseSchemaManager):
         use_transaction: bool = True,
         validate_dependencies: bool = True,
         cascade: bool = False,
-    ) -> dict[str, bool]:
+        run_id: str | None = None,
+        commit_message: str | None = None,
+        commit_info: dict[str, Any] | None = None,
+    ) -> OperationReport:
         """
         Delete columns from fact table and related structures with dependency analysis.
 
@@ -383,22 +369,34 @@ class DatabaseDeleter(BaseSchemaManager):
             cascade: Whether to allow deleting a column that is the parent of
                 another column, detaching its children (``parent_name`` set to
                 ``NULL``) instead of refusing the deletion. Defaults to False.
+            run_id: Run identifier recorded on the resulting DuckLake snapshot
+                (``ducklake_set_commit_message``). Ignored (skipped with a DEBUG
+                log) on a connection with no real DuckLake catalog attached.
+            commit_message: Commit message recorded alongside ``run_id``.
+            commit_info: Extra JSON-serializable fields merged into the commit's
+                ``extra_info``.
 
         Returns:
-            Dictionary mapping column names to success status
+            OperationReport: successfully dropped columns are in
+            ``report.columns_dropped``; a column that failed (not found, refused
+            by dependency analysis, or an error mid-deletion) is instead named in
+            ``report.warnings``, never silently omitted.
 
         Example:
-            >>> results = deleter.delete_columns(['old_col1', 'old_col2'])
-            >>> for col, success in results.items():
-            ...     print(f"Column {col}: {'deleted' if success else 'failed'}")
+            >>> report = deleter.delete_columns(['old_col1', 'old_col2'])
+            >>> report.columns_dropped
+            ['old_col1', 'old_col2']
             >>> # Deleting a hierarchy parent, detaching its children
-            >>> results = deleter.delete_columns(['region'], cascade=True)
+            >>> report = deleter.delete_columns(['region'], cascade=True)
         """
         # Validation préalable
         if not self.validate_operation("drop_column", columns=columns):
             # Logging
             self.logger.error("Pre-column-deletion validation failed")
-            return {col: False for col in columns}
+            # Rapport
+            return self._early_failure_report(
+                "delete_columns", run_id, "Pre-column-deletion validation failed"
+            )
 
         # Analyse des dépendances si activée
         if validate_dependencies:
@@ -410,7 +408,13 @@ class DatabaseDeleter(BaseSchemaManager):
                 self.logger.error(
                     "Critical dependencies found, aborting columns deletion"
                 )
-                return {col: False for col in columns}
+                # Rapport
+                return self._early_failure_report(
+                    "delete_columns",
+                    run_id,
+                    f"Critical dependencies found for column(s) {columns};"
+                    " aborting columns deletion",
+                )
 
         # Logging
         self.logger.info(f"Starting columns deletion (transaction: {use_transaction})")
@@ -418,18 +422,36 @@ class DatabaseDeleter(BaseSchemaManager):
         # Bloc transactionnel unique : sur exception, ni les colonnes ni leurs
         # lignes metadata ne sont perdues.
         try:
-            with self._transaction("delete_columns", use_transaction=use_transaction):
+            with self._transaction(
+                "delete_columns",
+                use_transaction=use_transaction,
+                run_id=run_id,
+                commit_message=commit_message,
+                commit_info=commit_info,
+            ) as report:
                 results = self._run_delete_columns(columns, cascade=cascade)
+                report.columns_dropped = [
+                    col for col, success in results.items() if success
+                ]
+                for col, success in results.items():
+                    if not success:
+                        report.warnings.append(f"Column '{col}' could not be deleted")
         except Exception as e:
             # Logging
             self.logger.error(f"Error during column deletion: {e}")
-            return {col: False for col in columns}
+            final_report = self.last_report
+            assert final_report is not None  # posé par _transaction sur tout échec
+            return final_report
 
         # Horodatage dès qu'au moins une colonne a effectivement été supprimée
-        if any(results.values()):
+        final_report = self.last_report
+        assert final_report is not None  # posé par _transaction sur tout succès
+        if final_report.columns_dropped:
             self._touch_dataset_metadata()
 
-        return results
+        self._finalize_report_after_write(final_report)
+        self.logger.info(final_report.summary())
+        return final_report
 
     # Méthode d'exécution de la suppression des colonnes
     def _run_delete_columns(self, columns: list[str], cascade: bool) -> dict[str, bool]:
@@ -533,8 +555,16 @@ class DatabaseDeleter(BaseSchemaManager):
             return False
 
     # Méthode auxiliaire de suppression des données orphelines
-    def _cleanup_orphaned_data_comprehensive(self) -> dict[str, Any]:
-        """Comprehensive cleanup of orphaned data."""
+    def _cleanup_orphaned_data_comprehensive(
+        self, report: OperationReport | None = None
+    ) -> dict[str, Any]:
+        """Comprehensive cleanup of orphaned data.
+
+        Args:
+            report: In-progress report of the enclosing transaction (reused by the
+                nested ``delete_columns`` call, per ``_transaction``'s reentrance
+                rule), appended to (``metadata_changes``) for categorical flips.
+        """
         try:
             # Initialisation du dictionnaire résultat
             results: dict[str, Any] = {
@@ -548,17 +578,16 @@ class DatabaseDeleter(BaseSchemaManager):
             null_only_columns = self._get_null_only_columns()
             if null_only_columns:
                 # Suppression via delete_columns (sans transaction car déjà dans un
-                # contexte)
-                column_results = self.delete_columns(
+                # contexte) : réutilise le rapport englobant (report reentrance de
+                # _transaction), donc column_report.columns_dropped == ce que le
+                # rapport englobant porte déjà.
+                column_report = self.delete_columns(
                     null_only_columns, use_transaction=False
                 )
-                # Ajout des colonnes supprimées avec succès au résultat
-                results["null_columns"] = [
-                    col for col, success in column_results.items() if success
-                ]
+                results["null_columns"] = list(column_report.columns_dropped)
 
             # Étape 2: Actualisation du statut catégoriel après suppression
-            results["categorical_changes"] = self._refresh_categorical_flags()
+            results["categorical_changes"] = self._refresh_categorical_flags(report)
 
             return results
 

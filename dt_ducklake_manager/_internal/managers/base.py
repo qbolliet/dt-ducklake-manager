@@ -17,7 +17,17 @@ import narwhals as nw
 import polars as pl
 from narwhals.typing import IntoDataFrame
 
+# Import des gestionnaires de maintenance
+from ...maintenance.compaction import DuckLakeMaintenance
+
 # Import des utilitaires
+from ...reporting import (
+    OperationReport,
+    _current_snapshot_id,
+    _set_commit_message,
+    _table_changes_counts,
+    _table_info,
+)
 from ...utils.hierarchy import validate_hierarchy_forest
 from ...utils.logger import _init_logger
 from ...utils.sql import qualify_table, quote_ident, resolve_catalog
@@ -119,11 +129,27 @@ class BaseSchemaManager(ABC):
         # de delete_rows).
         self._in_transaction = False
 
+        # Rapport de la transaction actuellement ouverte (None hors transaction) :
+        # permet à un appel imbriqué (use_transaction=False) de contribuer ses
+        # propres colonnes/avertissements au rapport de l'opération englobante.
+        self._current_report: OperationReport | None = None
+
+        # Dernier rapport produit par ce gestionnaire, succès ou échec (partiel) :
+        # exposé publiquement pour les opérations qui conservent leur contrat de
+        # retour historique (ex. update_database -> bool).
+        self.last_report: OperationReport | None = None
+
     # Point d'accroche transactionnel unique des opérations publiques
     @contextmanager
     def _transaction(
-        self, operation: str, use_transaction: bool = True
-    ) -> Iterator[None]:
+        self,
+        operation: str,
+        use_transaction: bool = True,
+        table: str = "fact_table",
+        run_id: str | None = None,
+        commit_message: str | None = None,
+        commit_info: dict[str, Any] | None = None,
+    ) -> Iterator[OperationReport]:
         """Run one public operation inside a single DuckDB transaction.
 
         Opens a ``BEGIN`` on entry, ``COMMIT`` on normal exit and ``ROLLBACK`` on
@@ -133,62 +159,340 @@ class BaseSchemaManager(ABC):
         maintenance (``rewrite_data_files``, ``merge_adjacent_files``) must run
         **after** the commit, hence outside of this block.
 
+        It is also the single point where an :class:`OperationReport` is built and
+        traced. Before-state (``rows_before``, ``files_before``/``bytes_before``,
+        ``snapshot_before``) is captured on entry; ``run_id``/``commit_message``/
+        ``commit_info`` are recorded via ``ducklake_set_commit_message`` right
+        before ``COMMIT`` (skipped with a DEBUG log on a connection with no
+        DuckLake catalog attached); after-state and the exact row-change counts
+        (``ducklake_table_changes``) are captured right after ``COMMIT``. The
+        caller may still refine ``files_after``/``bytes_after``/``snapshot_after``
+        afterwards (e.g. once post-commit compaction has run) and fill
+        ``report.maintenance``/``columns_added``/``columns_dropped``/
+        ``metadata_changes`` before logging ``report.summary()`` — this method only
+        guarantees the report exists, is attached to ``self.last_report``, and
+        carries accurate before/after-commit state.
+
         A nested call — a public operation invoked from within another one — reuses
         the transaction already open instead of issuing a second ``BEGIN``, which
-        DuckDB rejects.
+        DuckDB rejects, and reuses the enclosing operation's report so its own
+        contributions (e.g. columns dropped by a nested ``delete_columns`` call)
+        show up in the outer report too.
 
         Args:
-            operation: Name of the operation, used in the log lines (e.g.
-                ``'update'``, ``'delete_rows'``).
+            operation: Name of the operation, used in the log lines and as
+                ``report.operation`` (e.g. ``'update'``, ``'delete_rows'``).
             use_transaction: Whether to actually wrap the block in a transaction.
                 When False the block runs in autocommit mode: each statement is
                 durable as soon as it executes and a failure leaves partial state.
                 Defaults to True.
+            table: Fact table name the report's file/row measurements target.
+                Defaults to ``'fact_table'``.
+            run_id: Caller-supplied run identifier, recorded as the resulting
+                snapshot's ``author`` and as ``report.run_id``.
+            commit_message: Caller-supplied commit message, recorded on the
+                resulting snapshot.
+            commit_info: Extra JSON-serializable fields merged into the commit's
+                ``extra_info``, alongside ``operation``/``schema`` and whatever of
+                the report is already known before commit.
 
         Yields:
-            None: control returns to the caller's ``with`` block.
+            OperationReport: the in-progress report, mutable by the caller (e.g.
+            appending to ``columns_added``) for the remainder of the ``with`` block.
 
         Raises:
             Exception: any exception raised inside the block, re-raised after the
-                ``ROLLBACK``.
+                ``ROLLBACK``. A partial report is attached to ``self.last_report``
+                and logged at ERROR before re-raising.
 
         Examples:
-            >>> with manager._transaction('update'):
+            >>> with manager._transaction('update') as report:
             ...     manager._update_metadata_safe(df)
+            ...     report.columns_added.append('score')
         """
         # Transaction déjà ouverte ou mode autocommit : exécution directe du bloc,
-        # la gestion transactionnelle revient à l'appelant (ou à personne).
+        # la gestion transactionnelle revient à l'appelant (ou à personne). Le
+        # rapport de l'opération englobante est réutilisé s'il existe, pour que les
+        # contributions de l'appel imbriqué y apparaissent ; sinon un rapport
+        # minimal est construit (pas de mesure avant/après : aucune transaction
+        # n'encadre le bloc pour en délimiter les bornes).
         if not use_transaction or self._in_transaction:
-            yield
+            report = self._current_report or OperationReport(
+                operation=operation,
+                schema=self.schema,
+                run_id=run_id,
+                started_at=datetime.now(),
+                duration_seconds=0.0,
+            )
+            try:
+                yield report
+            except Exception as e:
+                report.warnings.append(f"{operation} failed: {e}")
+                raise
+            finally:
+                self.last_report = report
             return
 
         # Ouverture de la transaction
         start_time = time.time()
+        started_at = datetime.now()
+
+        # Avant-état : mesuré avant le BEGIN, donc hors de toute transaction.
+        rows_before = self._count_rows(table)
+        files_before, bytes_before, _, _ = self._table_info(table) or (0, 0, 0, 0)
+        snapshot_before = self._current_snapshot()
+
+        report = OperationReport(
+            operation=operation,
+            schema=self.schema,
+            run_id=run_id,
+            started_at=started_at,
+            duration_seconds=0.0,
+            rows_before=rows_before,
+            files_before=files_before,
+            bytes_before=bytes_before,
+            snapshot_before=snapshot_before,
+        )
+        self._current_report = report
+
+        # Connexion
         self.conn.begin()
         self._in_transaction = True
         # Logging
         self.logger.debug(f"BEGIN {operation} ({self.schema})")
 
         try:
-            yield
+            yield report
         except Exception as e:
             # Annulation : la base revient à son état d'avant le BEGIN
             self.conn.rollback()
             self._in_transaction = False
-            # Logging : l'étape atteinte est portée par le message de l'exception
+            self._current_report = None
+            report.duration_seconds = time.time() - start_time
+            report.warnings.append(f"{operation} failed: {e}")
+            self.last_report = report
+            # Logging : l'étape atteinte est portée par le message de l'exception.
+            # Rapport partiel journalisé en ERROR (pas summary(), pensée pour un
+            # succès).
             self.logger.error(
-                f"ROLLBACK {operation} ({self.schema}) after"
-                f" {time.time() - start_time:.2f}s: {e}"
+                f"{operation} FAILED after {report.duration_seconds:.2f}s"
+                f" (schema={self.schema}, run_id={run_id}): {e}"
             )
             raise
         else:
+            # Message de commit DuckLake (traçabilité du run) : dans la transaction,
+            # avant COMMIT. Ignoré avec un DEBUG sur une connexion sans DuckLake réel.
+            extra_info: dict[str, Any] = {
+                "operation": operation,
+                "schema": self.schema,
+                **(commit_info or {}),
+            }
+            if report.columns_added:
+                extra_info["columns_added"] = report.columns_added
+            if report.columns_dropped:
+                extra_info["columns_dropped"] = report.columns_dropped
+            _set_commit_message(
+                self.conn,
+                self._catalog,
+                run_id,
+                commit_message,
+                extra_info,
+                self.logger,
+            )
+
             # Validation de la transaction
             self.conn.commit()
             self._in_transaction = False
+            self._current_report = None
+
+            # Après-état : mesuré juste après COMMIT, avant toute compaction
+            # post-écriture (qui reste hors de cette méthode, cf. docstring).
+            report.rows_after = self._count_rows(table)
+            files_after, bytes_after, _, _ = self._table_info(table) or (0, 0, 0, 0)
+            report.files_after = files_after
+            report.bytes_after = bytes_after
+            report.snapshot_after = self._current_snapshot()
+            changes = _table_changes_counts(
+                self.conn,
+                self._catalog,
+                self.schema,
+                table,
+                snapshot_before,
+                report.snapshot_after,
+                self.logger,
+            )
+            # N'écrase les comptages que si une mesure DuckLake réelle a pu être
+            # obtenue : sur une connexion sans catalogue réel (tests in-memory),
+            # `changes` est vide et les comptages déjà déposés par l'appelant dans
+            # le corps de la transaction (calculs Python exacts, ex. COUNT(*)
+            # avant/après ciblés) doivent rester tels quels plutôt que d'être
+            # remis à zéro.
+            if changes:
+                report.rows_inserted = changes.get("insert", 0)
+                report.rows_updated = changes.get("update_postimage", 0)
+                report.rows_deleted = changes.get("delete", 0)
+            report.duration_seconds = time.time() - start_time
+            self.last_report = report
+
             # Logging
             self.logger.debug(
-                f"COMMIT {operation} ({self.schema}) in {time.time() - start_time:.2f}s"
+                f"COMMIT {operation} ({self.schema}) in {report.duration_seconds:.2f}s"
             )
+
+    # Méthode auxiliaire de comptage des lignes d'une table (hors DuckLake)
+    def _count_rows(self, table: str) -> int:
+        """Count the rows of a table, qualified by this manager's schema/catalog.
+
+        Args:
+            table: Bare table name (e.g. ``'fact_table'``).
+
+        Returns:
+            int: Row count, or ``0`` if the table does not exist yet.
+        """
+        try:
+            row = self.conn.execute(
+                f"SELECT COUNT(*) FROM {self._qualified(table)}"
+            ).fetchone()
+            return int(row[0]) if row is not None else 0
+        except Exception:
+            return 0
+
+    # Méthode auxiliaire de lecture des statistiques de fichiers de la table
+    def _table_info(self, table: str) -> tuple[int, int, int, int] | None:
+        """Delegate to :func:`reporting._table_info` for this manager's table."""
+        return _table_info(self.conn, self._catalog, self.schema, table, self.logger)
+
+    # Méthode auxiliaire de lecture du snapshot_id courant
+    def _current_snapshot(self) -> int | None:
+        """Delegate to :func:`reporting._current_snapshot_id`."""
+        return _current_snapshot_id(self.conn, self._catalog, self.logger)
+
+    # Méthode de finalisation du rapport après la maintenance post-écriture
+    def _finalize_report_after_write(
+        self, report: OperationReport, table: str = "fact_table"
+    ) -> None:
+        """Re-capture file/byte/snapshot state after post-commit maintenance.
+
+        ``_transaction`` already fills ``files_after``/``bytes_after``/
+        ``snapshot_after`` right after ``COMMIT``, before any post-write
+        compaction runs (``merge_files``/``rewrite_data_files``). Since compaction
+        itself creates further DuckLake snapshots and rewrites files, the report's
+        *final* file/byte/snapshot numbers — the ones a reader of the INFO summary
+        line cares about — are re-measured here, once compaction (if any) has
+        completed. Never overwrites ``report.maintenance``, populated separately by
+        the caller from the compaction calls' own return values.
+
+        Args:
+            report: The report to update in place.
+            table: Fact table name. Defaults to ``'fact_table'``.
+        """
+        # Extraction des infos de la table
+        info = self._table_info(table)
+        # Décomposition des informations de la table et ajout au rapport
+        if info is not None:
+            report.files_after, report.bytes_after, _, _ = info
+        # Snapshot de la table
+        snapshot = self._current_snapshot()
+        # Ajout au rapport
+        if snapshot is not None:
+            report.snapshot_after = snapshot
+
+    # Méthode auxiliaire de compaction DuckLake, commune aux opérations d'écriture
+    def _run_ducklake_compaction(
+        self,
+        fact_table: str = "fact_table",
+        delete_threshold: float = 0.1,
+        report: OperationReport | None = None,
+    ) -> None:
+        """Trigger DuckLake compaction on the fact table after a successful write.
+
+        Merges small adjacent Parquet delta files and rewrites files whose
+        deleted-row share exceeds ``delete_threshold``, to maintain optimal read
+        performance. Delegates to ``DuckLakeMaintenance``; failures are non-fatal
+        there (a warning is logged, zero-file results are logged explicitly) so this
+        method itself never raises.
+
+        Never calls ``expire_snapshots``, ``cleanup_files`` or
+        ``delete_orphaned_files``: those destroy time travel or are irreversible, and
+        are reserved for planned maintenance (``DuckLakeMaintenance.full_maintenance``)
+        with an explicit retention.
+
+        The catalog alias and schema are read from ``self.catalog_alias``
+        and ``self.schema``, which can be set at construction time.
+
+        Args:
+            fact_table: Name of the fact table to compact. Defaults to ``'fact_table'``.
+            delete_threshold: Rewrite files whose deleted-row share exceeds this
+                fraction (0-1). Defaults to 0.1 — without an explicit value this
+                procedure is a measured no-op.
+            report: When given, ``report.maintenance`` is filled with the counters
+                returned by ``merge_files``/``rewrite_data_files`` (zeros included,
+                never omitted).
+
+        Examples:
+            >>> manager._run_ducklake_compaction()
+            >>> manager._run_ducklake_compaction('my_fact_table', delete_threshold=0.3)
+        """
+        # Initialisation du mainteneur
+        maintenance = DuckLakeMaintenance(
+            self.conn, catalog_alias=self.catalog_alias, schema=self.schema
+        )
+        # merge_files/rewrite_data_files sont déjà non bloquantes (try/except interne,
+        # compteurs réels journalisés y compris les zéros) : aucun try/except
+        # supplémentaire n'est nécessaire ici.
+        _, _, merge_processed, merge_created = maintenance.merge_files(
+            self.schema, fact_table
+        )
+        _, _, rewrite_processed, rewrite_created = maintenance.rewrite_data_files(
+            self.schema, fact_table, delete_threshold=delete_threshold
+        )
+        # Logging
+        self.logger.info(
+            f"Compaction DuckLake finished for '{fact_table}' : merge"
+            f" {merge_processed} -> {merge_created} file(s), rewrite"
+            f" {rewrite_processed} -> {rewrite_created} file(s)"
+            f" (delete_threshold={delete_threshold})"
+        )
+        if report is not None:
+            report.maintenance["merge_files_processed"] = merge_processed
+            report.maintenance["merge_files_created"] = merge_created
+            report.maintenance["rewrite_files_processed"] = rewrite_processed
+            report.maintenance["rewrite_files_created"] = rewrite_created
+
+    # Méthode de construction d'un rapport minimal pour un échec précoce
+    def _early_failure_report(
+        self, operation: str, run_id: str | None, warning: str
+    ) -> OperationReport:
+        """Build and store a minimal report for a failure before any transaction.
+
+        Used by validation checks that reject an operation before
+        ``_transaction`` ever opens (e.g. pre-operation auditor validation),
+        so ``self.last_report``/the method's return value never sits at ``None``
+        even on the earliest possible failure.
+
+        Args:
+            operation: Name of the operation that failed.
+            run_id: Run identifier the caller was about to use, if any.
+            warning: Human-readable reason, appended to ``report.warnings`` and
+                logged at WARNING.
+
+        Returns:
+            OperationReport: the minimal report, also stored on ``self.last_report``.
+        """
+        # Création du rapport
+        report = OperationReport(
+            operation=operation,
+            schema=self.schema,
+            run_id=run_id,
+            started_at=datetime.now(),
+            duration_seconds=0.0,
+            warnings=[warning],
+        )
+        # Logging
+        self.logger.warning(warning)
+        # Mise à jour du dernier rapport
+        self.last_report = report
+        return report
 
     # Méthode de qualification d'un nom de table par le schéma (et le catalogue)
     def _qualified(self, table: str) -> str:
@@ -850,7 +1154,11 @@ class BaseSchemaManager(ABC):
 
     # Méthodes de résolution des conflits de types
     def _resolve_type_conflicts(
-        self, column: str, df: nw.DataFrame[Any], current_metadata: nw.DataFrame[Any]
+        self,
+        column: str,
+        df: nw.DataFrame[Any],
+        current_metadata: nw.DataFrame[Any],
+        report: OperationReport | None = None,
     ) -> None:
         """
         Resolve a type conflict on SQL types, widening only.
@@ -864,6 +1172,8 @@ class BaseSchemaManager(ABC):
             column: Column name
             df: DataFrame with new data (narwhals)
             current_metadata: Current metadata (narwhals)
+            report: When given and the type is actually widened, appended to
+                ``report.metadata_changes``.
 
         Example:
             >>> manager._resolve_type_conflicts('amount', df, metadata)
@@ -924,6 +1234,11 @@ class BaseSchemaManager(ABC):
         self.logger.info(
             f"Type conflict resolution for {column}: {current_type} -> {resolved_type}"
         )
+        # Ajout au rapport
+        if report is not None:
+            report.metadata_changes.append(
+                f"sql_type({column}): {current_type} -> {resolved_type}"
+            )
 
     # Méthode utilitaire pour les colonnes contenant uniquement des valeurs nulles
     def _get_null_only_columns(self) -> list[str]:
@@ -963,7 +1278,9 @@ class BaseSchemaManager(ABC):
             raise
 
     # Méthode d'actualisation du statut catégoriel des colonnes textuelles
-    def _refresh_categorical_flags(self) -> list[str]:
+    def _refresh_categorical_flags(
+        self, report: OperationReport | None = None
+    ) -> list[str]:
         """
         Recompute the ``is_categorical`` flag of every eligible VARCHAR column.
 
@@ -973,6 +1290,11 @@ class BaseSchemaManager(ABC):
         Columns whose status was forced by the producer
         (``is_categorical_forced``) are skipped, and an ``UPDATE`` is emitted only
         when the boolean actually changes.
+
+        Args:
+            report: When given, each flip is appended to
+                ``report.metadata_changes`` as ``"is_categorical(col): before ->
+                after"``.
 
         Returns:
             List of column names whose flag was flipped. Empty when nothing changed
@@ -1039,6 +1361,12 @@ class BaseSchemaManager(ABC):
                     f" ({n_distinct} distinct values, threshold"
                     f" {self.categorical_threshold})"
                 )
+                # Ajout au rapport
+                if report is not None:
+                    report.metadata_changes.append(
+                        f"is_categorical({col_name}):"
+                        f" {bool(was_categorical)} -> {is_categorical}"
+                    )
 
             return changed
 

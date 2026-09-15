@@ -101,6 +101,8 @@ nav:
   - operations:
     - DatabaseDeleter: api/operations/DatabaseDeleter.md
     - DatabaseUpdater: api/operations/DatabaseUpdater.md
+  - reporting:
+    - OperationReport: api/reporting/OperationReport.md
   - schema:
     - SchemaBuilder: api/schema/SchemaBuilder.md
     - DuckLakeTablesBuilder: api/schema/DuckLakeTablesBuilder.md

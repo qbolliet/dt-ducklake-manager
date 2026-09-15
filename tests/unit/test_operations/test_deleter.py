@@ -15,6 +15,7 @@ import pytest
 # Modules du package à tester
 from dt_ducklake_manager.connection import DuckLakeConnector
 from dt_ducklake_manager.operations import DatabaseDeleter
+from dt_ducklake_manager.reporting import OperationReport
 from dt_ducklake_manager.schema import DuckLakeTablesBuilder
 
 
@@ -125,14 +126,14 @@ def test_delete_rows_with_filter(
     assert before >= 1
 
     # Suppression de la ligne avec id=1
-    deleted_count = deleter.delete_rows(
+    report = deleter.delete_rows(
         filters=[("id", "=", 1)],
         use_transaction=False,
     )
 
     # Vérification que le nombre de lignes supprimées est cohérent
-    assert isinstance(deleted_count, int)
-    assert deleted_count >= 1
+    assert isinstance(report.rows_deleted, int)
+    assert report.rows_deleted >= 1
 
     # Vérification que la ligne est bien absente
     after = built_ducklake_schema.execute(
@@ -157,11 +158,11 @@ def test_delete_rows_with_or_filter(
     ).fetchone()[0]
     assert before >= 1
 
-    deleted_count = deleter.delete_rows(
+    report = deleter.delete_rows(
         filters=[[("id", "=", 2)], [("id", "=", 3)]],
         use_transaction=False,
     )
-    assert deleted_count >= 1
+    assert report.rows_deleted >= 1
 
     # Vérification que les lignes sont bien absentes
     after = built_ducklake_schema.execute(
@@ -186,8 +187,8 @@ def test_delete_rows_all(deleter: DatabaseDeleter, built_ducklake_schema: Any) -
     # Remarque : DatabaseDeleter n'accepte pas filters=None (validation obligatoire des
     # filtres).
     # Suppression de toutes les lignes via un filtre SQL universel.
-    deleted_count = deleter.delete_rows(filters="1=1", use_transaction=False)
-    assert deleted_count == before
+    report = deleter.delete_rows(filters="1=1", use_transaction=False)
+    assert report.rows_deleted == before
 
     after = built_ducklake_schema.execute("SELECT COUNT(*) FROM fact_table").fetchone()[
         0
@@ -219,9 +220,9 @@ def test_delete_columns_single_column(
 
     result = deleter.delete_columns(["value"], use_transaction=False)
 
-    # Vérification que le résultat est un dictionnaire de statuts
-    assert isinstance(result, dict)
-    assert "value" in result
+    # Vérification que le résultat est un OperationReport listant la colonne
+    assert isinstance(result, OperationReport)
+    assert result.columns_dropped == ["value"]
     # Vérification que la colonne est bien supprimée
     columns_after = [
         row[0]
@@ -266,11 +267,11 @@ def test_delete_rows_non_categorical_becomes_categorical(
     # ce qui est ≤ seuil=4 → bascule du booléen is_categorical déclenchée par le
     # nettoyage automatique (_refresh_categorical_flags via
     # _cleanup_orphaned_data_comprehensive).
-    deleted_count = deleter.delete_rows(
+    report = deleter.delete_rows(
         filters=[("id", "=", 5)],
         use_transaction=False,
     )
-    assert deleted_count == 1
+    assert report.rows_deleted == 1
 
     # Vérification : high_cardinality est désormais catégorielle dans les métadonnées
     is_cat_after = built_ducklake_schema.execute(
@@ -311,7 +312,8 @@ def test_delete_columns_parent_refused_without_cascade(
 
     result = deleter.delete_columns(["status"], use_transaction=False)
 
-    assert result == {"status": False}
+    assert result.columns_dropped == []
+    assert any("status" in w for w in result.warnings)
     columns_after = [
         row[0]
         for row in built_ducklake_schema.execute("DESCRIBE fact_table").fetchall()
@@ -335,7 +337,7 @@ def test_delete_columns_parent_with_cascade_detaches_children(
 
     result = deleter.delete_columns(["status"], use_transaction=False, cascade=True)
 
-    assert result == {"status": True}
+    assert result.columns_dropped == ["status"]
     columns_after = [
         row[0]
         for row in built_ducklake_schema.execute("DESCRIBE fact_table").fetchall()
@@ -369,7 +371,7 @@ def test_delete_columns_removes_column_from_cluster_by(
 
     result = deleter.delete_columns(["category"], use_transaction=False)
 
-    assert result == {"category": True}
+    assert result.columns_dropped == ["category"]
     assert deleter._get_cluster_by_columns() == ["id"]
 
 
@@ -386,7 +388,7 @@ def test_delete_columns_cluster_by_falls_back_to_null_when_emptied(
 
     result = deleter.delete_columns(["category"], use_transaction=False)
 
-    assert result == {"category": True}
+    assert result.columns_dropped == ["category"]
     assert deleter._get_cluster_by_columns() is None
 
 
@@ -401,7 +403,7 @@ def test_delete_columns_leaves_cluster_by_untouched_when_unrelated(
     """
     result = deleter.delete_columns(["category"], use_transaction=False)
 
-    assert result == {"category": True}
+    assert result.columns_dropped == ["category"]
     assert deleter._get_cluster_by_columns() == ["id"]
 
 
@@ -444,9 +446,9 @@ def test_delete_rows_compacts_on_real_ducklake_catalog(tmp_path: Any) -> None:
         ).build_schema()
 
     deleter = DatabaseDeleter(connection=conn, categorical_threshold=4)
-    deleted = deleter.delete_rows(filters=[("id", "=", 1)], use_transaction=False)
+    report = deleter.delete_rows(filters=[("id", "=", 1)], use_transaction=False)
 
-    assert deleted == 1
+    assert report.rows_deleted == 1
     row_count = conn.execute("SELECT COUNT(*) FROM fact_table").fetchone()[0]
     assert row_count == 4
     conn.close()
@@ -493,7 +495,7 @@ def test_delete_columns_does_not_change_file_count(tmp_path: Any) -> None:
 
     deleter = DatabaseDeleter(connection=conn, categorical_threshold=4)
     result = deleter.delete_columns(["value"], use_transaction=False)
-    assert result == {"value": True}
+    assert result.columns_dropped == ["value"]
 
     file_count_after = conn.execute(
         "SELECT file_count FROM ducklake_table_info('db') WHERE table_name ="
@@ -537,12 +539,13 @@ def test_delete_rows_rolls_back_on_exception(deleter: DatabaseDeleter) -> None:
     before = _snapshot_state(deleter.conn)
 
     # Exception simulée dans le nettoyage, après la suppression des lignes
-    def _boom() -> dict[str, Any]:
+    def _boom(report: Any = None) -> dict[str, Any]:
         raise RuntimeError("échec après suppression")
 
     deleter._cleanup_orphaned_data_comprehensive = _boom  # type: ignore[method-assign]
 
-    assert deleter.delete_rows(filters=[("id", "=", 1)]) == -1
+    report = deleter.delete_rows(filters=[("id", "=", 1)])
+    assert report.warnings
 
     # Les lignes supprimées sont revenues
     assert _snapshot_state(deleter.conn) == before
@@ -572,7 +575,8 @@ def test_delete_rows_rolls_back_on_critical_validation_issues(
         lambda level=None: _CriticalReport()
     )
 
-    assert deleter.delete_rows(filters=[("id", "=", 1)]) == -1
+    report = deleter.delete_rows(filters=[("id", "=", 1)])
+    assert report.warnings
     assert _snapshot_state(deleter.conn) == before
 
 
@@ -589,12 +593,13 @@ def test_delete_rows_without_transaction_keeps_partial_state(
         0
     ]
 
-    def _boom() -> dict[str, Any]:
+    def _boom(report: Any = None) -> dict[str, Any]:
         raise RuntimeError("échec après suppression")
 
     deleter._cleanup_orphaned_data_comprehensive = _boom  # type: ignore[method-assign]
 
-    assert deleter.delete_rows(filters=[("id", "=", 1)], use_transaction=False) == -1
+    report = deleter.delete_rows(filters=[("id", "=", 1)], use_transaction=False)
+    assert report.warnings
 
     # La ligne supprimée ne revient pas : l'état est partiel
     count_after = deleter.conn.execute("SELECT COUNT(*) FROM fact_table").fetchone()[0]
@@ -612,7 +617,7 @@ def test_delete_rows_commits_on_success(deleter: DatabaseDeleter) -> None:
         0
     ]
 
-    assert deleter.delete_rows(filters=[("id", "=", 1)]) == 1
+    assert deleter.delete_rows(filters=[("id", "=", 1)]).rows_deleted == 1
 
     count_after = deleter.conn.execute("SELECT COUNT(*) FROM fact_table").fetchone()[0]
     assert count_after == initial_count - 1
@@ -635,10 +640,11 @@ def test_delete_columns_isolates_failing_column(deleter: DatabaseDeleter) -> Non
 
     deleter._drop_fact_table_column = _selective_drop  # type: ignore[method-assign]
 
-    results = deleter.delete_columns(["status", "high_cardinality"])
+    result = deleter.delete_columns(["status", "high_cardinality"])
 
     # La colonne en échec est signalée, l'autre est bien supprimée
-    assert results == {"status": False, "high_cardinality": True}
+    assert result.columns_dropped == ["high_cardinality"]
+    assert any("status" in w for w in result.warnings)
     remaining = deleter._get_fact_table_columns()
     assert "status" in remaining
     assert "high_cardinality" not in remaining
@@ -668,10 +674,11 @@ def test_delete_columns_rolls_back_on_critical_validation_issues(
         lambda level=None: _CriticalReport()
     )
 
-    results = deleter.delete_columns(["status", "high_cardinality"])
+    result = deleter.delete_columns(["status", "high_cardinality"])
 
     # Aucune suppression n'est retenue, colonnes et métadonnées sont intactes
-    assert results == {"status": False, "high_cardinality": False}
+    assert result.columns_dropped == []
+    assert result.warnings
     assert _snapshot_state(deleter.conn) == before
 
 
@@ -692,7 +699,8 @@ def test_delete_columns_rolls_back_on_exception(deleter: DatabaseDeleter) -> Non
 
     deleter.auditor.validate_database = _boom  # type: ignore[method-assign]
 
-    results = deleter.delete_columns(["status"])
+    result = deleter.delete_columns(["status"])
 
-    assert results == {"status": False}
+    assert result.columns_dropped == []
+    assert result.warnings
     assert _snapshot_state(deleter.conn) == before

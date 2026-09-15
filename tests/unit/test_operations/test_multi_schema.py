@@ -89,7 +89,7 @@ def test_delete_isolated_between_schemas(
         schema="shapley",
     )
     deleted = deleter.delete_rows(filters=[("id", "=", 1)], use_transaction=False)
-    assert deleted >= 1
+    assert deleted.rows_deleted >= 1
 
     # 'shapley' a diminué, 'predictions' est inchangé
     pred_after_row = conn.execute(

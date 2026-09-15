@@ -44,14 +44,19 @@ explicit retention — callers that only want the safe steps should call
 # Importation des modules
 # Modules de base
 import os
+import time
 from datetime import datetime, timedelta
 from typing import Any
 
 # DuckDB
 import duckdb
 
+# Rapport d'opération
+from ..reporting import OperationReport, _current_snapshot_id, _table_info
+
 # Module d'initialisation du logger
 from ..utils.logger import _init_logger
+from ..utils.sql import quote_ident
 
 
 # Classe de maintenance d'un catalogue DuckLake
@@ -368,9 +373,7 @@ class DuckLakeMaintenance:
             paths = [r[0] for r in rows]
             # Logging
             mode = "dry_run" if dry_run else "supprimé(s)"
-            self.logger.info(
-                f"delete_orphaned_files : {len(paths)} file(s) ({mode})"
-            )
+            self.logger.info(f"delete_orphaned_files : {len(paths)} file(s) ({mode})")
             return paths
         except Exception as e:
             # Logging
@@ -627,7 +630,7 @@ class DuckLakeMaintenance:
         schema: str,
         table: str,
         older_than_days: int = 30,
-    ) -> None:
+    ) -> OperationReport:
         """
         Run all maintenance operations in the recommended order.
 
@@ -637,13 +640,20 @@ class DuckLakeMaintenance:
         others. Includes ``expire_snapshots``/``cleanup_files`` — this is planned
         maintenance with an explicit retention, unlike the after-write compaction run
         by ``DatabaseUpdater``/``DatabaseDeleter`` (which only run the first three,
-        safe steps).
+        safe steps). Unlike the write operations, this method does not accept
+        ``run_id``/``commit_message``: it is a maintenance sequence, not a single
+        traceable commit — each step already commits (and logs) on its own.
 
         Args:
             schema (str): DuckLake schema name (e.g. ``'main'``).
             table (str): Table name to compact (passed to ``flush_inlined_data``,
                 ``merge_files`` and ``rewrite_data_files``).
             older_than_days (int): Passed to ``expire_snapshots``. Defaults to 30.
+
+        Returns:
+            OperationReport: ``report.maintenance`` carries every step's counters
+            (zeros included, never omitted); ``rows_before``/``rows_after`` and the
+            file/snapshot fields bracket the whole sequence.
 
         Examples:
             >>> maint.full_maintenance('main', 'fact_table')
@@ -654,41 +664,122 @@ class DuckLakeMaintenance:
             f"Beginning the full DuckLake maintenance : schema={schema}, table={table}"
         )
 
+        # Moment du début de la maintenance
+        start_time = time.time()
+        started_at = datetime.now()
+        # Extraction des informations sur la base de données avant la maintenance
+        rows_before = self._count_rows(schema, table)
+        info_before = _table_info(
+            self.conn, self.catalog_alias, schema, table, self.logger
+        )
+        files_before, bytes_before, _, _ = info_before or (0, 0, 0, 0)
+        snapshot_before = _current_snapshot_id(
+            self.conn, self.catalog_alias, self.logger
+        )
+        # Initialisation du rapport
+        report = OperationReport(
+            operation="maintenance",
+            schema=schema,
+            run_id=None,
+            started_at=started_at,
+            duration_seconds=0.0,
+            rows_before=rows_before,
+            files_before=files_before,
+            bytes_before=bytes_before,
+            snapshot_before=snapshot_before,
+        )
+
         # Chaque étape est enveloppée dans un try/except pour garantir que
         # l'échec d'une étape ne bloque pas les étapes suivantes.
 
         # Étape 0 : écriture en Parquet des lignes inlinées dans le catalogue, avant
         # toute opération de compaction portant sur les fichiers
         try:
-            self.flush_inlined_data(table)
+            flushed = self.flush_inlined_data(table)
+            report.maintenance["flush_inlined_rows"] = sum(r[2] for r in flushed)
         except Exception as e:
+            # Logging
             self.logger.warning(f"full_maintenance — flush_inlined_data failed : {e}")
+            # Ajout au rapport
+            report.warnings.append(f"flush_inlined_data failed: {e}")
 
         # Étape 1 : fusion des petits fichiers Parquet adjacents
         try:
-            self.merge_files(schema, table)
+            _, _, merge_processed, merge_created = self.merge_files(schema, table)
+            report.maintenance["merge_files_processed"] = merge_processed
+            report.maintenance["merge_files_created"] = merge_created
         except Exception as e:
+            # Logging
             self.logger.warning(f"full_maintenance — merge_files failed : {e}")
+            # Ajout au rapport
+            report.warnings.append(f"merge_files failed: {e}")
 
         # Étape 2 : réécriture des fichiers contenant des suppressions
         try:
-            self.rewrite_data_files(schema, table)
+            _, _, rewrite_processed, rewrite_created = self.rewrite_data_files(
+                schema, table
+            )
+            report.maintenance["rewrite_files_processed"] = rewrite_processed
+            report.maintenance["rewrite_files_created"] = rewrite_created
         except Exception as e:
+            # Logging
             self.logger.warning(f"full_maintenance — rewrite_data_files failed : {e}")
+            # Ajout au rapport
+            report.warnings.append(f"rewrite_data_files failed: {e}")
 
         # Étape 3 : expiration des anciens snapshots
         try:
-            self.expire_snapshots(schema, older_than_days=older_than_days)
+            expired = self.expire_snapshots(schema, older_than_days=older_than_days)
+            report.maintenance["expired_snapshots"] = len(expired)
         except Exception as e:
+            # Logging
             self.logger.warning(f"full_maintenance — expire_snapshots failed : {e}")
+            # Ajout au rapport
+            report.warnings.append(f"expire_snapshots failed: {e}")
 
         # Étape 4 : suppression des fichiers Parquet orphelins
         try:
-            self.cleanup_files(schema)
+            cleaned = self.cleanup_files(schema)
+            report.maintenance["cleaned_files"] = len(cleaned)
         except Exception as e:
+            # Logging
             self.logger.warning(f"full_maintenance — cleanup_files failed : {e}")
+            # Ajout au rapport
+            report.warnings.append(f"cleanup_files failed: {e}")
+
+        # Calcul d'informations sur la base de données après l'exécution de la maintenance
+        report.rows_after = self._count_rows(schema, table)
+        info_after = _table_info(
+            self.conn, self.catalog_alias, schema, table, self.logger
+        )
+        report.files_after, report.bytes_after, _, _ = info_after or (0, 0, 0, 0)
+        report.snapshot_after = _current_snapshot_id(
+            self.conn, self.catalog_alias, self.logger
+        )
+        report.duration_seconds = time.time() - start_time
 
         # Logging
         self.logger.info(
             f"Maintenance of the DuckLake is finished : schema={schema}, table={table}"
         )
+        self.logger.info(report.summary())
+        return report
+
+    # Méthode auxiliaire de comptage des lignes d'une table
+    def _count_rows(self, schema: str, table: str) -> int:
+        """Count the rows of a table, qualified by ``schema``.
+
+        Args:
+            schema: DuckLake schema name.
+            table: Bare table name.
+
+        Returns:
+            int: Row count, or ``0`` if it cannot be read.
+        """
+        try:
+            row = self.conn.execute(
+                f"SELECT COUNT(*) FROM {quote_ident(schema)}.{quote_ident(table)}"
+            ).fetchone()
+            return int(row[0]) if row is not None else 0
+        except Exception:
+            return 0

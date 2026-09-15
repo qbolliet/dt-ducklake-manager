@@ -2,13 +2,23 @@
 # Modules de base
 import json
 import os
+import time
 from datetime import datetime
-from typing import Literal
+from typing import Any, Literal
 
 # Duckdb
 import duckdb
 import narwhals as nw
 from narwhals.typing import IntoDataFrame
+
+# Rapport d'opération et traçabilité des runs
+from ..reporting import (
+    OperationReport,
+    _current_snapshot_id,
+    _set_commit_message,
+    _table_changes_counts,
+    _table_info,
+)
 
 # Utilitaires de traitement des données
 from ..utils.sql import (
@@ -483,10 +493,18 @@ class DuckLakeTablesBuilder:
         keep: Literal["any", "none", "first", "last"] = "none",
         partition_by: list[str] | None = None,
         cluster_by: list[str] | None = None,
-    ) -> None:
+        run_id: str | None = None,
+        commit_message: str | None = None,
+        commit_info: dict[str, Any] | None = None,
+    ) -> OperationReport:
         """
         Build the entire schema in DuckDB: metadata, fact and dataset_metadata
         tables.
+
+        Runs as a single DuckDB transaction (``BEGIN``/``COMMIT``, ``ROLLBACK`` on
+        exception): unlike the rest of the build (duplicate validation,
+        ``cluster_by`` resolution), which happens before any DDL and simply
+        raises, the three ``CREATE``/``INSERT`` steps either all land or none do.
 
         Args:
             metadata_table (Optional[str]): Name of the metadata table. Defaults to
@@ -513,10 +531,20 @@ class DuckLakeTablesBuilder:
                 their declared order, when primary keys are set; otherwise no sort is
                 applied. Every column must exist in the source DataFrame. Persisted
                 to ``dataset_metadata.cluster_by`` as a JSON list.
+            run_id: Run identifier recorded on the resulting DuckLake snapshot
+                (``ducklake_set_commit_message``). Ignored (skipped with a DEBUG
+                log) on a connection with no real DuckLake catalog attached.
+            commit_message: Commit message recorded alongside ``run_id``.
+            commit_info: Extra JSON-serializable fields merged into the commit's
+                ``extra_info``.
 
         Raises:
             ValueError: If ``cluster_by`` references a column absent from the source
                 DataFrame, in addition to the existing primary-key duplicate check.
+
+        Returns:
+            OperationReport: report describing the tables just built
+            (``columns_added`` lists the fact table's columns).
 
         Examples:
             >>> builder.build_schema()
@@ -576,26 +604,126 @@ class DuckLakeTablesBuilder:
                     f" DataFrame"
                 )
 
-        # Création de la table des méta-données
-        self.create_duckdb_metadata_table(
-            table_name=metadata_table,
-            column_labels=column_labels,
-            column_metadata=column_metadata,
+        # Avant-état : la table n'existe pas encore (rows_before/files_before/
+        # bytes_before restent à 0), mais le catalogue peut déjà porter d'autres
+        # schémas, d'où un snapshot_before potentiellement non nul.
+        start_time = time.time()
+        started_at = datetime.now()
+        snapshot_before = _current_snapshot_id(self.conn, self._catalog, self.logger)
+        report = OperationReport(
+            operation="build",
+            schema=self.schema,
+            run_id=run_id,
+            started_at=started_at,
+            duration_seconds=0.0,
+            snapshot_before=snapshot_before,
         )
 
-        # Création de la table d'informations avec partitionnement et tri optionnels
-        self.create_duckdb_fact_table(
-            table_name=fact_table,
-            column_labels=column_labels,
-            partition_by=partition_by,
-            cluster_by=cluster_by,
-        )
+        # Transaction DuckDB unique : les trois tables sont créées ensemble ou pas
+        # du tout, et le message de commit DuckLake s'applique au batch entier.
+        self.conn.begin()
+        try:
+            # Création de la table des méta-données
+            self.create_duckdb_metadata_table(
+                table_name=metadata_table,
+                column_labels=column_labels,
+                column_metadata=column_metadata,
+            )
 
-        # Création de la table des méta-données du jeu de résultats
-        self.create_duckdb_dataset_metadata_table(
-            table_name=dataset_metadata_table,
-            cluster_by=cluster_by,
+            # Création de la table d'informations avec partitionnement et tri
+            # optionnels
+            self.create_duckdb_fact_table(
+                table_name=fact_table,
+                column_labels=column_labels,
+                partition_by=partition_by,
+                cluster_by=cluster_by,
+            )
+
+            # Création de la table des méta-données du jeu de résultats
+            self.create_duckdb_dataset_metadata_table(
+                table_name=dataset_metadata_table,
+                cluster_by=cluster_by,
+            )
+
+            report.columns_added = list(self.schema_builder.df.columns)
+
+            # Message de commit DuckLake (traçabilité du run), avant COMMIT.
+            _set_commit_message(
+                self.conn,
+                self._catalog,
+                run_id,
+                commit_message,
+                {
+                    "operation": "build",
+                    "schema": self.schema,
+                    "columns_added": report.columns_added,
+                    **(commit_info or {}),
+                },
+                self.logger,
+            )
+            self.conn.commit()
+        except Exception as e:
+            self.conn.rollback()
+            report.duration_seconds = time.time() - start_time
+            # Logging
+            self.logger.error(
+                f"build {self.schema} FAILED after {report.duration_seconds:.2f}s"
+                f" (run_id={run_id}): {e}"
+            )
+            raise
+
+        # Après-état
+        # Comptage du nombre de lignes
+        report.rows_after = self._count_fact_table_rows(fact_table or "fact_table")
+        # Extraction des informations associées à la table des faits
+        info = _table_info(
+            self.conn,
+            self._catalog,
+            self.schema,
+            fact_table or "fact_table",
+            self.logger,
         )
+        # Déstructuration des informations de la table des faits dans le rapport
+        if info is not None:
+            report.files_after, report.bytes_after, _, _ = info
+        # Snapshot
+        report.snapshot_after = _current_snapshot_id(
+            self.conn, self._catalog, self.logger
+        )
+        # Changements dans la table des faits
+        changes = _table_changes_counts(
+            self.conn,
+            self._catalog,
+            self.schema,
+            fact_table or "fact_table",
+            snapshot_before,
+            report.snapshot_after,
+            self.logger,
+        )
+        report.rows_inserted = changes.get("insert", 0)
+        report.duration_seconds = time.time() - start_time
+
+        # Logging
+        self.logger.info(report.summary())
+        return report
+
+    # Méthode auxiliaire de comptage des lignes de la table des faits
+    def _count_fact_table_rows(self, table: str) -> int:
+        """Count the rows of the just-built fact table.
+
+        Args:
+            table: Bare table name (e.g. ``'fact_table'``).
+
+        Returns:
+            int: Row count, or ``0`` if it cannot be read.
+        """
+        try:
+            row = self.conn.execute(
+                f"SELECT COUNT(*) FROM {self._qualified(table)}"
+            ).fetchone()
+            return int(row[0]) if row is not None else 0
+        except Exception:
+            return 0
 
     # Méthode d'affichage du schéma
     def display_schema(self) -> None:

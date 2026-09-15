@@ -15,6 +15,7 @@ import pytest
 # Modules du package à tester
 from dt_ducklake_manager.connection import DuckLakeConnector
 from dt_ducklake_manager.operations import DatabaseUpdater
+from dt_ducklake_manager.reporting import OperationReport
 from dt_ducklake_manager.schema import DuckLakeTablesBuilder
 
 
@@ -737,7 +738,8 @@ def test_add_columns_adds_new_column(
     df = pl.DataFrame({"id": [1, 2, 3], "score": [10.0, 20.0, 30.0]})
 
     result = updater.add_columns(df, column_metadata={"score": {"unit": "pts"}})
-    assert result is True
+    assert isinstance(result, OperationReport)
+    assert result.columns_added == ["score"]
 
     rows = built_ducklake_schema.execute(
         "SELECT id, score FROM fact_table ORDER BY id"
@@ -780,7 +782,8 @@ def test_add_columns_existing_column_with_overwrite_updates_values(
     """
     df = pl.DataFrame({"id": [1], "value": [99.0]})
     result = updater.add_columns(df, overwrite=True)
-    assert result is True
+    assert isinstance(result, OperationReport)
+    assert result.rows_updated == 1
 
     row = built_ducklake_schema.execute(
         "SELECT value FROM fact_table WHERE id = 1"
@@ -805,7 +808,7 @@ def test_add_columns_unmatched_combination_not_inserted(
 
     df = pl.DataFrame({"id": [1, 999], "score": [10.0, 20.0]})
     result = updater.add_columns(df)
-    assert result is True
+    assert isinstance(result, OperationReport)
 
     final_count = built_ducklake_schema.execute(
         "SELECT COUNT(*) FROM fact_table"
@@ -941,7 +944,7 @@ def test_get_key_combinations_explicit_broadcast_recipe(
     )
 
     result = updater.add_columns(nw.from_native(broadcast_df, eager_only=True))
-    assert result is True
+    assert isinstance(result, OperationReport)
 
     rows = dict(
         built_ducklake_schema.execute(
@@ -989,7 +992,9 @@ def test_add_columns_on_real_ducklake_catalog(tmp_path: Any) -> None:
     updater = DatabaseUpdater(connection=conn, categorical_threshold=4)
     score_df = pl.DataFrame({"id": [1, 2, 3], "score": [10.0, 20.0, 30.0]})
 
-    assert updater.add_columns(score_df) is True
+    result = updater.add_columns(score_df)
+    assert isinstance(result, OperationReport)
+    assert result.rows_updated == 3
 
     row_count = conn.execute(
         "SELECT COUNT(*) FROM fact_table WHERE score IS NOT NULL"
@@ -1042,7 +1047,7 @@ def test_update_rolls_back_on_fact_table_failure(
     before = _snapshot_state(updater.conn)
 
     # Échec simulé de l'étape de mise à jour de la table des faits
-    updater._update_fact_table_direct = lambda df: False  # type: ignore[method-assign]
+    updater._update_fact_table_direct = lambda df, report: False  # type: ignore[method-assign]
 
     assert updater.update_database(update_df, keep="first") is False
 
@@ -1063,7 +1068,7 @@ def test_update_rolls_back_on_exception(
     before = _snapshot_state(updater.conn)
 
     # Exception simulée au sein de l'étape de mise à jour de la table des faits
-    def _boom(df: Any) -> bool:
+    def _boom(df: Any, report: Any) -> bool:
         raise RuntimeError("disque plein")
 
     updater._update_fact_table_direct = _boom  # type: ignore[method-assign]
@@ -1087,7 +1092,7 @@ def test_update_rolls_back_on_last_step_failure(
     """
     before = _snapshot_state(updater.conn)
 
-    updater._update_categorical_flags = lambda: False  # type: ignore[method-assign]
+    updater._update_categorical_flags = lambda *a, **k: False  # type: ignore[method-assign]
 
     assert updater.update_database(update_df, keep="first") is False
     assert _snapshot_state(updater.conn) == before
@@ -1145,7 +1150,7 @@ def test_update_without_transaction_keeps_partial_state(
         "SELECT COUNT(*) FROM fact_table"
     ).fetchone()[0]
 
-    updater._update_fact_table_direct = lambda d: False  # type: ignore[method-assign]
+    updater._update_fact_table_direct = lambda d, report: False  # type: ignore[method-assign]
 
     assert (
         updater.update_database(update_df, keep="first", use_transaction=False) is False
@@ -1202,7 +1207,7 @@ def test_add_columns_rolls_back_column_and_metadata(updater: DatabaseUpdater) ->
     before = _snapshot_state(updater.conn)
 
     # Échec simulé du rafraîchissement du statut catégoriel, après l'UPDATE
-    def _boom() -> list[str]:
+    def _boom(*args: object, **kwargs: object) -> list[str]:
         raise RuntimeError("échec après écriture")
 
     updater._refresh_categorical_flags = _boom  # type: ignore[method-assign]

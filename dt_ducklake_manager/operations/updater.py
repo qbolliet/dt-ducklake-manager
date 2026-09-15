@@ -14,7 +14,7 @@ from narwhals.typing import IntoDataFrame
 from .._internal.managers.base import BaseSchemaManager
 from .._internal.managers.data import DataManager
 from ..maintenance.auditor import DatabaseAuditor, IssueSeverity, ValidationLevel
-from ..maintenance.compaction import DuckLakeMaintenance
+from ..reporting import OperationReport
 
 # Import des utilitaires
 from ..utils.sql import (
@@ -182,6 +182,9 @@ class DatabaseUpdater(BaseSchemaManager):
         compact_after_update: bool = True,
         allow_new_columns: bool = False,
         column_metadata: dict[str, dict[str, str]] | None = None,
+        run_id: str | None = None,
+        commit_message: str | None = None,
+        commit_info: dict[str, Any] | None = None,
     ) -> bool:
         """
         Update the entire database with new data using atomic operations.
@@ -210,9 +213,19 @@ class DatabaseUpdater(BaseSchemaManager):
                 ``default_aggregation``, ``parent_name``), applied only when
                 ``allow_new_columns`` is True. Ignored for columns that already
                 exist in the fact table.
+            run_id: Run identifier recorded on the resulting DuckLake snapshot
+                (``ducklake_set_commit_message``), and on ``self.last_report``.
+                Ignored (skipped with a DEBUG log) on a connection with no real
+                DuckLake catalog attached.
+            commit_message: Commit message recorded alongside ``run_id``.
+            commit_info: Extra JSON-serializable fields merged into the commit's
+                ``extra_info`` (e.g. ``{'model_version': '1.3'}``).
 
         Returns:
-            True if update was successful, False otherwise
+            True if update was successful, False otherwise. The
+            :class:`~dt_ducklake_manager.reporting.OperationReport` describing what
+            actually happened is exposed via ``self.last_report`` regardless of
+            success (a partial report is attached on failure too).
 
         Raises:
             ValueError: If ``update_df`` carries a column absent from the fact
@@ -269,13 +282,21 @@ class DatabaseUpdater(BaseSchemaManager):
 
         # Bloc transactionnel unique : toutes les étapes ou aucune.
         try:
-            with self._transaction("update", use_transaction=use_transaction):
+            with self._transaction(
+                "update",
+                use_transaction=use_transaction,
+                run_id=run_id,
+                commit_message=commit_message,
+                commit_info=commit_info,
+            ) as report:
+                report.columns_added = list(new_columns)
                 self._run_update_steps(
                     update_df,
                     check_duplicates_db,
                     check_duplicates_update,
                     keep,
                     use_batch_processing,
+                    report,
                 )
         except Exception as e:
             # Logging
@@ -299,8 +320,12 @@ class DatabaseUpdater(BaseSchemaManager):
         self._touch_dataset_metadata()
         # Compaction DuckLake optionnelle après le commit (fusion des petits fichiers
         # delta) : la maintenance ne fait jamais partie de la transaction.
+        final_report = self.last_report
         if compact_after_update:
-            self._run_ducklake_compaction()
+            self._run_ducklake_compaction(report=final_report)
+        if final_report is not None:
+            self._finalize_report_after_write(final_report)
+            self.logger.info(final_report.summary())
         return True
 
     # Méthode auxiliaire d'ajout explicite des colonnes inconnues d'un update_df
@@ -359,6 +384,7 @@ class DatabaseUpdater(BaseSchemaManager):
         check_duplicates_update: bool,
         keep: Literal["any", "none", "first", "last"],
         use_batch_processing: bool,
+        report: OperationReport,
     ) -> None:
         """Run the ordered steps of a database update.
 
@@ -374,6 +400,8 @@ class DatabaseUpdater(BaseSchemaManager):
             check_duplicates_update: Whether to remove duplicates from ``update_df``.
             keep: Duplicate handling strategy ('any', 'none', 'first', 'last').
             use_batch_processing: Whether to use batch processing for large datasets.
+            report: In-progress report of the enclosing transaction, appended to
+                (``metadata_changes``) as categorical flags flip.
 
         Raises:
             RuntimeError: If any step fails, naming the step reached. The exception
@@ -389,21 +417,21 @@ class DatabaseUpdater(BaseSchemaManager):
             raise RuntimeError("database duplicate removal failed")
 
         # Étape 3 : mise à jour des métadonnées
-        if not self._update_metadata_safe(update_df):
+        if not self._update_metadata_safe(update_df, report):
             raise RuntimeError("metadata update failed")
 
         # Étape 4 : mise à jour de la table de faits (avant le recalcul du statut
         # catégoriel, qui lit l'état post-upsert)
         if use_batch_processing and len(update_df) > self.batch_size:
-            if not self._update_fact_table_batch(update_df):
+            if not self._update_fact_table_batch(update_df, report):
                 raise RuntimeError("fact table update failed (batch processing)")
         else:
-            if not self._update_fact_table_direct(update_df):
+            if not self._update_fact_table_direct(update_df, report):
                 raise RuntimeError("fact table update failed (direct)")
 
         # Étape 5 : actualisation du statut catégoriel des colonnes VARCHAR
         # (le comptage porte sur l'état post-upsert de la table de faits)
-        if not self._update_categorical_flags():
+        if not self._update_categorical_flags(report):
             raise RuntimeError("categorical flag refresh failed")
 
         # Étape 6 : validation post-update
@@ -419,11 +447,15 @@ class DatabaseUpdater(BaseSchemaManager):
 
     # Méthodes de mise à jour sécurisées
     # Méthode auxiliaire de mise à jour des méta-données
-    def _update_metadata_safe(self, update_df: nw.DataFrame[Any]) -> bool:
+    def _update_metadata_safe(
+        self, update_df: nw.DataFrame[Any], report: OperationReport | None = None
+    ) -> bool:
         """Safely update metadata table with type conflict resolution.
 
         Args:
             update_df: DataFrame whose columns may require metadata updates.
+            report: When given, each resolved type conflict is appended to
+                ``report.metadata_changes``.
 
         Returns:
             True if metadata updated successfully, False on error.
@@ -440,7 +472,7 @@ class DatabaseUpdater(BaseSchemaManager):
 
             # Vérification des conflits de types pour les colonnes existantes
             for col in current_columns.intersection(new_columns):
-                self._resolve_type_conflicts(col, update_df, current_metadata)
+                self._resolve_type_conflicts(col, update_df, current_metadata, report)
 
             return True
 
@@ -450,7 +482,7 @@ class DatabaseUpdater(BaseSchemaManager):
             return False
 
     # Méthode auxiliaire d'actualisation du statut catégoriel
-    def _update_categorical_flags(self) -> bool:
+    def _update_categorical_flags(self, report: OperationReport | None = None) -> bool:
         """Refresh the ``is_categorical`` flag of VARCHAR columns after an upsert.
 
         The categorical status is pure UI metadata: it is recomputed from the
@@ -458,6 +490,10 @@ class DatabaseUpdater(BaseSchemaManager):
         ``categorical_threshold``. Only a plain ``UPDATE metadata`` is issued —
         the fact table is never rewritten — and columns whose status was forced by
         the producer are left untouched.
+
+        Args:
+            report: When given, each flip is appended to
+                ``report.metadata_changes``.
 
         Returns:
             True if the flags were refreshed (or nothing had to change), False on
@@ -469,7 +505,7 @@ class DatabaseUpdater(BaseSchemaManager):
         """
         try:
             # Délégation au recalcul partagé avec le gestionnaire de suppression
-            changed = self._refresh_categorical_flags()
+            changed = self._refresh_categorical_flags(report)
             # Logging
             if changed:
                 self.logger.info(f"Categorical status refreshed for columns: {changed}")
@@ -481,7 +517,9 @@ class DatabaseUpdater(BaseSchemaManager):
             return False
 
     # Méthode auxiliaire de mise à jour directe de la table des faits
-    def _update_fact_table_direct(self, update_df: nw.DataFrame[Any]) -> bool:
+    def _update_fact_table_direct(
+        self, update_df: nw.DataFrame[Any], report: OperationReport
+    ) -> bool:
         """Update fact table directly without batch processing.
 
         Uses primary keys from metadata to determine INSERT vs UPSERT strategy:
@@ -491,6 +529,10 @@ class DatabaseUpdater(BaseSchemaManager):
 
         Args:
             update_df: DataFrame containing the data to upsert.
+            report: In-progress report of the enclosing transaction. Exact,
+                Python-computed insert/update counts are deposited here as a
+                fallback, overwritten by the DuckLake-measured values
+                (``ducklake_table_changes``) when a real catalog is attached.
 
         Returns:
             True if fact table updated successfully, False on error.
@@ -529,6 +571,12 @@ class DatabaseUpdater(BaseSchemaManager):
                     rows_to_update, primary_keys, use_batch=False
                 )
 
+            # Valeurs exactes, calculées en Python : servent de repli tant que
+            # _transaction n'a pas pu obtenir la mesure DuckLake réelle
+            # (table_changes), qui les remplacera si elle est disponible.
+            report.rows_inserted = total_inserted
+            report.rows_updated = total_updated
+
             # Logging
             self.logger.info(
                 f"Fact table (direct): {total_inserted} inserted, {total_updated}"
@@ -542,7 +590,9 @@ class DatabaseUpdater(BaseSchemaManager):
             return False
 
     # Méthode auxiliaire de la mise à jour par batch de la table des faits
-    def _update_fact_table_batch(self, update_df: nw.DataFrame[Any]) -> bool:
+    def _update_fact_table_batch(
+        self, update_df: nw.DataFrame[Any], report: OperationReport
+    ) -> bool:
         """Update fact table using batch processing for large datasets.
 
         Uses primary keys from metadata to determine INSERT vs UPSERT strategy:
@@ -552,6 +602,10 @@ class DatabaseUpdater(BaseSchemaManager):
 
         Args:
             update_df: DataFrame containing the data to upsert in batches.
+            report: In-progress report of the enclosing transaction. Exact,
+                Python-computed insert/update counts are deposited here as a
+                fallback, overwritten by the DuckLake-measured values
+                (``ducklake_table_changes``) when a real catalog is attached.
 
         Returns:
             True if fact table updated successfully, False on error.
@@ -589,6 +643,12 @@ class DatabaseUpdater(BaseSchemaManager):
                 _, total_updated = self.data_mgr.upsert_data(
                     rows_to_update, primary_keys, use_batch=True
                 )
+
+            # Valeurs exactes, calculées en Python : servent de repli tant que
+            # _transaction n'a pas pu obtenir la mesure DuckLake réelle
+            # (table_changes), qui les remplacera si elle est disponible.
+            report.rows_inserted = total_inserted
+            report.rows_updated = total_updated
 
             # Logging
             self.logger.info(
@@ -696,59 +756,6 @@ class DatabaseUpdater(BaseSchemaManager):
             # En cas d'erreur, on traite toutes les lignes comme des insertions
             return df.clone(), df.head(0)
 
-    # Méthode auxiliaire de compaction DuckLake
-    def _run_ducklake_compaction(
-        self,
-        fact_table: str = "fact_table",
-        delete_threshold: float = 0.1,
-    ) -> None:
-        """Trigger DuckLake compaction on the fact table after a successful update.
-
-        Merges small adjacent Parquet delta files and rewrites files whose
-        deleted-row share exceeds ``delete_threshold``, to maintain optimal read
-        performance. Delegates to ``DuckLakeMaintenance``; failures are non-fatal
-        there (a warning is logged, zero-file results are logged explicitly) so this
-        method itself never raises.
-
-        Never calls ``expire_snapshots``, ``cleanup_files`` or
-        ``delete_orphaned_files``: those destroy time travel or are irreversible, and
-        are reserved for planned maintenance (``DuckLakeMaintenance.full_maintenance``)
-        with an explicit retention.
-
-        The catalog alias and schema are read from ``self.catalog_alias``
-        and ``self.schema``, which can be set at construction time.
-
-        Args:
-            fact_table: Name of the fact table to compact. Defaults to ``'fact_table'``.
-            delete_threshold: Rewrite files whose deleted-row share exceeds this
-                fraction (0-1). Defaults to 0.1 — without an explicit value this
-                procedure is a measured no-op.
-
-        Examples:
-            >>> updater._run_ducklake_compaction()
-            >>> updater._run_ducklake_compaction('my_fact_table', delete_threshold=0.3)
-        """
-        # Initialisation du mainteneur
-        maintenance = DuckLakeMaintenance(
-            self.conn, catalog_alias=self.catalog_alias, schema=self.schema
-        )
-        # merge_files/rewrite_data_files sont déjà non bloquantes (try/except interne,
-        # compteurs réels journalisés y compris les zéros) : aucun try/except
-        # supplémentaire n'est nécessaire ici.
-        _, _, merge_processed, merge_created = maintenance.merge_files(
-            self.schema, fact_table
-        )
-        _, _, rewrite_processed, rewrite_created = maintenance.rewrite_data_files(
-            self.schema, fact_table, delete_threshold=delete_threshold
-        )
-        # Logging
-        self.logger.info(
-            f"Compaction DuckLake finished for '{fact_table}' : merge"
-            f" {merge_processed} -> {merge_created} file(s), rewrite"
-            f" {rewrite_processed} -> {rewrite_created} file(s)"
-            f" (delete_threshold={delete_threshold})"
-        )
-
     # Méthodes utilitaires
     # Méthode auxiliaire de nettoyage des données mises à jour
     def _get_cleaned_update_data(
@@ -854,7 +861,10 @@ class DatabaseUpdater(BaseSchemaManager):
         column_metadata: dict[str, dict[str, str]] | None = None,
         overwrite: bool = False,
         compact_after_update: bool = True,
-    ) -> bool:
+        run_id: str | None = None,
+        commit_message: str | None = None,
+        commit_info: dict[str, Any] | None = None,
+    ) -> OperationReport:
         """
         Add value column(s) to the fact table from a DataFrame keyed by the
         primary keys.
@@ -887,9 +897,15 @@ class DatabaseUpdater(BaseSchemaManager):
             compact_after_update: Whether to run DuckLake compaction
                 (``rewrite_data_files`` with a low ``delete_threshold``) after a
                 successful commit. Defaults to True.
+            run_id: Run identifier recorded on the resulting DuckLake snapshot
+                (``ducklake_set_commit_message``). Ignored (skipped with a DEBUG
+                log) on a connection with no real DuckLake catalog attached.
+            commit_message: Commit message recorded alongside ``run_id``.
+            commit_info: Extra JSON-serializable fields merged into the commit's
+                ``extra_info``.
 
         Returns:
-            bool: True on success.
+            OperationReport: report describing what was actually added/updated.
 
         Raises:
             ValueError: If no primary key is defined on the fact table, if ``df``
@@ -956,7 +972,13 @@ class DatabaseUpdater(BaseSchemaManager):
         # Transaction DuckDB unique : sur échec, ni les colonnes ni les lignes
         # metadata ne subsistent (ALTER TABLE est transactionnel dans DuckDB).
         try:
-            with self._transaction("add_columns"):
+            with self._transaction(
+                "add_columns",
+                run_id=run_id,
+                commit_message=commit_message,
+                commit_info=commit_info,
+            ) as report:
+                report.columns_added = list(columns_to_add)
                 # ALTER TABLE ... ADD COLUMN pour chaque colonne réellement nouvelle
                 for column in columns_to_add:
                     sql_type = map_python_to_sql_type(df_nw.schema[column])
@@ -1015,6 +1037,10 @@ class DatabaseUpdater(BaseSchemaManager):
                 ).fetchone()
                 total_rows = _total_row[0] if _total_row is not None else 0
                 rows_updated = len(df_nw) - unmatched_count
+                # Valeur exacte, calculée en Python : sert de repli tant que
+                # _transaction n'a pas pu obtenir la mesure DuckLake réelle
+                # (table_changes), qui la remplacera si elle est disponible.
+                report.rows_updated = rows_updated
                 self.logger.info(
                     f"add_columns: about to UPDATE {rows_updated} of {total_rows}"
                     f" fact_table row(s) (copy-on-write rewrite of touched files)"
@@ -1038,7 +1064,7 @@ class DatabaseUpdater(BaseSchemaManager):
                 # Actualisation du statut catégoriel des colonnes VARCHAR concernées
                 # (ajout d'une colonne catégorielle, ou overwrite d'une colonne
                 # existante dont la cardinalité a changé)
-                self._refresh_categorical_flags()
+                self._refresh_categorical_flags(report)
 
                 # dataset_metadata.updated_at
                 self._touch_dataset_metadata()
@@ -1062,11 +1088,15 @@ class DatabaseUpdater(BaseSchemaManager):
         # Compaction DuckLake optionnelle : un UPDATE massif laisse des fichiers de
         # suppression (tombstones) sur les anciennes versions des lignes touchées ;
         # delete_threshold bas car le taux de suppression peut approcher 100%.
+        final_report = self.last_report
+        assert final_report is not None  # posé par _transaction sur tout succès
         if compact_after_update:
-            self._run_ducklake_compaction(delete_threshold=0.05)
+            self._run_ducklake_compaction(delete_threshold=0.05, report=final_report)
 
         self._invalidate_metadata_cache()
-        return True
+        self._finalize_report_after_write(final_report)
+        self.logger.info(final_report.summary())
+        return final_report
 
     # Méthode d'extraction des combinaisons de clés existantes en base
     def get_key_combinations(

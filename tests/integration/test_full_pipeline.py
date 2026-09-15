@@ -189,7 +189,7 @@ def test_build_then_delete_rows(
         auto_cleanup=False,
     )
     deleted = deleter.delete_rows(filters=[("id", "=", 1)], use_transaction=False)
-    assert deleted >= 1
+    assert deleted.rows_deleted >= 1
 
     # Vérification que la ligne est bien absente
     after_delete_row = built_ducklake_schema.execute(
@@ -307,7 +307,7 @@ def test_full_pipeline_build_update_delete_audit(sample_df: pl.DataFrame) -> Non
         auto_cleanup=False,
     )
     deleted = deleter.delete_rows(filters=[("id", "=", 200)], use_transaction=False)
-    assert deleted >= 1
+    assert deleted.rows_deleted >= 1
 
     # Vérification que id=200 est bien supprimé
     count_200_row = conn.execute(
@@ -392,7 +392,12 @@ def test_multi_schema_pipeline_in_single_catalog() -> None:
         auto_cleanup=False,
         schema="shapley",
     )
-    assert deleter.delete_rows(filters=[("id", "=", 1)], use_transaction=False) >= 1
+    assert (
+        deleter.delete_rows(
+            filters=[("id", "=", 1)], use_transaction=False
+        ).rows_deleted
+        >= 1
+    )
     shap_row3 = conn.execute("SELECT COUNT(*) FROM shapley.fact_table").fetchone()
     assert shap_row3 is not None and shap_row3[0] == 1
     # 'predictions' reste inchangé

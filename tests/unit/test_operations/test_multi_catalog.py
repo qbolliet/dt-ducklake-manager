@@ -119,9 +119,7 @@ def test_updater_writes_only_to_its_catalog(
         schema="main",
         catalog_alias="lake_a",
     )
-    new_rows = pl.DataFrame(
-        {"id": [4, 5], "category": ["B", "A"], "value": [0.4, 0.5]}
-    )
+    new_rows = pl.DataFrame({"id": [4, 5], "category": ["B", "A"], "value": [0.4, 0.5]})
     assert updater.update_database(new_rows, use_transaction=False) is True
 
     # lake_a a bien grossi, lake_b est strictement inchangé
@@ -151,7 +149,7 @@ def test_deleter_touches_only_its_catalog(
         catalog_alias="lake_a",
     )
     deleted = deleter.delete_rows(filters=[("id", "=", 1)], use_transaction=False)
-    assert deleted >= 1
+    assert deleted.rows_deleted >= 1
 
     assert _fact_count(conn, "lake_a") == a_before - 1
     assert _fact_count(conn, "lake_b") == b_before
