@@ -289,7 +289,15 @@ données sont physiquement groupées : d'où `cluster_by`.
   `merge_adjacent_files` (petits fichiers résiduels) et, en maintenance planifiée,
   d'`expire_snapshots` + `cleanup_old_files`. Un indicateur de **recouvrement** (part des
   fichiers dont la plage de la première colonne de `cluster_by` chevauche celle d'un
-  autre) permet de décider quand réordonner.
+  autre) permet de décider quand réordonner (`DuckLakeMaintenance.storage_report()
+  .overlap_ratio`). Définition retenue (*mesurée*) : fichiers actifs non vides à
+  statistiques non nulles, bornes converties au type de la colonne, chevauchement en
+  **inégalités strictes** (`a.min < b.max AND b.min < a.max`) ou plages identiques. Un
+  réordonnancement avec clés dupliquées produit des fichiers partageant une borne
+  (0–409, 409–819) : avec des inégalités larges, le recouvrement ne tomberait jamais à
+  0. La table temporaire de `recluster` peut être créée dans la même transaction que
+  le `DELETE`/`INSERT` DuckLake (*mesuré*, DuckDB 1.5.2) ; `threads` est restauré après
+  `COMMIT`/`ROLLBACK`.
 - **Partitionnement** : complémentaire, réservé aux colonnes de très faible cardinalité ;
   `set_partitioned_by` n'affecte que les écritures futures, `repartition` réécrit.
 
@@ -347,7 +355,24 @@ Cycle : *réécrire* (rewrite / merge / flush) après les écritures → *périm
 (`MaintenancePolicy`) regroupe les seuils (`delete_threshold`, `min_file_size`,
 `retention_days`, `max_overlap_ratio`, `flush_inlined`) et `DuckLakeMaintenance.
 maintain(policy)` ne déclenche chaque étape que si son indicateur (`storage_report()`)
-le justifie, en journalisant les étapes sautées et pourquoi.
+le justifie, en journalisant les étapes sautées et pourquoi :
+
+| Étape (ordre) | Exécutée si |
+|---|---|
+| `flush_inlined_data` | `flush_inlined` et lignes inlinées non vidangées |
+| `rewrite_data_files` | au moins un fichier de suppression (le seuil par fichier est appliqué par DuckLake) |
+| `merge_adjacent_files` | `small_file_count > max_small_files` |
+| `recluster` | `recluster=True` (opt-in) et `overlap_ratio > max_overlap_ratio` |
+| `expire_snapshots`, puis `cleanup_old_files` | `retention_days` non `None` |
+| `delete_orphaned_files` | `delete_orphaned=True` |
+
+`dry_run` : les étapes qui modifient (flush, rewrite, merge, recluster) sont seulement
+journalisées ; expire/cleanup/orphaned sont appelés en `dry_run` (listage).
+`full_maintenance(schema, table, older_than_days)` = `maintain(MaintenancePolicy(
+retention_days=older_than_days, max_small_files=1))`. Lignes inlinées mesurées via
+`ducklake_inlined_data_tables` (lignes à `end_snapshot IS NULL`, vidées par le flush) ;
+âge des snapshots calculé en SQL (`epoch`), la lecture d'un `TIMESTAMPTZ` en Python
+exigeant `pytz` (*mesuré*).
 
 ---
 
@@ -375,7 +400,7 @@ class OperationReport:
     files_after: int
     bytes_before: int
     bytes_after: int
-    maintenance: dict[str, int]     # files_processed / files_created / rows_flushed par procédure
+    maintenance: dict[str, int | float]  # files_processed / files_created / rows_flushed par procédure ; <étape>_skipped ; overlap_ratio_before/after (recluster)
     warnings: list[str]
 ```
 
@@ -507,6 +532,9 @@ Résultats observés (juillet–septembre 2026, DuckDB 1.5.2) :
 | Recluster multi-threads (300 000 lignes, `target_file_size` 200 KB) | fichiers 0–999 et 409–819 : plages recouvrantes |
 | Recluster `threads = 1` | fichiers 0–409, 409–819, 819–999 ; `Total Files Read: 2` (dont un fichier vide résiduel) |
 | `DELETE FROM t` sans clause | `delete_file_count = 0` : fichiers retirés du snapshot, pas de fichier de suppression |
+| `UPDATE` partiel puis recluster (`DELETE` intégral + `INSERT`) | l'ancien `-delete.parquet` garde `end_snapshot IS NULL` et reste compté par `ducklake_table_info` alors que son fichier de données est inactif ; `rewrite_data_files` n'y change rien. `storage_report` ne compte que les fichiers de suppression visant un fichier de données actif |
+| Recluster, `CREATE TEMP TABLE` dans la transaction DuckLake | accepté (le catalogue `temp` ne compte pas comme seconde base écrite) |
+| Recouvrement après recluster `threads = 1` | fichiers 0–409, 409–819, 819–999 : borne partagée → comparaison stricte ; `Total Files Read` 4 → 1 pour `k = 5` (notebook 6) |
 | `ALTER TABLE … ADD/DROP COLUMN` | `file_count` et `file_size_bytes` inchangés : métadonnées seules |
 | `ALTER TABLE … RENAME TO` | supporté |
 | `merge_adjacent_files(min_file_size := '1KB')` | erreur `Could not convert string '1KB' to UINT64` : entier en octets |

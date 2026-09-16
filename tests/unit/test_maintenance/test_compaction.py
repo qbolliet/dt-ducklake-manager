@@ -397,85 +397,86 @@ def test_full_maintenance_runs_all_steps(maint: Any, ducklake_conn: Any) -> None
     maint.full_maintenance("main", table)
 
 
-# Test que full_maintenance vidange les lignes inlinées avant de fusionner/réécrire
-def test_full_maintenance_flushes_before_merge(maint: Any, ducklake_conn: Any) -> None:
-    """Test that flush_inlined_data runs before merge_files in full_maintenance.
+# Test que full_maintenance vidange les lignes inlinées puis expire et nettoie
+def test_full_maintenance_flushes_then_expires_and_cleans(
+    maint: Any, ducklake_conn: Any
+) -> None:
+    """Test that full_maintenance flushes inlined rows, then always runs
+    expire_snapshots and cleanup_files, skipping the no-op steps.
 
     Args:
         maint: DuckLakeMaintenance fixture.
-        ducklake_conn: Fixture providing (connection, table_name).
+        ducklake_conn: Fixture providing (connection, table_name) with 3 inlined rows.
     """
     _, table = ducklake_conn
     call_log: list[str] = []
 
     original_flush = maint.flush_inlined_data
-    original_merge = maint.merge_files
+    original_expire = maint.expire_snapshots
 
-    def tracking_flush(tbl: Any = None) -> Any:
+    def tracking_flush(*args: Any, **kwargs: Any) -> Any:
         call_log.append("flush_inlined_data")
-        return original_flush(tbl)
+        return original_flush(*args, **kwargs)
 
-    def tracking_merge(schema: Any, tbl: Any) -> Any:
-        call_log.append("merge_files")
-        return original_merge(schema, tbl)
+    def tracking_expire(*args: Any, **kwargs: Any) -> Any:
+        call_log.append("expire_snapshots")
+        return original_expire(*args, **kwargs)
 
     maint.flush_inlined_data = tracking_flush
-    maint.merge_files = tracking_merge
+    maint.expire_snapshots = tracking_expire
 
-    maint.full_maintenance("main", table)
+    report = maint.full_maintenance("main", table)
 
-    assert call_log.index("flush_inlined_data") < call_log.index("merge_files")
+    assert call_log == ["flush_inlined_data", "expire_snapshots"]
+    assert report.maintenance["flush_inlined_rows"] == 3
+    # Aucun fichier de suppression, un seul petit fichier : étapes sans effet sautées
+    assert report.maintenance["rewrite_data_files_skipped"] == 1
+    assert report.maintenance["merge_files_skipped"] == 1
+    assert "expired_snapshots" in report.maintenance
+    assert "cleaned_files" in report.maintenance
+    # Jamais de recluster ni de suppression d'orphelins
+    assert report.maintenance["recluster_skipped"] == 1
+    assert report.maintenance["delete_orphaned_files_skipped"] == 1
 
 
 # Test que full_maintenance continue après un échec partiel
 def test_full_maintenance_continues_on_step_failure(
     maint: Any, ducklake_conn: Any
 ) -> None:
-    """Test that full_maintenance logs a warning and continues if one step fails.
+    """Test that full_maintenance records a warning and continues if one step fails.
 
     Args:
         maint: DuckLakeMaintenance fixture.
         ducklake_conn: Fixture providing (connection, table_name).
     """
     _, table = ducklake_conn
-
-    # Compteur d'appels pour vérifier que les étapes suivantes ont bien été exécutées
     call_log: list[str] = []
 
-    original_rewrite = maint.rewrite_data_files
     original_expire = maint.expire_snapshots
     original_cleanup = maint.cleanup_files
 
-    def failing_merge(schema: Any, tbl: Any) -> None:
+    def failing_flush(*args: Any, **kwargs: Any) -> None:
         # Simulation d'un échec sur la première étape
-        call_log.append("merge_files")
-        raise RuntimeError("Échec simulé de merge_files")
+        call_log.append("flush_inlined_data")
+        raise RuntimeError("Échec simulé de flush_inlined_data")
 
-    def tracking_rewrite(schema: Any, tbl: Any) -> None:
-        call_log.append("rewrite_data_files")
-        original_rewrite(schema, tbl)
-
-    def tracking_expire(schema: Any, older_than_days: int = 30) -> None:
+    def tracking_expire(*args: Any, **kwargs: Any) -> Any:
         call_log.append("expire_snapshots")
-        original_expire(schema, older_than_days=older_than_days)
+        return original_expire(*args, **kwargs)
 
-    def tracking_cleanup(schema: Any) -> None:
+    def tracking_cleanup(*args: Any, **kwargs: Any) -> Any:
         call_log.append("cleanup_files")
-        original_cleanup(schema)
+        return original_cleanup(*args, **kwargs)
 
-    maint.merge_files = failing_merge
-    maint.rewrite_data_files = tracking_rewrite
+    maint.flush_inlined_data = failing_flush
     maint.expire_snapshots = tracking_expire
     maint.cleanup_files = tracking_cleanup
 
-    # full_maintenance ne doit pas lever d'exception malgré l'échec de merge_files
-    maint.full_maintenance("main", table)
+    # full_maintenance ne doit pas lever d'exception malgré l'échec du flush
+    report = maint.full_maintenance("main", table)
 
-    # Vérification que toutes les étapes ont bien été appelées malgré l'échec
-    assert "merge_files" in call_log
-    assert "rewrite_data_files" in call_log
-    assert "expire_snapshots" in call_log
-    assert "cleanup_files" in call_log
+    assert call_log == ["flush_inlined_data", "expire_snapshots", "cleanup_files"]
+    assert any("flush_inlined_data failed" in w for w in report.warnings)
 
 
 # ---------------------------------------------------------------------------

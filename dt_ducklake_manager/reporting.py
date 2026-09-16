@@ -85,11 +85,13 @@ class OperationReport:
             post-commit compaction).
         bytes_before (int): Total Parquet file size (bytes) before the operation.
         bytes_after (int): Total Parquet file size (bytes) after the operation.
-        maintenance (dict[str, int]): Counters returned by post-commit maintenance
-            procedures (e.g. ``{'merge_files_processed': 0, 'merge_files_created':
-            0, 'rewrite_files_processed': 3, 'rewrite_files_created': 1}``). A step
-            that ran and changed nothing is present with a ``0`` value, never
-            omitted.
+        maintenance (dict[str, int | float]): Counters returned by post-commit
+            maintenance procedures (e.g. ``{'merge_files_processed': 0,
+            'merge_files_created': 0, 'rewrite_files_processed': 3,
+            'rewrite_files_created': 1}``). A step that ran and changed nothing is
+            present with a ``0`` value, never omitted. ``maintain`` adds a
+            ``<step>_skipped`` flag per skipped step; ``recluster`` adds the
+            ``overlap_ratio_before``/``overlap_ratio_after`` ratios (floats).
         warnings (list[str]): Non-fatal warnings collected during the operation,
             each also logged at WARNING as it is produced.
     """
@@ -113,7 +115,7 @@ class OperationReport:
     files_after: int = 0
     bytes_before: int = 0
     bytes_after: int = 0
-    maintenance: dict[str, int] = field(default_factory=dict)
+    maintenance: dict[str, int | float] = field(default_factory=dict)
     warnings: list[str] = field(default_factory=list)
 
     # Méthode de construction de la ligne de synthèse lisible (log INFO)
