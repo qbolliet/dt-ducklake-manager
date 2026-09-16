@@ -34,7 +34,8 @@ class SchemaBuilder:
     Attributes:
         df (nw.DataFrame): The input dataset (converted to narwhals).
         categorical_threshold (int): Threshold below which a textual column is
-            flagged as categorical, a UI-only piece of metadata.
+            flagged as categorical, a UI-only piece of metadata inferred once, at
+            build time.
         categorical_overrides (dict[str, bool]): Per-column forcing of the
             categorical status, independent of the threshold.
         primary_keys (list[str]): Logical primary key columns.
@@ -68,9 +69,10 @@ class SchemaBuilder:
                 When None, deduplication will use all columns and a UserWarning is
                 raised.
             categorical_overrides (Optional[Dict[str, bool]]): Per-column forcing of
-                the categorical status, independent of the threshold. A forced column
-                is marked ``is_categorical_forced`` in the metadata table and is never
-                re-evaluated by a subsequent update. Defaults to None.
+                the categorical status, independent of the threshold. The status is
+                never re-evaluated by a subsequent update anyway; on a live base it
+                is corrected with ``update_column_metadata(col,
+                is_categorical=...)``. Defaults to None.
             hierarchies (Optional[Dict[str, str]]): Column hierarchy declared as a
                 mapping of child column name to parent column name (e.g.
                 ``{'commune': 'departement', 'departement': 'region'}``). Written to
@@ -272,10 +274,9 @@ class SchemaBuilder:
         Automatically infer metadata for the DataFrame's columns, including SQL types,
         labels, the categorical UI flag and the producer-owned UI fields.
 
-        The ``is_categorical`` flag is inferred from the cardinality of textual
-        columns and can be forced per column through ``categorical_overrides``; a
-        forced column carries ``is_categorical_forced = True`` so that no later
-        update re-evaluates it.
+        The ``is_categorical`` flag is inferred once from the distinct non-null count
+        of textual columns and can be forced per column through
+        ``categorical_overrides``. No later update re-evaluates it.
 
         The UI fields ``unit``, ``display_format``, ``family``, ``description`` and
         ``default_aggregation`` are all VARCHAR, nullable, and default to ``None``.
@@ -312,8 +313,8 @@ class SchemaBuilder:
             >>> metadata = builder.create_metadata_table()
             >>> sorted(metadata.columns)  # doctest: +NORMALIZE_WHITESPACE
             ['default_aggregation', 'description', 'display_format', 'family',
-             'is_categorical', 'is_categorical_forced', 'is_primary_key', 'label',
-             'name', 'sql_type', 'unit']
+             'is_categorical', 'is_primary_key', 'label', 'name', 'parent_name',
+             'sql_type', 'unit']
         """
         # Validation et normalisation des métadonnées d'UI fournies par le producteur
         column_metadata_norm = validate_column_metadata(
@@ -350,7 +351,6 @@ class SchemaBuilder:
                 "label": label,
                 "sql_type": map_python_to_sql_type(dtype_obj),
                 "is_categorical": False,
-                "is_categorical_forced": False,
                 "is_primary_key": col in self.primary_keys,
             }
             # Champs d'UI : valeur fournie ou NULL par défaut
@@ -360,15 +360,13 @@ class SchemaBuilder:
             # Logging
             self.logger.info(f"Successfully extracted meta-data from column '{col}'")
 
-            # Vérification si la colonne est de type String (équivalent narwhals de
-            # 'object')
-            if isinstance(dtype_obj, nw.String):
-                # Calcul du nombre de modalités
-                n_modalities = self.df[col].n_unique()
+            # Colonne textuelle : inférence du statut catégoriel par le seuil
+            if isinstance(dtype_obj, (nw.String, nw.Categorical, nw.Enum)):
+                # Calcul du nombre de modalités, valeurs manquantes exclues (même
+                # règle que pour les colonnes ajoutées plus tard)
+                n_modalities = self.df[col].drop_nulls().n_unique()
                 # Vérification du seuil : si categorical_threshold vaut None, aucune
-                # colonne
-                # n'est traitée comme catégorielle, quel que soit son nombre de
-                # modalités.
+                # colonne n'est traitée comme catégorielle.
                 if self.categorical_threshold is not None:
                     if n_modalities <= self.categorical_threshold:
                         # Mise à jour du type de la variable
@@ -379,9 +377,6 @@ class SchemaBuilder:
                             f" modalities {n_modalities} satisfies the categorical"
                             f" threshold criteria {self.categorical_threshold}"
                         )
-                        # Mise à jour des modalités
-                        # metadata['modalities'] =
-                        # str(self.df[col].dropna().unique().tolist())
                     else:
                         # Logging
                         self.logger.warning(
@@ -390,12 +385,9 @@ class SchemaBuilder:
                             f" threshold criteria {self.categorical_threshold}"
                         )
 
-            # Forçage explicite du statut catégoriel, indépendant du seuil.
-            # Le marqueur is_categorical_forced empêche toute ré-évaluation ultérieure
-            # par un update.
+            # Forçage explicite du statut catégoriel, indépendant du seuil
             if col in self.categorical_overrides:
                 metadata["is_categorical"] = self.categorical_overrides[col]
-                metadata["is_categorical_forced"] = True
                 # Logging
                 self.logger.info(
                     f"The categorical status of column '{col}' is forced to"
@@ -408,7 +400,6 @@ class SchemaBuilder:
             if col in hierarchy_columns and not metadata["is_categorical"]:
                 # Forçage du statut catégoriel
                 metadata["is_categorical"] = True
-                metadata["is_categorical_forced"] = True
                 # Warning indiquant la conversion
                 warnings.warn(
                     f"Column {col!r} is part of a column hierarchy but is not"

@@ -9,7 +9,7 @@ import polars as pl
 import pytest
 
 # Module du package à tester
-from dt_ducklake_manager._internal.managers.data import DataManager
+from dt_ducklake_manager.operations._data import DataManager
 
 # ---------------------------------------------------------------------------
 # Fixtures locales

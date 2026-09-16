@@ -1,4 +1,6 @@
 # Importation des modules
+from typing import Any
+
 import narwhals as nw
 
 # Champs d'UI de la table metadata renseignés par le producteur de métadonnées.
@@ -18,10 +20,66 @@ UI_METADATA_FIELDS: tuple[str, ...] = (
 # ci-dessus, plus le libellé d'affichage.
 COLUMN_METADATA_KEYS: frozenset[str] = frozenset({"label", *UI_METADATA_FIELDS})
 
+# Colonnes de la table metadata (nom -> type SQL et défaut), dans l'ordre du DDL.
+# Source unique du CREATE TABLE (builder, managers, recovery), des colonnes requises
+# de l'auditeur et du schéma du DataFrame de métadonnées vide.
+METADATA_COLUMNS: dict[str, str] = {
+    "name": "VARCHAR",
+    "label": "VARCHAR",
+    "sql_type": "VARCHAR",
+    "is_categorical": "BOOLEAN DEFAULT FALSE",
+    "is_primary_key": "BOOLEAN DEFAULT FALSE",
+    **{field: "VARCHAR" for field in UI_METADATA_FIELDS},
+}
+
 # Agrégations acceptées pour ``metadata.default_aggregation``, validées à l'écriture.
 ALLOWED_DEFAULT_AGGREGATIONS: frozenset[str] = frozenset(
     {"SUM", "AVG", "MAX", "MIN", "COUNT", "MEDIAN", "MODE"}
 )
+
+
+# Fonction de génération du DDL de la table metadata
+def metadata_table_ddl(qualified_name: str, if_not_exists: bool = False) -> str:
+    """Build the ``CREATE TABLE`` statement of a ``metadata`` table.
+
+    Args:
+        qualified_name: Already quoted and qualified table identifier (e.g. the
+            result of ``_qualified('metadata')``).
+        if_not_exists: Whether to emit ``CREATE TABLE IF NOT EXISTS``. Defaults to
+            False.
+
+    Returns:
+        str: The DDL statement, columns taken from :data:`METADATA_COLUMNS`.
+
+    Examples:
+        >>> metadata_table_ddl('"main"."metadata"').splitlines()[0]
+        'CREATE TABLE "main"."metadata" ('
+    """
+    # Clause optionnelle d'idempotence
+    clause = "IF NOT EXISTS " if if_not_exists else ""
+    columns = ",\n".join(f"    {name} {sql}" for name, sql in METADATA_COLUMNS.items())
+    return f"CREATE TABLE {clause}{qualified_name} (\n{columns}\n)"
+
+
+# Fonction de construction d'un DataFrame de métadonnées vide et typé
+def empty_metadata_frame() -> nw.DataFrame[Any]:
+    """Return an empty, typed metadata DataFrame (pyarrow backend).
+
+    Explicit dtypes keep the callers' boolean filters valid on an empty frame.
+
+    Returns:
+        nw.DataFrame: Zero-row frame with the :data:`METADATA_COLUMNS` columns.
+
+    Examples:
+        >>> empty_metadata_frame().columns[:3]
+        ['name', 'label', 'sql_type']
+    """
+    # Correspondance des types SQL vers les types narwhals
+    schema = {
+        name: nw.Boolean() if sql.startswith("BOOLEAN") else nw.String()
+        for name, sql in METADATA_COLUMNS.items()
+    }
+    return nw.from_dict({name: [] for name in schema}, schema=schema, backend="pyarrow")
 
 
 # Fonction de normalisation et de validation de ``metadata.default_aggregation``

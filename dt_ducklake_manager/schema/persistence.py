@@ -22,13 +22,14 @@ from ..reporting import (
 
 # Utilitaires de traitement des données
 from ..utils.sql import (
-    qualify_table,
+    SchemaScoped,
     quote_ident,
     remove_dataframe_duplicates,
     resolve_catalog,
 )
 
 # Modules ad hoc
+from ..utils.types import METADATA_COLUMNS, metadata_table_ddl
 from .inference import SchemaBuilder
 
 # Version du schéma de base de données écrite dans dataset_metadata.
@@ -37,7 +38,7 @@ SCHEMA_VERSION: int = 1
 
 
 # Classe créant les tables correspondant au schéma dans un catalogue DuckLake
-class DuckLakeTablesBuilder:
+class DuckLakeTablesBuilder(SchemaScoped):
     """
     Builds and writes the database schema into a DuckLake catalog.
 
@@ -111,8 +112,9 @@ class DuckLakeTablesBuilder:
             primary_keys (Optional[List[str]]): Column names used as logical primary
                 keys (enforced applicatively, not as DDL constraints). Defaults to None.
             categorical_overrides (Optional[Dict[str, bool]]): Per-column forcing of
-                the categorical status, independent of the threshold. A forced column
-                is never re-evaluated by a later update. Defaults to None.
+                the categorical status, independent of the threshold. The status is
+                inferred once and never re-evaluated by a later update. Defaults to
+                None.
             hierarchies (Optional[Dict[str, str]]): Column hierarchy declared as a
                 mapping of child column name to parent column name, written to
                 ``metadata.parent_name``. Must agree with
@@ -182,25 +184,6 @@ class DuckLakeTablesBuilder:
         self.dataset_description = dataset_description
         self.dataset_source = dataset_source
 
-    # Méthode de qualification d'un nom de table par le schéma (et le catalogue) cible
-    def _qualified(self, table: str) -> str:
-        """
-        Return a table name qualified by the target schema and catalog.
-
-        Args:
-            table (str): Bare table name (e.g. ``'fact_table'``).
-
-        Returns:
-            str: The quoted, qualified identifier (catalog-qualified only when an
-            alias is actually attached).
-
-        Examples:
-            >>> builder._qualified("fact_table")
-            '"main"."fact_table"'
-        """
-        # Propagation de l'alias de catalogue effectif à l'utilitaire central
-        return qualify_table(table, self.schema, self._catalog)
-
     # Méthode de création de la table des méta-données
     def create_duckdb_metadata_table(
         self,
@@ -234,50 +217,25 @@ class DuckLakeTablesBuilder:
 
         # Création de la table avec schéma explicite
         # L'unicité de 'name' est garantie applicativement par DuckdbTablesBuilder.
-        # Conversion vers Arrow pour garantir la compatibilité DuckDB quel que soit le
-        # backend narwhals.
-        # Note : .select() est nécessaire car narwhals/pandas inclut l'index comme
-        # colonne
-        # supplémentaire dans pa.Table.from_pandas() lorsque l'index n'est pas
-        # séquentiel
-        # (ex. après un .sort()). On filtre explicitement sur les colonnes nommées du
-        # DataFrame.
+        # Conversion vers Arrow quel que soit le backend narwhals. Le .select()
+        # écarte l'index qu'un backend pandas ajoute comme colonne lorsqu'il n'est
+        # pas séquentiel (ex. après un tri).
         df_meta = self.schema_builder.df_metadata
         # Nom qualifié par le schéma (et le catalogue) cible
         qualified_name = self._qualified(table_name or "metadata")
         self.conn.register(
             "temp_metadata", df_meta.to_arrow().select(list(df_meta.columns))
         )
-        self.conn.execute(f"""
-            CREATE TABLE {qualified_name} (
-                name VARCHAR,
-                label VARCHAR,
-                sql_type VARCHAR,
-                is_categorical BOOLEAN,
-                is_categorical_forced BOOLEAN,
-                is_primary_key BOOLEAN,
-                parent_name VARCHAR,
-                unit VARCHAR,
-                display_format VARCHAR,
-                family VARCHAR,
-                description VARCHAR,
-                default_aggregation VARCHAR
-            )
-        """)
+        self.conn.execute(metadata_table_ddl(qualified_name))
 
         # Insertion des données depuis la vue temporaire.
         # Liste de colonnes explicite : l'ordre du DataFrame inféré ne doit pas avoir
         # à coïncider avec celui du DDL.
-        self.conn.execute(f"""
-            INSERT INTO {qualified_name}
-                (name, label, sql_type, is_categorical, is_categorical_forced,
-                 is_primary_key, parent_name, unit, display_format, family,
-                 description, default_aggregation)
-            SELECT name, label, sql_type, is_categorical, is_categorical_forced,
-                   is_primary_key, parent_name, unit, display_format, family,
-                   description, default_aggregation
-            FROM temp_metadata
-        """)
+        column_list = ", ".join(METADATA_COLUMNS)
+        self.conn.execute(
+            f"INSERT INTO {qualified_name} ({column_list})"
+            f" SELECT {column_list} FROM temp_metadata"
+        )
         self.conn.execute("DROP VIEW temp_metadata")
 
         # Logging

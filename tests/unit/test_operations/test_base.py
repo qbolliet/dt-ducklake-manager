@@ -9,7 +9,7 @@ import pytest
 
 # Utilisation de DataManager (sous-classe concrète) pour instancier
 # BaseSchemaManager
-from dt_ducklake_manager._internal.managers.data import DataManager
+from dt_ducklake_manager.operations._data import DataManager
 
 # ---------------------------------------------------------------------------
 # Fixture locale
@@ -194,102 +194,111 @@ def test_invalidate_metadata_cache(manager: DataManager) -> None:
 
 
 # ===========================================================================
-# Tests de _refresh_categorical_flags()
+# Tests du statut catégoriel : inférence unique et correction manuelle
 # ===========================================================================
 
 
-# Test qu'une colonne passant sous le seuil devient catégorielle
-def test_refresh_categorical_flags_becomes_categorical(
+# Test que le statut catégoriel n'est jamais recalculé après une écriture
+def test_categorical_status_not_recomputed_on_existing_column(
     manager: DataManager, built_ducklake_schema: duckdb.DuckDBPyConnection
 ) -> None:
-    """Test that a column falling to or below the threshold becomes categorical.
+    """Test that refreshing an existing metadata row never touches is_categorical.
 
-    'high_cardinality' starts with 5 distinct values for a threshold of 4. Deleting
-    the row carrying the fifth modality brings it to 4, i.e. exactly the threshold.
+    'category' is categorical at build time (3 values <= threshold 4). Re-recording
+    it from a batch carrying 6 distinct values only refreshes its SQL type.
 
     Args:
         manager: DataManager fixture with a built schema.
         built_ducklake_schema: DuckDB connection with the built schema.
     """
-    # Vérification de l'état initial : non catégorielle
-    assert manager._is_categorical_column("high_cardinality") is False
-
-    # Suppression de l'unique porteur de la 5e modalité
-    built_ducklake_schema.execute("DELETE FROM fact_table WHERE id = 5")
-
-    # Actualisation du statut catégoriel
-    changed = manager._refresh_categorical_flags()
-
-    assert "high_cardinality" in changed
-    assert manager._is_categorical_column("high_cardinality") is True
-
-
-# Test qu'une colonne dépassant le seuil cesse d'être catégorielle
-def test_refresh_categorical_flags_becomes_non_categorical(
-    manager: DataManager, built_ducklake_schema: duckdb.DuckDBPyConnection
-) -> None:
-    """Test that a column exceeding the threshold stops being categorical.
-
-    'category' starts with 3 distinct values for a threshold of 4; inserting two
-    unseen modalities brings it to 5.
-
-    Args:
-        manager: DataManager fixture with a built schema.
-        built_ducklake_schema: DuckDB connection with the built schema.
-    """
-    # Vérification de l'état initial : catégorielle
+    batch = pl.DataFrame({"category": ["A", "B", "C", "D", "E", "F"]})
+    manager._add_column_to_metadata("category", batch)
     assert manager._is_categorical_column("category") is True
 
-    # Ajout de deux modalités inédites, portant le total à 5 > seuil = 4
-    built_ducklake_schema.execute(
-        "INSERT INTO fact_table (id, category) VALUES (10, 'D'), (11, 'E')"
-    )
 
-    # Actualisation du statut catégoriel
-    changed = manager._refresh_categorical_flags()
+# Test que l'inférence s'applique à la création d'une colonne, valeurs nulles exclues
+def test_categorical_status_inferred_on_new_column(manager: DataManager) -> None:
+    """Test that a new textual column is inferred once, nulls excluded.
 
-    assert "category" in changed
-    assert manager._is_categorical_column("category") is False
+    Args:
+        manager: DataManager fixture with a built schema (threshold 4).
+    """
+    low = pl.DataFrame({"low": ["a", "b", None, "a", "c", "d", None]})
+    high = pl.DataFrame({"high": ["a", "b", "c", "d", "e"]})
+    manager._add_column_to_metadata("low", low)
+    manager._add_column_to_metadata("high", high)
+    assert manager._is_categorical_column("low") is True
+    assert manager._is_categorical_column("high") is False
 
 
-# Test qu'une colonne au statut forcé n'est jamais rebasculée
-def test_refresh_categorical_flags_skips_forced_column(
-    manager: DataManager, built_ducklake_schema: duckdb.DuckDBPyConnection
-) -> None:
-    """Test that a column whose categorical status was forced is never re-evaluated.
+# Test de la correction manuelle du statut catégoriel
+def test_update_column_metadata_sets_is_categorical(manager: DataManager) -> None:
+    """Test that update_column_metadata corrects is_categorical both ways.
 
     Args:
         manager: DataManager fixture with a built schema.
-        built_ducklake_schema: DuckDB connection with the built schema.
     """
-    # Forçage du statut catégoriel de 'high_cardinality', au-delà du seuil
-    built_ducklake_schema.execute(
-        "UPDATE metadata SET is_categorical = TRUE, is_categorical_forced = TRUE"
-        " WHERE name = 'high_cardinality'"
-    )
-    manager._invalidate_metadata_cache()
-
-    # Actualisation du statut catégoriel
-    changed = manager._refresh_categorical_flags()
-
-    # La colonne forcée est ignorée, son statut est conservé
-    assert "high_cardinality" not in changed
+    manager.update_column_metadata("high_cardinality", is_categorical=True)
     assert manager._is_categorical_column("high_cardinality") is True
+    manager.update_column_metadata("high_cardinality", is_categorical=False)
+    assert manager._is_categorical_column("high_cardinality") is False
 
 
-# Test qu'aucun statut n'est recalculé en l'absence de seuil
-def test_refresh_categorical_flags_without_threshold(
-    built_ducklake_schema: duckdb.DuckDBPyConnection,
+# Test qu'un statut catégoriel non booléen est refusé
+@pytest.mark.parametrize("value", ["true", 1, None])
+def test_update_column_metadata_is_categorical_must_be_bool(
+    manager: DataManager, value: object
 ) -> None:
-    """Test that no flag is recomputed when no threshold is configured.
+    """Test that a non-bool is_categorical raises ValueError.
 
     Args:
-        built_ducklake_schema: DuckDB connection with the built schema.
+        manager: DataManager fixture with a built schema.
+        value: Invalid value.
     """
-    mgr = DataManager(connection=built_ducklake_schema, categorical_threshold=None)
-    assert mgr._refresh_categorical_flags() == []
-    # Le statut initial reste inchangé
-    assert mgr._is_categorical_column("category") is True
+    with pytest.raises(ValueError, match="is_categorical must be a bool"):
+        manager.update_column_metadata("category", is_categorical=value)  # type: ignore[arg-type]
+
+
+# Test qu'une colonne enfant d'une hiérarchie ne peut pas cesser d'être catégorielle
+def test_update_column_metadata_refuses_non_categorical_hierarchy_child(
+    manager: DataManager,
+) -> None:
+    """Test that is_categorical=False is refused on a hierarchy child column.
+
+    Args:
+        manager: DataManager fixture with a built schema.
+    """
+    manager.update_column_metadata("category", parent_name="status")
+    with pytest.raises(ValueError, match="hierarchy"):
+        manager.update_column_metadata("category", is_categorical=False)
+
+
+# Test qu'une colonne parente d'une hiérarchie ne peut pas cesser d'être catégorielle
+def test_update_column_metadata_refuses_non_categorical_hierarchy_parent(
+    manager: DataManager,
+) -> None:
+    """Test that is_categorical=False is refused on a hierarchy parent column.
+
+    Args:
+        manager: DataManager fixture with a built schema.
+    """
+    manager.update_column_metadata("category", parent_name="status")
+    with pytest.raises(ValueError, match="hierarchy"):
+        manager.update_column_metadata("status", is_categorical=False)
+
+
+# Test qu'un détachement de hiérarchie dans le même appel autorise la bascule
+def test_update_column_metadata_detach_and_uncategorize_same_call(
+    manager: DataManager,
+) -> None:
+    """Test that clearing parent_name in the same call allows is_categorical=False.
+
+    Args:
+        manager: DataManager fixture with a built schema.
+    """
+    manager.update_column_metadata("category", parent_name="status")
+    manager.update_column_metadata("category", parent_name=None, is_categorical=False)
+    assert manager._is_categorical_column("category") is False
 
 
 # ===========================================================================
@@ -636,15 +645,14 @@ def test_update_column_metadata_parent_name_forces_categorical(
         manager.update_column_metadata("value", parent_name="date")
 
     row = manager.conn.execute(
-        "SELECT parent_name, is_categorical, is_categorical_forced"
-        " FROM metadata WHERE name = 'value'"
+        "SELECT parent_name, is_categorical FROM metadata WHERE name = 'value'"
     ).fetchone()
-    assert row == ("date", True, True)
+    assert row == ("date", True)
 
     parent_row = manager.conn.execute(
-        "SELECT is_categorical, is_categorical_forced FROM metadata WHERE name = 'date'"
+        "SELECT is_categorical FROM metadata WHERE name = 'date'"
     ).fetchone()
-    assert parent_row == (True, True)
+    assert parent_row == (True,)
 
 
 # Test que update_column_metadata refuse une colonne parente inexistante

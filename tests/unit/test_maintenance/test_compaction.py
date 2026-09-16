@@ -13,7 +13,8 @@ import pytest
 
 # Modules à tester
 from dt_ducklake_manager.connection import DuckLakeConnector
-from dt_ducklake_manager.maintenance import DuckLakeMaintenance
+from dt_ducklake_manager.maintenance import DuckLakeMaintenance, MaintenancePolicy
+from dt_ducklake_manager.reporting import OperationReport
 
 # ---------------------------------------------------------------------------
 # Fonctions auxiliaires
@@ -380,28 +381,53 @@ def test_delete_orphaned_files_with_older_than(maint: Any, ducklake_conn: Any) -
 
 
 # ---------------------------------------------------------------------------
-# Tests de full_maintenance
+# Tests de compact et de maintain avec rétention explicite
 # ---------------------------------------------------------------------------
 
 
-# Test que full_maintenance exécute toutes les étapes sans erreur
-def test_full_maintenance_runs_all_steps(maint: Any, ducklake_conn: Any) -> None:
-    """Test that full_maintenance calls all four maintenance procedures.
+# Test que compact renvoie et reporte les quatre compteurs, zéros compris
+def test_compact_returns_and_reports_counters(maint: Any, ducklake_conn: Any) -> None:
+    """Test that compact returns the merge/rewrite counters and fills the report.
 
     Args:
         maint: DuckLakeMaintenance fixture.
         ducklake_conn: Fixture providing (connection, table_name).
     """
     _, table = ducklake_conn
-    # Aucune exception ne doit être levée et toutes les étapes doivent s'exécuter
-    maint.full_maintenance("main", table)
+    report = OperationReport(
+        operation="update_database",
+        schema="main",
+        run_id=None,
+        started_at=datetime.now(),
+        duration_seconds=0.0,
+    )
+    counters = maint.compact(table, report=report)
+    assert set(counters) == {
+        "merge_files_processed",
+        "merge_files_created",
+        "rewrite_files_processed",
+        "rewrite_files_created",
+    }
+    assert all(isinstance(v, int) for v in counters.values())
+    assert report.maintenance == counters
 
 
-# Test que full_maintenance vidange les lignes inlinées puis expire et nettoie
-def test_full_maintenance_flushes_then_expires_and_cleans(
+# Test que compact n'échoue pas sur une table inexistante
+def test_compact_unknown_table_does_not_raise(maint: Any) -> None:
+    """Test that compact swallows failures and reports zero counters.
+
+    Args:
+        maint: DuckLakeMaintenance fixture.
+    """
+    counters = maint.compact("table_inexistante_xyz")
+    assert all(v == 0 for v in counters.values())
+
+
+# Test que maintain avec rétention vidange les lignes inlinées puis expire et nettoie
+def test_maintain_with_retention_flushes_then_expires_and_cleans(
     maint: Any, ducklake_conn: Any
 ) -> None:
-    """Test that full_maintenance flushes inlined rows, then always runs
+    """Test that maintain with a retention flushes inlined rows, then always runs
     expire_snapshots and cleanup_files, skipping the no-op steps.
 
     Args:
@@ -425,7 +451,7 @@ def test_full_maintenance_flushes_then_expires_and_cleans(
     maint.flush_inlined_data = tracking_flush
     maint.expire_snapshots = tracking_expire
 
-    report = maint.full_maintenance("main", table)
+    report = maint.maintain(MaintenancePolicy(retention_days=30), table, "main")
 
     assert call_log == ["flush_inlined_data", "expire_snapshots"]
     assert report.maintenance["flush_inlined_rows"] == 3
@@ -439,11 +465,9 @@ def test_full_maintenance_flushes_then_expires_and_cleans(
     assert report.maintenance["delete_orphaned_files_skipped"] == 1
 
 
-# Test que full_maintenance continue après un échec partiel
-def test_full_maintenance_continues_on_step_failure(
-    maint: Any, ducklake_conn: Any
-) -> None:
-    """Test that full_maintenance records a warning and continues if one step fails.
+# Test que maintain continue après un échec partiel
+def test_maintain_continues_on_step_failure(maint: Any, ducklake_conn: Any) -> None:
+    """Test that maintain records a warning and continues if one step fails.
 
     Args:
         maint: DuckLakeMaintenance fixture.
@@ -472,8 +496,8 @@ def test_full_maintenance_continues_on_step_failure(
     maint.expire_snapshots = tracking_expire
     maint.cleanup_files = tracking_cleanup
 
-    # full_maintenance ne doit pas lever d'exception malgré l'échec du flush
-    report = maint.full_maintenance("main", table)
+    # maintain ne doit pas lever d'exception malgré l'échec du flush
+    report = maint.maintain(MaintenancePolicy(retention_days=30), table, "main")
 
     assert call_log == ["flush_inlined_data", "expire_snapshots", "cleanup_files"]
     assert any("flush_inlined_data failed" in w for w in report.warnings)

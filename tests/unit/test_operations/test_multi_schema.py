@@ -83,7 +83,6 @@ def test_delete_isolated_between_schemas(
     # Suppression d'une ligne dans 'shapley' uniquement
     deleter = DatabaseDeleter(
         connection=conn,
-        categorical_threshold=4,
         enable_validation=False,
         auto_cleanup=False,
         schema="shapley",
@@ -118,7 +117,6 @@ def test_audit_targets_correct_schema(
     """
     auditor = DatabaseAuditor(
         connection=multi_schema_connection,
-        categorical_threshold=4,
         schema=schema_name,
     )
     report = auditor.validate_database(ValidationLevel.STANDARD)

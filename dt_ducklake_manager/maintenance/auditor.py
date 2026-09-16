@@ -9,12 +9,12 @@ from typing import Any
 # DuckDB
 import duckdb
 import narwhals as nw
-import polars as pl
 from narwhals.typing import IntoDataFrame
 
 # Import des utilitaires
 from ..utils.logger import _init_logger
-from ..utils.sql import qualify_table, quote_ident, resolve_catalog
+from ..utils.sql import SchemaScoped, quote_ident, resolve_catalog
+from ..utils.types import METADATA_COLUMNS
 
 
 # Classe des niveaux de validation sur la base de données
@@ -174,7 +174,7 @@ class ValidationReport:
 
 
 # Classe d'audit de la base de données
-class DatabaseAuditor:
+class DatabaseAuditor(SchemaScoped):
     """
     Provides comprehensive database validation and state checking capabilities.
 
@@ -183,7 +183,6 @@ class DatabaseAuditor:
 
     Attributes:
         conn (duckdb.DuckDBPyConnection): Database connection
-        categorical_threshold (int): Threshold for categorical determination
         schema (str): DuckLake schema audited by this instance
         catalog_alias (str): Alias of the attached DuckLake catalog, carried
             alongside ``schema``.
@@ -194,7 +193,6 @@ class DatabaseAuditor:
     def __init__(
         self,
         connection: duckdb.DuckDBPyConnection | None = None,
-        categorical_threshold: int | None = 50,
         log_filename: str | os.PathLike[str] | None = None,
         schema: str = "main",
         catalog_alias: str = "db",
@@ -206,7 +204,6 @@ class DatabaseAuditor:
             connection: DuckDB connection attached to a DuckLake catalog, obtained
                 via ``DuckLakeConnector.connect()``. If None, an in-memory connection
                 is created (for unit tests only).
-            categorical_threshold: Threshold for determining categorical variables.
             log_filename: Path to log file.
             schema: DuckLake schema to audit. A catalog can host several schemas;
                 each is audited independently. Defaults to ``'main'``.
@@ -224,9 +221,6 @@ class DatabaseAuditor:
         # Initialisation de la connexion DuckLake.
         self.conn = connection if connection is not None else duckdb.connect(":memory:")
 
-        # Seuil pour déterminer si une variable est catégorielle
-        self.categorical_threshold = categorical_threshold
-
         # Schéma DuckLake audité : toutes les requêtes qualifient les tables par ce
         # schéma pour cibler le bon jeu de résultats dans le catalogue.
         self.schema = schema
@@ -242,20 +236,6 @@ class DatabaseAuditor:
         # Initialisation du logger nommé pour traçabilité des audits.
         # Chemin par défaut centralisé dans utils.logger : <cwd>/logs/<name>.log.
         self.logger = _init_logger(filename=log_filename, name="database_auditor")
-
-    # Méthode de qualification d'un nom de table par le schéma (et le catalogue) audité
-    def _qualified(self, table: str) -> str:
-        """Return a table name qualified by the audited schema and catalog.
-
-        Args:
-            table: Bare table name (e.g. ``'fact_table'``).
-
-        Returns:
-            The quoted, qualified identifier (catalog-qualified when an alias is
-            actually attached).
-        """
-        # Délégation à l'utilitaire central de qualification, alias effectif propagé
-        return qualify_table(table, self.schema, self._catalog)
 
     # Méthodes principales de validation
     # Méthode de validation de la base de données
@@ -482,20 +462,7 @@ class DatabaseAuditor:
                 return
 
             # Vérification des colonnes requises dans metadata
-            required_columns = [
-                "name",
-                "label",
-                "sql_type",
-                "is_categorical",
-                "is_categorical_forced",
-                "is_primary_key",
-                "parent_name",
-                "unit",
-                "display_format",
-                "family",
-                "description",
-                "default_aggregation",
-            ]
+            required_columns = list(METADATA_COLUMNS)
             missing_columns = [
                 col for col in required_columns if col not in metadata_df.columns
             ]
@@ -531,7 +498,7 @@ class DatabaseAuditor:
             # Vérification des doublons dans les noms de colonnes (il s'agit d ela clé
             # primaire de la base de données)
             if "name" in metadata_df.columns:
-                duplicate_names = metadata_df.filter(pl.col("name").is_duplicated())[
+                duplicate_names = metadata_df.filter(nw.col("name").is_duplicated())[
                     "name"
                 ].to_list()
                 if duplicate_names:
@@ -1240,29 +1207,23 @@ class DatabaseAuditor:
             return []
 
     # Méthode auxiliaire d'extraction des métadonnées
-    def _get_metadata(self) -> pl.DataFrame:
-        """Get metadata table content."""
+    def _get_metadata(self) -> nw.DataFrame[Any]:
+        """Get metadata table content.
+
+        Returns:
+            nw.DataFrame: The metadata rows (pyarrow backend), or an empty frame
+            when the table cannot be read.
+        """
         try:
-            result = pl.from_arrow(
+            metadata: nw.DataFrame[Any] = nw.from_native(
                 self.conn.execute(
                     f"SELECT * FROM {self._qualified('metadata')}"
-                ).to_arrow_table()
+                ).to_arrow_table(),
+                eager_only=True,
             )
-            # pl.from_arrow() peut retourner DataFrame ou Series selon la forme
-            # de l'entrée Arrow. On s'assure de retourner un DataFrame.
-            assert isinstance(result, pl.DataFrame)
-            return result
+            return metadata
         except Exception:
-            return pl.DataFrame()
-
-    # méthode auxiliaire de vérification de l'existence d'une table
-    def _table_exists(self, table_name: str) -> bool:
-        """Check if a (bare-named) table exists in the audited schema."""
-        try:
-            self.conn.execute(f"SELECT 1 FROM {self._qualified(table_name)} LIMIT 1")
-            return True
-        except Exception:
-            return False
+            return nw.from_dict({}, backend="pyarrow")
 
     # Méthode auxiliaire de vérification de l'existence d'une colonne dans la table des
     # faits

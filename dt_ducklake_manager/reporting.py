@@ -2,7 +2,7 @@
 Operation reports and DuckLake run traceability.
 
 Every public write operation (``build_schema``, ``update_database``, ``add_columns``,
-``delete_rows``, ``delete_columns``, ``DuckLakeMaintenance.full_maintenance``) builds
+``delete_rows``, ``delete_columns``, ``DuckLakeMaintenance.maintain``) builds
 an :class:`OperationReport` describing what it actually did, measured from DuckLake's
 public introspection functions rather than estimated in Python:
 

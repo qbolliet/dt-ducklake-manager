@@ -78,7 +78,7 @@ def test_create_metadata_table(schema_builder: Any) -> None:
     # Vérification de l'existence de chacune des colonnes attendues
     assert "name" in metadata.columns
     assert "label" in metadata.columns
-    assert "is_categorical_forced" in metadata.columns
+    assert "is_categorical_forced" not in metadata.columns
     assert "sql_type" in metadata.columns
     assert "is_categorical" in metadata.columns
     assert "is_primary_key" in metadata.columns
@@ -139,7 +139,6 @@ def test_categorical_override_forces_true(sample_df: Any) -> None:
 
     row = metadata.filter(nw.col("name") == "high_cardinality")
     assert row["is_categorical"][0] is True
-    assert row["is_categorical_forced"][0] is True
 
 
 # Test qu'une colonne sous le seuil peut être forcée non catégorielle
@@ -162,10 +161,9 @@ def test_categorical_override_forces_false(sample_df: Any) -> None:
 
     row = metadata.filter(nw.col("name") == "category")
     assert row["is_categorical"][0] is False
-    assert row["is_categorical_forced"][0] is True
 
 
-# Test qu'une colonne non forcée n'est jamais marquée comme telle
+# Test qu'une colonne absente des forçages reste pilotée par le seuil
 def test_categorical_override_leaves_other_columns_unforced(sample_df: Any) -> None:
     """Test that columns absent from categorical_overrides stay threshold-driven.
 
@@ -182,7 +180,6 @@ def test_categorical_override_leaves_other_columns_unforced(sample_df: Any) -> N
 
     row = metadata.filter(nw.col("name") == "category")
     assert row["is_categorical"][0] is True
-    assert row["is_categorical_forced"][0] is False
 
 
 # Test qu'une colonne inconnue dans categorical_overrides lève une ValueError
@@ -631,8 +628,8 @@ def test_hierarchies_forces_non_categorical_column(sample_df: Any) -> None:
 
     'high_cardinality' has 5 distinct values, above categorical_threshold=4, so it
     is NOT categorical by default. Declaring it as a child of 'status' in a
-    hierarchy must force is_categorical=True and is_categorical_forced=True, with a
-    UserWarning, exactly as categorical_overrides would.
+    hierarchy must force is_categorical=True, with a UserWarning, exactly as
+    categorical_overrides would.
 
     Args:
         sample_df: Sample polars DataFrame.
@@ -648,7 +645,6 @@ def test_hierarchies_forces_non_categorical_column(sample_df: Any) -> None:
 
     row = metadata.filter(nw.col("name") == "high_cardinality")
     assert row["is_categorical"][0] is True
-    assert row["is_categorical_forced"][0] is True
     assert row["parent_name"][0] == "status"
 
 

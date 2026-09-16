@@ -184,7 +184,6 @@ def test_build_then_delete_rows(
     # Suppression de la ligne avec id=1
     deleter = DatabaseDeleter(
         connection=built_ducklake_schema,
-        categorical_threshold=4,
         enable_validation=False,  # Désactivé pour simplifier le test d'intégration
         auto_cleanup=False,
     )
@@ -226,7 +225,7 @@ def test_build_then_audit(built_ducklake_schema: duckdb.DuckDBPyConnection) -> N
         schema.
     """
     # Audit de la base fraîchement construite
-    auditor = DatabaseAuditor(connection=built_ducklake_schema, categorical_threshold=4)
+    auditor = DatabaseAuditor(connection=built_ducklake_schema)
     report = auditor.validate_database(ValidationLevel.STANDARD)
 
     # Vérification que le rapport est bien retourné
@@ -302,7 +301,6 @@ def test_full_pipeline_build_update_delete_audit(sample_df: pl.DataFrame) -> Non
     # Étape 3 : Suppression d'une ligne
     deleter = DatabaseDeleter(
         connection=conn,
-        categorical_threshold=4,
         enable_validation=False,
         auto_cleanup=False,
     )
@@ -318,7 +316,7 @@ def test_full_pipeline_build_update_delete_audit(sample_df: pl.DataFrame) -> Non
     assert count_200 == 0
 
     # Étape 4 : Audit de la base après les opérations
-    auditor = DatabaseAuditor(connection=conn, categorical_threshold=4)
+    auditor = DatabaseAuditor(connection=conn)
     report = auditor.validate_database(ValidationLevel.BASIC)
     assert report.get_critical_issues_count() == 0
 
@@ -387,7 +385,6 @@ def test_multi_schema_pipeline_in_single_catalog() -> None:
     # Étape 3 : suppression dans 'shapley' uniquement
     deleter = DatabaseDeleter(
         connection=conn,
-        categorical_threshold=4,
         enable_validation=False,
         auto_cleanup=False,
         schema="shapley",
@@ -406,7 +403,7 @@ def test_multi_schema_pipeline_in_single_catalog() -> None:
 
     # Étape 4 : audit indépendant de chaque schéma
     for schema_name in ("predictions", "shapley"):
-        report = DatabaseAuditor(
-            connection=conn, categorical_threshold=4, schema=schema_name
-        ).validate_database(ValidationLevel.BASIC)
+        report = DatabaseAuditor(connection=conn, schema=schema_name).validate_database(
+            ValidationLevel.BASIC
+        )
         assert report.get_critical_issues_count() == 0

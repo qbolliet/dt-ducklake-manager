@@ -2,6 +2,7 @@
 from .hierarchy import get_column_hierarchies, validate_hierarchy_forest
 from .logger import _init_logger
 from .sql import (
+    SchemaScoped,
     build_database_duplicate_removal_query,
     qualify_table,
     quote_ident,
@@ -11,6 +12,7 @@ from .sql import (
 from .types import (
     ALLOWED_DEFAULT_AGGREGATIONS,
     COLUMN_METADATA_KEYS,
+    METADATA_COLUMNS,
     UI_METADATA_FIELDS,
     map_python_to_sql_type,
     normalize_default_aggregation,
@@ -23,6 +25,7 @@ __all__ = [
     "remove_dataframe_duplicates",
     "build_database_duplicate_removal_query",
     "qualify_table",
+    "SchemaScoped",
     "quote_ident",
     "resolve_catalog",
     "map_python_to_sql_type",
@@ -30,6 +33,7 @@ __all__ = [
     "normalize_default_aggregation",
     "UI_METADATA_FIELDS",
     "COLUMN_METADATA_KEYS",
+    "METADATA_COLUMNS",
     "ALLOWED_DEFAULT_AGGREGATIONS",
     "get_column_hierarchies",
     "validate_hierarchy_forest",

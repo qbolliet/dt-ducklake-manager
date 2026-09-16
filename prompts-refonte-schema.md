@@ -621,8 +621,9 @@ La documentation est en anglais (docs/, README.md) ; les notebooks en français.
 2) Nouvelles pages docs (à ajouter à la nav de mkdocs.yml, avant « API
    Documentation ») :
    - docs/schema.md « Schema and data model » : les trois tables (tableaux de
-     colonnes), metadata comme contrat avec l'interface, statut catégoriel (inféré,
-     forcé, mis à jour), hiérarchies de colonnes et convention NULL, types, cluster_by,
+     colonnes), metadata comme contrat avec l'interface, statut catégoriel (inféré
+     une seule fois à la création de la colonne, forcé à la construction, corrigé par
+     update_column_metadata, jamais recalculé), hiérarchies de colonnes et convention NULL, types, cluster_by,
      traçabilité des runs (commit message, lecture par les snapshots), et une section
      « Design choices not retained » reprenant les sections 2.5 et 4.3 de la
      spécification (hiérarchies de valeurs, tables de libellés, diffusion sur clé
@@ -654,14 +655,17 @@ La documentation est en anglais (docs/, README.md) ; les notebooks en français.
 
 5) docs/api/ et mkdocs.yml : pages mkdocstrings alignées sur les classes existantes
    (supprime celles des classes retirées, ajoute OperationReport, StorageReport,
-   MaintenancePolicy, quote_ident, qualify_table, get_column_hierarchies, etc.).
+   MaintenancePolicy, quote_ident, qualify_table, SchemaScoped, METADATA_COLUMNS,
+   get_column_hierarchies, etc. ; BaseSchemaManager et DataManager sont désormais dans
+   operations/_base.py et operations/_data.py).
    Vérifie que uv run --no-sync mkdocs build --strict passe.
 
 6) Notebooks : passe en revue notebooks/0 à 6 et adapte-les (plus de
    categorical_threshold pilotant le stockage, plus de dim_*) ; assure-toi que la série
    couvre : construction simple ; column_metadata ; hiérarchies ; cluster_by et options
-   DuckLake ; update avec nouvelles modalités et allow_new_columns ; add_columns et
-   recette de diffusion explicite ; run_id et lecture des snapshots ; OperationReport ;
+   DuckLake ; update avec nouvelles modalités (statut catégoriel stable, correction
+   via update_column_metadata) et allow_new_columns ; add_columns en fusion externe
+   (nouvelles clés insérées) et recette de diffusion explicite ; run_id et lecture des snapshots ; OperationReport ;
    storage_report, recluster et maintain. Chaque notebook illustre l'effet de la
    paramétrisation en variant les arguments. Exécute-les de bout en bout
    (uv run --no-sync jupyter nbconvert --execute --to notebook --inplace).

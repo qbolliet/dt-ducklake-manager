@@ -38,12 +38,10 @@ job of :meth:`DuckLakeMaintenance.maintain`: it reads
 :meth:`DuckLakeMaintenance.storage_report` (file/delete/small-file counts, inlined
 rows, snapshots, file-range overlap on the first ``cluster_by`` column) and only
 runs a step when its indicator justifies it under a :class:`MaintenancePolicy`,
-logging every skipped step and why. ``full_maintenance`` is ``maintain`` with a
-policy equivalent to the historical unconditional sequence. Callers that only want
-the safe steps should call ``merge_files``/``rewrite_data_files``/
-``flush_inlined_data`` directly instead (see ``DatabaseUpdater``/
-``DatabaseDeleter``, which never call ``expire_snapshots``/``cleanup_files``/
-``delete_orphaned_files``).
+logging every skipped step and why. The write operations (``DatabaseUpdater``/
+``DatabaseDeleter``) only run the safe post-write steps through
+:meth:`DuckLakeMaintenance.compact` (merge + rewrite) and never call
+``expire_snapshots``/``cleanup_files``/``delete_orphaned_files``.
 
 DuckLake has no index: pruning relies on per-file min/max statistics
 (``ducklake_file_column_stats``, used by the planner — ``Total Files Read`` in
@@ -282,7 +280,7 @@ class DuckLakeMaintenance:
         >>> from dt_ducklake_manager.maintenance import DuckLakeMaintenance
         >>> conn = DuckLakeConnector('catalog.ducklake', 'data/').connect()
         >>> maint = DuckLakeMaintenance(conn)
-        >>> maint.full_maintenance('main', 'fact_table')
+        >>> maint.maintain(MaintenancePolicy(retention_days=30))
         >>> # Instance liée à un schéma dédié du même catalogue
         >>> maint = DuckLakeMaintenance(conn, schema='predictions')
     """
@@ -819,46 +817,75 @@ class DuckLakeMaintenance:
         self.logger.info(f"The reparttition of {schema}.{table} is completed")
 
     # ---------------------------------------------------------------------------
-    # Méthode de maintenance complète
+    # Méthode de compaction post-écriture
     # ---------------------------------------------------------------------------
 
-    # Exécution de l'ensemble des opérations de maintenance dans l'ordre recommandé
-    def full_maintenance(
+    # Compaction légère après une écriture (merge + rewrite)
+    def compact(
         self,
-        schema: str,
-        table: str,
-        older_than_days: int = 30,
-    ) -> OperationReport:
+        table: str = "fact_table",
+        schema: str | None = None,
+        delete_threshold: float = 0.1,
+        report: OperationReport | None = None,
+    ) -> dict[str, int]:
         """
-        Run the planned maintenance sequence with an explicit retention.
+        Run the lightweight post-write compaction: merge then rewrite.
 
-        Kept for backward compatibility: delegates to :meth:`maintain` with
-        ``MaintenancePolicy(retention_days=older_than_days, max_small_files=1)``.
-        The effects are those of the historical unconditional sequence — a step is
-        only skipped when it would have been a no-op (nothing inlined, no delete
-        file, fewer than two small files to merge) — while expire/cleanup always
-        run. Order: ``flush_inlined_data`` → ``rewrite_data_files`` →
-        ``merge_files`` → ``expire_snapshots`` → ``cleanup_files``; recluster and
-        ``delete_orphaned_files`` are never run. Each step is non-fatal.
+        Merges small adjacent Parquet files and rewrites files whose deleted-row
+        share exceeds ``delete_threshold``. Called by the write operations
+        (``update_database``, ``add_columns``, ``delete_rows``) right after their
+        commit. Never raises: ``merge_files``/``rewrite_data_files`` already log and
+        swallow their own failures.
+
+        Never calls ``expire_snapshots``, ``cleanup_files`` or
+        ``delete_orphaned_files``: those destroy time travel or are irreversible and
+        belong to planned maintenance (:meth:`maintain` with an explicit
+        ``MaintenancePolicy``).
 
         Args:
-            schema (str): DuckLake schema name (e.g. ``'main'``).
-            table (str): Table name to compact.
-            older_than_days (int): Snapshot retention passed to
-                ``expire_snapshots``. Defaults to 30.
+            table (str): Bare table name. Defaults to ``'fact_table'``.
+            schema (str | None): DuckLake schema. Defaults to None (this instance's
+                ``schema``).
+            delete_threshold (float): Rewrite files whose deleted-row share exceeds
+                this fraction (0-1). Defaults to 0.1 — without an explicit value
+                ``ducklake_rewrite_data_files`` is a measured no-op.
+            report (OperationReport | None): When given, its ``maintenance`` dict
+                receives the four counters (zeros included).
 
         Returns:
-            OperationReport: see :meth:`maintain`.
+            dict[str, int]: ``merge_files_processed``, ``merge_files_created``,
+            ``rewrite_files_processed`` and ``rewrite_files_created``.
 
         Examples:
-            >>> maint.full_maintenance('main', 'fact_table')
-            >>> maint.full_maintenance('main', 'fact_table', older_than_days=7)
+            >>> maint.compact()
+            >>> maint.compact('fact_table', 'predictions', delete_threshold=0.05)
         """
-        # Merge dès deux petits
-        # fichiers, expiration et nettoyage systématiques
-        policy = MaintenancePolicy(retention_days=older_than_days, max_small_files=1)
-        return self.maintain(policy, table=table, schema=schema)
+        # Résolution du schéma cible
+        schema = schema or self.schema
+        # Fusion des petits fichiers puis réécriture des fichiers trop supprimés
+        _, _, merge_processed, merge_created = self.merge_files(schema, table)
+        _, _, rewrite_processed, rewrite_created = self.rewrite_data_files(
+            schema, table, delete_threshold=delete_threshold
+        )
+        counters = {
+            "merge_files_processed": merge_processed,
+            "merge_files_created": merge_created,
+            "rewrite_files_processed": rewrite_processed,
+            "rewrite_files_created": rewrite_created,
+        }
+        # Logging
+        self.logger.info(
+            f"Compaction DuckLake finished for '{schema}.{table}' : merge"
+            f" {merge_processed} -> {merge_created} file(s), rewrite"
+            f" {rewrite_processed} -> {rewrite_created} file(s)"
+            f" (delete_threshold={delete_threshold})"
+        )
+        # Ajout au rapport
+        if report is not None:
+            report.maintenance.update(counters)
+        return counters
 
+    # Exécution de l'ensemble des opérations de maintenance dans l'ordre recommandé
     # ---------------------------------------------------------------------------
     # Méthodes de diagnostic du stockage et de réordonnancement
     # ---------------------------------------------------------------------------
@@ -1753,10 +1780,9 @@ class DuckLakeMaintenance:
         Returns:
             int: Row count, or ``0`` if it cannot be read.
         """
+        qualified = qualify_table(table, schema, self.catalog_alias)
         try:
-            row = self.conn.execute(
-                f"SELECT COUNT(*) FROM {quote_ident(schema)}.{quote_ident(table)}"
-            ).fetchone()
+            row = self.conn.execute(f"SELECT COUNT(*) FROM {qualified}").fetchone()
             return int(row[0]) if row is not None else 0
         except Exception:
             return 0

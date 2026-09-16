@@ -110,7 +110,7 @@ def test_create_duckdb_metadata_table(ducklake_builder: DuckLakeTablesBuilder) -
     result = ducklake_builder.conn.execute("SELECT * FROM test_metadata").pl()
     assert "name" in result.columns
     assert "label" in result.columns
-    assert "is_categorical_forced" in result.columns
+    assert "is_categorical_forced" not in result.columns
     assert "sql_type" in result.columns
     assert "is_categorical" in result.columns
 

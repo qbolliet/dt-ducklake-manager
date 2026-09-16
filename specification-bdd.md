@@ -79,15 +79,21 @@ Règles :
   types lors d'un update travaille sur les types SQL : `BOOLEAN < TINYINT < SMALLINT <
   INTEGER < BIGINT < FLOAT < DOUBLE < VARCHAR`, la largeur la plus grande étant conservée
   (un `BIGINT` enregistré n'est jamais rétrogradé par un lot d'`Int32`).
-- `is_categorical` est **inféré** à la construction (`VARCHAR` et `n_unique <=
-  categorical_threshold`) et peut être **forcé** colonne par colonne
-  (`categorical_overrides`). Lors d'un update, si une colonne `VARCHAR` franchit le seuil
-  dans un sens ou dans l'autre, seul le booléen est mis à jour (un `UPDATE metadata`),
-  sauf si la colonne a été forcée.
+- `is_categorical` est **inféré une seule fois, à la création de la colonne** (colonne
+  textuelle et nombre de modalités non nulles `<= categorical_threshold`) : à la
+  construction, où il peut être forcé colonne par colonne (`categorical_overrides`), puis
+  pour chaque colonne ajoutée (`allow_new_columns`, `add_columns`). Il n'est **jamais
+  recalculé** par une écriture : un update ou une suppression qui fait varier le nombre
+  de modalités ne le modifie pas. Il se corrige explicitement par
+  `update_column_metadata(column, is_categorical=...)`. Une colonne appartenant à une
+  hiérarchie est toujours catégorielle (`is_categorical=False` refusé). Motif : le
+  booléen ne sert qu'à choisir le composant de filtre de l'interface (menu select ou
+  champ de recherche) ; un statut qui bascule au gré des lots rendrait l'interface
+  instable pour un gain nul.
 - Les champs d'UI (`label`, `parent_name`, `unit`, `display_format`, `family`,
-  `description`, `default_aggregation`) appartiennent au producteur de métadonnées : un
-  update de données ne les écrase jamais. Ils se corrigent sur une base existante par
-  `update_column_metadata(column, **fields)`.
+  `description`, `default_aggregation`) et `is_categorical` appartiennent au producteur
+  de métadonnées : un update de données ne les écrase jamais. Ils se corrigent sur une
+  base existante par `update_column_metadata(column, **fields)`.
 
 ### 2.3 `dataset_metadata` — une ligne par schéma
 
@@ -105,9 +111,10 @@ par des arguments optionnels du builder.
 
 ### 2.4 Statut catégoriel et menus
 
-L'interface obtient les modalités d'une colonne catégorielle par `SELECT DISTINCT` sur la
-fact table (colonne dictionary-encodée, requête bon marché), avec recherche et limite.
-`label = value` toujours.
+`is_categorical` choisit le composant de filtre : menu select pour une colonne
+catégorielle, champ de recherche sinon. L'interface obtient les modalités d'une colonne
+catégorielle par `SELECT DISTINCT` sur la fact table (colonne dictionary-encodée, requête
+bon marché), avec recherche et limite. `label = value` toujours.
 
 ### 2.5 Hiérarchies : uniquement des hiérarchies de colonnes
 
@@ -192,18 +199,23 @@ Upsert sur les clés primaires (toutes requises) : lignes nouvelles insérées, 
 existantes mises à jour, lot trié sur `cluster_by` avant écriture. Nouvelles colonnes :
 **refusées par défaut** ; acceptées avec `allow_new_columns=True` (ajout de la colonne,
 ligne `metadata`, champs d'UI depuis `column_metadata`). Nouvelles modalités d'une
-colonne catégorielle : rien à faire (ce sont des libellés) ; le franchissement du seuil
-met à jour `is_categorical`. Suivie d'un `rewrite_data_files(delete_threshold)` (§5.4),
+colonne catégorielle : rien à faire (ce sont des libellés), et `is_categorical` n'est
+pas recalculé. Suivie d'un `rewrite_data_files(delete_threshold)` (§5.4),
 jamais d'une expiration de snapshots.
 
 ### 4.3 Gestion explicite des colonnes
 
 - `DatabaseUpdater.add_columns(df, column_metadata=None, overwrite=False)` : ajoute des
-  colonnes de valeurs à partir d'un DataFrame portant **toutes les clés primaires**.
-  Colonne existante → erreur sauf `overwrite`. Lignes de la base absentes du DataFrame :
-  `NULL`, comptées et journalisées. Combinaisons du DataFrame absentes de la base :
-  warning avec échantillon (pas d'insertion de lignes : ce n'est pas un upsert).
-  Réalisée par `ALTER TABLE … ADD COLUMN` puis **un seul** `UPDATE … FROM`.
+  colonnes de valeurs à partir d'un DataFrame portant **toutes les clés primaires**
+  (non nulles, uniques). **Fusion externe sur les clés primaires** : combinaisons
+  présentes des deux côtés → valeurs du DataFrame ; combinaisons du DataFrame absentes
+  de la base → **lignes insérées** (clés + colonnes du DataFrame, autres colonnes de
+  valeur à `NULL`) ; lignes de la base absentes du DataFrame → `NULL` dans les nouvelles
+  colonnes (anciennes valeurs conservées dans les colonnes écrasées), comptées et
+  journalisées. Colonne existante → erreur sauf `overwrite`. Réalisée par `ALTER TABLE …
+  ADD COLUMN`, puis **un seul** `UPDATE … FROM` et **un seul** `INSERT … SELECT … ORDER
+  BY cluster_by`, dans une transaction ; le rapport distingue `rows_updated` et
+  `rows_inserted`.
 - `DatabaseDeleter.delete_columns(columns)` : `ALTER TABLE … DROP COLUMN` (*mesuré* :
   opération de métadonnées, aucun fichier réécrit) + suppression de la ligne `metadata` +
   retrait de la colonne de `cluster_by` et des `parent_name` qui la référencent (erreur si
@@ -368,8 +380,11 @@ le justifie, en journalisant les étapes sautées et pourquoi :
 
 `dry_run` : les étapes qui modifient (flush, rewrite, merge, recluster) sont seulement
 journalisées ; expire/cleanup/orphaned sont appelés en `dry_run` (listage).
-`full_maintenance(schema, table, older_than_days)` = `maintain(MaintenancePolicy(
-retention_days=older_than_days, max_small_files=1))`. Lignes inlinées mesurées via
+Il n'existe pas de raccourci `full_maintenance` : une maintenance planifiée s'écrit
+`maintain(MaintenancePolicy(retention_days=30))` (ajouter `max_small_files=1` pour
+fusionner dès deux petits fichiers). La compaction légère exécutée après chaque écriture
+(merge + rewrite, jamais d'expiration) est `DuckLakeMaintenance.compact(table, schema,
+delete_threshold)`. Lignes inlinées mesurées via
 `ducklake_inlined_data_tables` (lignes à `end_snapshot IS NULL`, vidées par le flush) ;
 âge des snapshots calculé en SQL (`epoch`), la lecture d'un `TIMESTAMPTZ` en Python
 exigeant `pytz` (*mesuré*).

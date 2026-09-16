@@ -9,11 +9,12 @@ from typing import Any
 
 # DuckDB
 import duckdb
-import polars as pl
+import narwhals as nw
 
 # Import des utilitaires
 from ..utils.logger import _init_logger
-from ..utils.sql import qualify_table, quote_ident, resolve_catalog
+from ..utils.sql import SchemaScoped, quote_ident, resolve_catalog
+from ..utils.types import METADATA_COLUMNS, metadata_table_ddl
 
 # Import des gestionnaires
 from .auditor import DatabaseAuditor, ValidationIssue, ValidationLevel
@@ -92,7 +93,7 @@ class RecoveryResult:
 
 
 # Classe de récupération de la base de données
-class DatabaseRecoveryManager:
+class DatabaseRecoveryManager(SchemaScoped):
     """
     Manages database recovery, built on DuckLake time travel.
 
@@ -120,7 +121,6 @@ class DatabaseRecoveryManager:
     def __init__(
         self,
         connection: duckdb.DuckDBPyConnection | None = None,
-        categorical_threshold: int | None = 50,
         log_filename: str | os.PathLike[str] | None = None,
         catalog_alias: str = "db",
         schema: str = "main",
@@ -132,7 +132,6 @@ class DatabaseRecoveryManager:
             connection: DuckDB connection attached to a DuckLake catalog, obtained
                 via ``DuckLakeConnector.connect()``. If None, an in-memory connection
                 is created (for unit tests only).
-            categorical_threshold: Threshold for determining categorical variables.
             log_filename: Path to log file.
             catalog_alias: Alias of the attached DuckLake catalog, used to query
                 available snapshots via ``ducklake_snapshots()``. Defaults to ``'db'``.
@@ -156,7 +155,6 @@ class DatabaseRecoveryManager:
         # Initialisation des composants
         self.auditor = DatabaseAuditor(
             connection,
-            categorical_threshold,
             log_filename,
             schema=schema,
             catalog_alias=catalog_alias,
@@ -165,23 +163,6 @@ class DatabaseRecoveryManager:
         # Initialisation du logger nommé.
         # Chemin par défaut centralisé dans utils.logger : <cwd>/logs/<name>.log.
         self.logger = _init_logger(filename=log_filename, name="database_recovery")
-
-        # Configuration
-        self.categorical_threshold = categorical_threshold
-
-    # Méthode de qualification d'un nom de table par le schéma (et le catalogue) cible
-    def _qualified(self, table: str) -> str:
-        """Return a table name qualified by this manager's schema and catalog.
-
-        Args:
-            table: Bare table name (e.g. ``'fact_table'``).
-
-        Returns:
-            The quoted, qualified identifier (catalog-qualified when an alias is
-            actually attached).
-        """
-        # Délégation à l'utilitaire central de qualification, alias effectif propagé
-        return qualify_table(table, self.schema, self._catalog)
 
     # Méthodes de récupération
     # Méthode de récupération de la base de données
@@ -418,10 +399,13 @@ class DatabaseRecoveryManager:
 
             # Interrogation de l'historique des snapshots DuckLake.
             try:
-                snapshots_df = self.conn.execute(
-                    f"SELECT * FROM ducklake_snapshots('{self.catalog_alias}')"
-                    " ORDER BY snapshot_id DESC"
-                ).pl()
+                snapshots_df = nw.from_native(
+                    self.conn.execute(
+                        f"SELECT * FROM ducklake_snapshots('{self.catalog_alias}')"
+                        " ORDER BY snapshot_id DESC"
+                    ).to_arrow_table(),
+                    eager_only=True,
+                )
             except Exception as e:
                 return RecoveryResult(
                     success=False,
@@ -501,9 +485,12 @@ class DatabaseRecoveryManager:
                 f" snapshot_version={suggested_id}).connect()",
                 "",
                 "Étape 2 — Lire les tables depuis cette connexion :",
-                "  fact_df = conn_old.execute('SELECT * FROM fact_table').pl()",
-                "  meta_df = conn_old.execute('SELECT * FROM metadata').pl()",
-                "  ds_df   = conn_old.execute('SELECT * FROM dataset_metadata').pl()",
+                "  fact_df = conn_old.execute('SELECT * FROM fact_table')"
+                ".to_arrow_table()",
+                "  meta_df = conn_old.execute('SELECT * FROM metadata')"
+                ".to_arrow_table()",
+                "  ds_df   = conn_old.execute('SELECT * FROM dataset_metadata')"
+                ".to_arrow_table()",
                 "",
                 "Étape 3 — Vider les tables du catalogue courant et réinsérer les"
                 " données :",
@@ -536,8 +523,8 @@ class DatabaseRecoveryManager:
             )
 
     # Méthode publique de consultation de l'historique des snapshots DuckLake
-    def list_ducklake_snapshots(self) -> pl.DataFrame | None:
-        """Return the full DuckLake snapshot history as a Polars DataFrame.
+    def list_ducklake_snapshots(self) -> nw.DataFrame[Any] | None:
+        """Return the full DuckLake snapshot history as a narwhals DataFrame.
 
         Convenience wrapper around the ``ducklake_snapshots(catalog)`` table
         function, and the entry point of the recovery procedure: pick a
@@ -546,7 +533,8 @@ class DatabaseRecoveryManager:
         The history is catalog-wide, covering every schema it holds.
 
         Returns:
-            Polars DataFrame with one row per snapshot (columns depend on the
+            narwhals DataFrame (pyarrow backend, ``.to_native()`` gives the
+            ``pyarrow.Table``) with one row per snapshot (columns depend on the
             DuckLake version), sorted by ``snapshot_id`` descending.
             Returns None if the catalog cannot be queried (e.g. a plain in-memory
             connection with no DuckLake catalog attached).
@@ -558,10 +546,12 @@ class DatabaseRecoveryManager:
         """
         try:
             # Inventaire des snapshots
-            return self.conn.execute(
+            snapshots = self.conn.execute(
                 f"SELECT * FROM ducklake_snapshots('{self.catalog_alias}')"
                 " ORDER BY snapshot_id DESC"
-            ).pl()
+            ).to_arrow_table()
+            history: nw.DataFrame[Any] = nw.from_native(snapshots, eager_only=True)
+            return history
         except Exception as e:
             # Logging d'erreur
             self.logger.error(f"Impossible de lister les snapshots DuckLake : {e}")
@@ -644,22 +634,9 @@ class DatabaseRecoveryManager:
                 "missing" in issue.description.lower()
                 and issue.table_name == "metadata"
             ):
-                self.conn.execute(f"""
-                    CREATE TABLE IF NOT EXISTS {self._qualified("metadata")} (
-                        name VARCHAR,
-                        label VARCHAR,
-                        sql_type VARCHAR,
-                        is_categorical BOOLEAN,
-                        is_categorical_forced BOOLEAN DEFAULT FALSE,
-                        is_primary_key BOOLEAN DEFAULT FALSE,
-                        parent_name VARCHAR,
-                        unit VARCHAR,
-                        display_format VARCHAR,
-                        family VARCHAR,
-                        description VARCHAR,
-                        default_aggregation VARCHAR
-                    )
-                """)
+                self.conn.execute(
+                    metadata_table_ddl(self._qualified("metadata"), if_not_exists=True)
+                )
                 self.logger.info("Created missing metadata table")
                 return True
 
@@ -687,20 +664,7 @@ class DatabaseRecoveryManager:
         """
         try:
             # Colonnes requises pour la table metadata
-            required_columns = {
-                "name": "VARCHAR",
-                "label": "VARCHAR",
-                "sql_type": "VARCHAR",
-                "is_categorical": "BOOLEAN",
-                "is_categorical_forced": "BOOLEAN DEFAULT FALSE",
-                "is_primary_key": "BOOLEAN DEFAULT FALSE",
-                "parent_name": "VARCHAR",
-                "unit": "VARCHAR",
-                "display_format": "VARCHAR",
-                "family": "VARCHAR",
-                "description": "VARCHAR",
-                "default_aggregation": "VARCHAR",
-            }
+            required_columns = METADATA_COLUMNS
 
             # Nom qualifié de la table de métadonnées
             metadata_table = self._qualified("metadata")
@@ -753,14 +717,13 @@ class DatabaseRecoveryManager:
             # Utilisation du deleter pour nettoyer
             deleter = DatabaseDeleter(
                 self.conn,
-                self.categorical_threshold,
                 enable_validation=False,
                 auto_cleanup=True,
                 schema=self.schema,
                 catalog_alias=self.catalog_alias,
             )
             # Nettoyage de la base de données
-            cleanup_results = deleter.cleanup_database(comprehensive=True)
+            cleanup_results = deleter.cleanup_database()
             # Parcours des résultats
             for category, result in cleanup_results.items():
                 if result:
@@ -989,24 +952,6 @@ class DatabaseRecoveryManager:
             self.logger.error(f"Error determining recovery strategy: {e}")
             return None
 
-    # Méthode auxiliaire de vérification de l'existence d'une table dans la base de
-    # données
-    def _table_exists(self, table_name: str) -> bool:
-        """Check if a (bare-named) table exists in the recovered schema.
-
-        Args:
-            table_name: Bare name of the table to check.
-
-        Returns:
-            True if table exists, False otherwise.
-        """
-        try:
-            # Exécution de la requête (table qualifiée par le schéma)
-            self.conn.execute(f"SELECT 1 FROM {self._qualified(table_name)} LIMIT 1")
-            return True
-        except Exception:
-            return False
-
     # Méthode auxiliaire de correction d'un problème de valeur nulle
     def _fix_null_value_issue(self, issue: ValidationIssue) -> bool:
         """
@@ -1077,9 +1022,8 @@ class DatabaseRecoveryManager:
                     self.conn.execute(
                         f"""
                         INSERT INTO {self._qualified("metadata")} (name, label,
-                        sql_type, is_categorical, is_categorical_forced,
-                        is_primary_key)
-                        VALUES (?, ?, ?, FALSE, FALSE, FALSE)
+                        sql_type, is_categorical, is_primary_key)
+                        VALUES (?, ?, ?, FALSE, FALSE)
                     """,
                         [
                             col_name,

@@ -140,7 +140,7 @@ def test_failure_produces_partial_report(built_ducklake_schema: Any) -> None:
     def _boom(*args: Any, **kwargs: Any) -> bool:
         raise RuntimeError("panne simulée")
 
-    updater._update_categorical_flags = _boom  # type: ignore[method-assign]
+    updater._update_fact_table_direct = _boom  # type: ignore[method-assign]
 
     update_df = pl.DataFrame({"id": [200], "category": ["A"], "value": [1.0]})
     success = updater.update_database(update_df)
@@ -219,6 +219,33 @@ def test_update_row_counts_from_table_changes(real_catalog_conn: Any) -> None:
     assert report.snapshot_after > report.snapshot_before
 
 
+# Test que add_columns mesure mises à jour et insertions sur un catalogue réel
+@_requires_ducklake
+def test_add_columns_row_counts_from_table_changes(real_catalog_conn: Any) -> None:
+    """Test that add_columns' outer merge reports exact updated/inserted counts.
+
+    Args:
+        real_catalog_conn: Fixture providing a real, on-disk DuckLake catalog.
+    """
+    updater = DatabaseUpdater(connection=real_catalog_conn, categorical_threshold=4)
+
+    # 2 clés existantes (id=1, 2) + 1 clé nouvelle (id=10)
+    df = pl.DataFrame({"id": [1, 2, 10], "score": [0.5, 0.6, 0.7]})
+    report = updater.add_columns(df, compact_after_update=False)
+
+    assert report.rows_updated == 2
+    assert report.rows_inserted == 1
+    rows = real_catalog_conn.execute(
+        "SELECT id, category, value, score FROM db.main.fact_table ORDER BY id"
+    ).fetchall()
+    assert rows == [
+        (1, "A", 1.0, 0.5),
+        (2, "B", 2.0, 0.6),
+        (3, "A", 3.0, None),
+        (10, None, None, 0.7),
+    ]
+
+
 # Test qu'une compaction sans effet journalise des compteurs explicitement à zéro
 @_requires_ducklake
 def test_maintenance_no_effect_explicit_zero(
@@ -275,7 +302,7 @@ def test_run_id_visible_in_snapshots(real_catalog_conn: Any) -> None:
     # (sans message) : on retrouve celui du run par son author, pas par position.
     matches = snapshots.filter(snapshots["author"] == "run-42")
     assert len(matches) == 1
-    tagged_snapshot = matches.row(0, named=True)
+    tagged_snapshot = matches.rows(named=True)[0]
     assert tagged_snapshot["commit_message"] == "test commit"
     assert "model_version" in tagged_snapshot["commit_extra_info"]
 
@@ -288,7 +315,7 @@ def test_delete_columns_report_has_no_row_changes(real_catalog_conn: Any) -> Non
     Args:
         real_catalog_conn: Fixture providing a real, on-disk DuckLake catalog.
     """
-    deleter = DatabaseDeleter(connection=real_catalog_conn, categorical_threshold=4)
+    deleter = DatabaseDeleter(connection=real_catalog_conn)
 
     report = deleter.delete_columns(["value"], run_id="run-7")
 

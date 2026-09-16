@@ -14,26 +14,28 @@ from typing import Any
 # DuckDB
 import duckdb
 import narwhals as nw
-import polars as pl
 from narwhals.typing import IntoDataFrame
 
 # Import des gestionnaires de maintenance
-from ...maintenance.compaction import DuckLakeMaintenance
+from ..maintenance.auditor import DatabaseAuditor, ValidationLevel, ValidationReport
+from ..maintenance.compaction import DuckLakeMaintenance
 
 # Import des utilitaires
-from ...reporting import (
+from ..reporting import (
     OperationReport,
     _current_snapshot_id,
     _set_commit_message,
     _table_changes_counts,
     _table_info,
 )
-from ...utils.hierarchy import validate_hierarchy_forest
-from ...utils.logger import _init_logger
-from ...utils.sql import qualify_table, quote_ident, resolve_catalog
-from ...utils.types import (
+from ..utils.hierarchy import validate_hierarchy_forest
+from ..utils.logger import _init_logger
+from ..utils.sql import SchemaScoped, quote_ident, resolve_catalog
+from ..utils.types import (
     COLUMN_METADATA_KEYS,
+    empty_metadata_frame,
     map_python_to_sql_type,
+    metadata_table_ddl,
     normalize_default_aggregation,
     resolve_sql_type_conflict,
 )
@@ -41,7 +43,7 @@ from ...utils.types import (
 
 # Classe contenant des opérations utilitaires de base sur la base de données au schéma
 # (table des faits - méta-données - méta-données du jeu de résultats)
-class BaseSchemaManager(ABC):
+class BaseSchemaManager(SchemaScoped, ABC):
     """
     Base class for database schema management operations.
 
@@ -50,13 +52,19 @@ class BaseSchemaManager(ABC):
 
     Attributes:
         conn (duckdb.DuckDBPyConnection): Database connection
-        categorical_threshold (int): Threshold for categorical determination
+        categorical_threshold (int | None): Threshold used once, when a column is
+            created, to infer its ``is_categorical`` flag
         schema (str): DuckLake schema holding this result set's tables
         catalog_alias (str): Alias of the attached DuckLake catalog (``ATTACH ...
             AS <alias>``), carried alongside ``schema`` so table references can be
             fully qualified by the catalog.
         logger: Logger instance for operation tracking
+        auditor (DatabaseAuditor | None): Auditor used for validation, set by the
+            concrete managers (None when validation is disabled)
     """
+
+    # Auditeur de la base, renseigné par les gestionnaires concrets
+    auditor: DatabaseAuditor | None = None
 
     # Initialisation
     def __init__(
@@ -74,7 +82,9 @@ class BaseSchemaManager(ABC):
             connection: DuckDB connection attached to a DuckLake catalog, obtained
                 via ``DuckLakeConnector.connect()``. If None, an in-memory DuckDB
                 connection is created (useful for unit tests only).
-            categorical_threshold: Threshold for determining categorical variables.
+            categorical_threshold: Maximum number of distinct non-null values for a
+                textual column to be flagged categorical **when it is created**
+                (never re-evaluated afterwards). None flags no new column.
             log_filename: Path to log file.
             schema: DuckLake schema holding the ``fact_table``, ``metadata`` and
                 ``dataset_metadata`` tables to operate on. A single catalog can host
@@ -96,7 +106,7 @@ class BaseSchemaManager(ABC):
         # connexion doit toujours être fournie via DuckLakeConnector.connect().
         self.conn = connection if connection is not None else duckdb.connect(":memory:")
 
-        # Seuil pour déterminer si une variable est catégorielle
+        # Seuil d'inférence du statut catégoriel, appliqué à la création des colonnes
         self.categorical_threshold = categorical_threshold
 
         # Schéma DuckLake cible : toutes les requêtes qualifient les tables par ce
@@ -118,6 +128,12 @@ class BaseSchemaManager(ABC):
         # Initialisation du logger nommé pour traçabilité des opérations.
         # Chemin par défaut centralisé dans utils.logger : <cwd>/logs/<name>.log.
         self.logger = _init_logger(filename=log_filename, name="base_schema_manager")
+
+        # Mainteneur DuckLake, utilisé pour la compaction post-écriture. Le schéma est
+        # repassé explicitement à chaque appel : self.schema peut changer après coup.
+        self.maintenance = DuckLakeMaintenance(
+            self.conn, catalog_alias=self.catalog_alias, schema=self.schema
+        )
 
         # Cache thread-safe pour optimiser les accès aux métadonnées
         self._metadata_cache: nw.DataFrame[Any] | None = None
@@ -339,24 +355,6 @@ class BaseSchemaManager(ABC):
                 f"COMMIT {operation} ({self.schema}) in {report.duration_seconds:.2f}s"
             )
 
-    # Méthode auxiliaire de comptage des lignes d'une table (hors DuckLake)
-    def _count_rows(self, table: str) -> int:
-        """Count the rows of a table, qualified by this manager's schema/catalog.
-
-        Args:
-            table: Bare table name (e.g. ``'fact_table'``).
-
-        Returns:
-            int: Row count, or ``0`` if the table does not exist yet.
-        """
-        try:
-            row = self.conn.execute(
-                f"SELECT COUNT(*) FROM {self._qualified(table)}"
-            ).fetchone()
-            return int(row[0]) if row is not None else 0
-        except Exception:
-            return 0
-
     # Méthode auxiliaire de lecture des statistiques de fichiers de la table
     def _table_info(self, table: str) -> tuple[int, int, int, int] | None:
         """Delegate to :func:`reporting._table_info` for this manager's table."""
@@ -397,68 +395,6 @@ class BaseSchemaManager(ABC):
         if snapshot is not None:
             report.snapshot_after = snapshot
 
-    # Méthode auxiliaire de compaction DuckLake, commune aux opérations d'écriture
-    def _run_ducklake_compaction(
-        self,
-        fact_table: str = "fact_table",
-        delete_threshold: float = 0.1,
-        report: OperationReport | None = None,
-    ) -> None:
-        """Trigger DuckLake compaction on the fact table after a successful write.
-
-        Merges small adjacent Parquet delta files and rewrites files whose
-        deleted-row share exceeds ``delete_threshold``, to maintain optimal read
-        performance. Delegates to ``DuckLakeMaintenance``; failures are non-fatal
-        there (a warning is logged, zero-file results are logged explicitly) so this
-        method itself never raises.
-
-        Never calls ``expire_snapshots``, ``cleanup_files`` or
-        ``delete_orphaned_files``: those destroy time travel or are irreversible, and
-        are reserved for planned maintenance (``DuckLakeMaintenance.full_maintenance``)
-        with an explicit retention.
-
-        The catalog alias and schema are read from ``self.catalog_alias``
-        and ``self.schema``, which can be set at construction time.
-
-        Args:
-            fact_table: Name of the fact table to compact. Defaults to ``'fact_table'``.
-            delete_threshold: Rewrite files whose deleted-row share exceeds this
-                fraction (0-1). Defaults to 0.1 — without an explicit value this
-                procedure is a measured no-op.
-            report: When given, ``report.maintenance`` is filled with the counters
-                returned by ``merge_files``/``rewrite_data_files`` (zeros included,
-                never omitted).
-
-        Examples:
-            >>> manager._run_ducklake_compaction()
-            >>> manager._run_ducklake_compaction('my_fact_table', delete_threshold=0.3)
-        """
-        # Initialisation du mainteneur
-        maintenance = DuckLakeMaintenance(
-            self.conn, catalog_alias=self.catalog_alias, schema=self.schema
-        )
-        # merge_files/rewrite_data_files sont déjà non bloquantes (try/except interne,
-        # compteurs réels journalisés y compris les zéros) : aucun try/except
-        # supplémentaire n'est nécessaire ici.
-        _, _, merge_processed, merge_created = maintenance.merge_files(
-            self.schema, fact_table
-        )
-        _, _, rewrite_processed, rewrite_created = maintenance.rewrite_data_files(
-            self.schema, fact_table, delete_threshold=delete_threshold
-        )
-        # Logging
-        self.logger.info(
-            f"Compaction DuckLake finished for '{fact_table}' : merge"
-            f" {merge_processed} -> {merge_created} file(s), rewrite"
-            f" {rewrite_processed} -> {rewrite_created} file(s)"
-            f" (delete_threshold={delete_threshold})"
-        )
-        if report is not None:
-            report.maintenance["merge_files_processed"] = merge_processed
-            report.maintenance["merge_files_created"] = merge_created
-            report.maintenance["rewrite_files_processed"] = rewrite_processed
-            report.maintenance["rewrite_files_created"] = rewrite_created
-
     # Méthode de construction d'un rapport minimal pour un échec précoce
     def _early_failure_report(
         self, operation: str, run_id: str | None, warning: str
@@ -494,27 +430,6 @@ class BaseSchemaManager(ABC):
         self.last_report = report
         return report
 
-    # Méthode de qualification d'un nom de table par le schéma (et le catalogue)
-    def _qualified(self, table: str) -> str:
-        """
-        Return a table name qualified by this manager's schema and catalog.
-
-        Args:
-            table: Bare table name (e.g. ``'fact_table'``, ``'metadata'``).
-
-        Returns:
-            The quoted, qualified identifier targeting :attr:`schema` (and the
-            catalog alias when one is actually attached).
-
-        Example:
-            >>> manager.schema = 'predictions'
-            >>> manager._qualified('fact_table')
-            '"predictions"."fact_table"'
-        """
-        # Délégation à l'utilitaire central de qualification, en propageant l'alias
-        # de catalogue effectif (None pour les connexions in-memory des tests).
-        return qualify_table(table, self.schema, self._catalog)
-
     # Méthodes de gestion du cache des métadonnées
     # Méthode de chargement des méta-données
     def _load_current_metadata(self) -> nw.DataFrame[Any]:
@@ -528,37 +443,16 @@ class BaseSchemaManager(ABC):
             # Chargement de la table si elle n'est pas en cache
             if self._metadata_cache is None:
                 try:
-                    # Chargement via polars (backend interne) puis encapsulation
-                    # narwhals
+                    # Chargement Arrow (backend interne) puis encapsulation narwhals
                     self._metadata_cache = nw.from_native(
                         self.conn.execute(
                             f"SELECT * FROM {self._qualified('metadata')}"
-                        ).pl(),
+                        ).to_arrow_table(),
                         eager_only=True,
                     )
                 except Exception:
-                    # Table absente : DataFrame vide typé sur le schéma cible.
-                    # Les dtypes explicites sont indispensables pour que les filtres
-                    # booléens des appelants restent valides sur un frame vide.
-                    self._metadata_cache = nw.from_native(
-                        pl.DataFrame(
-                            schema={
-                                "name": pl.String,
-                                "label": pl.String,
-                                "sql_type": pl.String,
-                                "is_categorical": pl.Boolean,
-                                "is_categorical_forced": pl.Boolean,
-                                "is_primary_key": pl.Boolean,
-                                "parent_name": pl.String,
-                                "unit": pl.String,
-                                "display_format": pl.String,
-                                "family": pl.String,
-                                "description": pl.String,
-                                "default_aggregation": pl.String,
-                            }
-                        ),
-                        eager_only=True,
-                    )
+                    # Table absente : DataFrame vide typé sur le schéma cible
+                    self._metadata_cache = empty_metadata_frame()
 
             return self._metadata_cache.clone()
 
@@ -600,28 +494,6 @@ class BaseSchemaManager(ABC):
             "WHERE is_categorical IS TRUE"
         ).fetchall()
         return [row[0] for row in result]
-
-    # Méthode de vérification de l'existance d'une table dans la base de données
-    def _table_exists(self, table_name: str) -> bool:
-        """
-        Check if a table exists in the database.
-
-        Args:
-            table_name: Name of the table to check
-
-        Returns:
-            True if table exists
-        """
-        # Exécution de la requête.
-        # Filtrage par schéma indispensable : la même table (ex. 'fact_table') peut
-        # exister dans plusieurs schémas du catalogue ; sans ce filtre, un schéma
-        # voisin produirait un faux positif.
-        row = self.conn.execute(
-            "SELECT COUNT(*) FROM information_schema.tables "
-            "WHERE table_name = ? AND table_schema = ?",
-            [table_name, self.schema],
-        ).fetchone()
-        return row[0] > 0 if row is not None else False
 
     # Méthode de vérification de l'existence d'une colonne dans une table
     def _column_exists(self, column: str, table: str = "fact_table") -> bool:
@@ -826,9 +698,10 @@ class BaseSchemaManager(ABC):
         """
         Add a new column to the metadata table, or refresh an existing row.
 
-        On an existing row the producer-owned fields are preserved: a ``label``
-        already recorded is never overwritten by a data update, and a column whose
-        categorical status was forced keeps it.
+        ``is_categorical`` is inferred once, on insertion (textual column whose
+        distinct non-null count is ``<= categorical_threshold``). On an existing row
+        only ``sql_type`` is refreshed: the recorded ``label`` and
+        ``is_categorical`` are never overwritten by a data update.
 
         Args:
             column: Column name
@@ -845,8 +718,9 @@ class BaseSchemaManager(ABC):
         dtype_obj = df_nw.schema[column]
         # Conversion du type narwhals en SQL
         sql_type = map_python_to_sql_type(dtype_obj)
-        # Statut catégoriel : colonne textuelle dont la cardinalité respecte le seuil.
-        # Les valeurs manquantes sont exclues du comptage des modalités.
+        # Statut catégoriel, calculé une seule fois à la création de la colonne :
+        # colonne textuelle dont la cardinalité (hors valeurs manquantes) respecte le
+        # seuil.
         is_categorical = (
             isinstance(dtype_obj, (nw.String, nw.Categorical, nw.Enum))
             and self.categorical_threshold is not None
@@ -857,22 +731,7 @@ class BaseSchemaManager(ABC):
         metadata_table = self._qualified("metadata")
 
         # Création de la table metadata si elle n'existe pas.
-        self.conn.execute(f"""
-            CREATE TABLE IF NOT EXISTS {metadata_table} (
-                name VARCHAR,
-                label VARCHAR,
-                sql_type VARCHAR,
-                is_categorical BOOLEAN,
-                is_categorical_forced BOOLEAN DEFAULT FALSE,
-                is_primary_key BOOLEAN DEFAULT FALSE,
-                parent_name VARCHAR,
-                unit VARCHAR,
-                display_format VARCHAR,
-                family VARCHAR,
-                description VARCHAR,
-                default_aggregation VARCHAR
-            )
-        """)
+        self.conn.execute(metadata_table_ddl(metadata_table, if_not_exists=True))
 
         # Upsert manuel
         # Vérification de l'existence de la colonne avant d'insérer ou de mettre à jour.
@@ -883,8 +742,7 @@ class BaseSchemaManager(ABC):
 
         if existing_count == 0:
             # Colonne absente : insertion.
-            # Libellé par défaut dérivé du nom technique, statut jamais forcé (la
-            # colonne est découverte, pas déclarée par le producteur). Les champs
+            # Libellé par défaut dérivé du nom technique. Les champs
             # d'UI (unit, display_format, family, description, default_aggregation)
             # ne sont pas listés : ils prennent donc NULL, seul le producteur de
             # métadonnées pouvant les renseigner via update_column_metadata.
@@ -894,27 +752,23 @@ class BaseSchemaManager(ABC):
             self.conn.execute(
                 f"""
                 INSERT INTO {metadata_table} (name, label, sql_type,
-                is_categorical, is_categorical_forced, is_primary_key)
-                VALUES (?, ?, ?, ?, FALSE, FALSE)
+                is_categorical, is_primary_key)
+                VALUES (?, ?, ?, ?, FALSE)
                 """,
                 [column, insert_label, sql_type, is_categorical],
             )
         else:
-            # Colonne déjà présente : mise à jour des seuls champs dérivés des données.
-            # COALESCE préserve un libellé déjà renseigné par le producteur ; le CASE
-            # protège un statut catégoriel explicitement forcé. Les champs d'UI ne
-            # sont jamais touchés ici : un update de données ne doit pas les remettre
-            # à NULL.
+            # Colonne déjà présente : mise à jour du seul type SQL. COALESCE préserve
+            # un libellé déjà renseigné ; le statut catégoriel et les champs d'UI ne
+            # sont jamais touchés par un update de données.
             self.conn.execute(
                 f"""
                 UPDATE {metadata_table}
                 SET label = COALESCE(?, label),
-                    sql_type = ?,
-                    is_categorical = CASE WHEN is_categorical_forced
-                                          THEN is_categorical ELSE ? END
+                    sql_type = ?
                 WHERE name = ?
                 """,
-                [label, sql_type, is_categorical, column],
+                [label, sql_type, column],
             )
 
         # Invalidation du cache
@@ -924,12 +778,15 @@ class BaseSchemaManager(ABC):
         self.logger.info(f"Added/updated column {column} in metadata")
 
     # Méthode de renseignement ou de correction des champs d'UI d'une colonne
-    def update_column_metadata(self, column: str, **fields: str | None) -> None:
+    def update_column_metadata(self, column: str, **fields: str | bool | None) -> None:
         """
         Set or correct the producer-owned UI fields of an existing column.
 
         Only ``label``, ``parent_name``, ``unit``, ``display_format``, ``family``,
-        ``description`` and ``default_aggregation`` may be updated. The update
+        ``description``, ``default_aggregation`` and ``is_categorical`` may be
+        updated. ``is_categorical`` is inferred only once, when the column is
+        created: this method is the way to correct it (e.g. to switch the UI filter
+        of a column from a search input to a select menu). The update
         touches nothing else, so a later data update never has to rebuild the base
         to fix a wrong unit or format. ``default_aggregation`` is validated (and
         upper-cased) before the write. Setting ``parent_name`` declares (or
@@ -942,28 +799,39 @@ class BaseSchemaManager(ABC):
             column: Name of the column, which must already have a row in the
                 metadata table.
             **fields: Field/value pairs among ``label``, ``parent_name``, ``unit``,
-                ``display_format``, ``family``, ``description`` and
-                ``default_aggregation``. A value of ``None`` clears the field.
+                ``display_format``, ``family``, ``description``,
+                ``default_aggregation`` (strings, ``None`` clears the field) and
+                ``is_categorical`` (bool).
 
         Raises:
             ValueError: If a field name is not one of the allowed fields, if
                 ``default_aggregation`` is invalid, if the column has no row in the
                 metadata table, if a non-``None`` ``parent_name`` references a
-                column absent from metadata, or if it would create a cycle in the
-                ``parent_name`` graph.
+                column absent from metadata, if it would create a cycle in the
+                ``parent_name`` graph, if ``is_categorical`` is not a bool, or if
+                ``is_categorical=False`` targets a column of a hierarchy.
 
         Example:
             >>> manager.update_column_metadata(
             ...     'value', unit='€', display_format=',.2f',
             ...     default_aggregation='sum')
             >>> manager.update_column_metadata('commune', parent_name='departement')
+            >>> manager.update_column_metadata('model', is_categorical=True)
         """
         # Contrôle des champs autorisés
-        unknown = set(fields) - COLUMN_METADATA_KEYS
+        allowed = COLUMN_METADATA_KEYS | {"is_categorical"}
+        unknown = set(fields) - allowed
         if unknown:
             raise ValueError(
                 f"Unknown metadata field(s) {sorted(unknown)}; allowed fields are "
-                f"{sorted(COLUMN_METADATA_KEYS)}"
+                f"{sorted(allowed)}"
+            )
+        # Contrôle du type du statut catégoriel
+        if "is_categorical" in fields and not isinstance(
+            fields["is_categorical"], bool
+        ):
+            raise ValueError(
+                f"is_categorical must be a bool, got {fields['is_categorical']!r}"
             )
 
         # Aucun champ fourni : rien à écrire
@@ -972,9 +840,10 @@ class BaseSchemaManager(ABC):
 
         # Normalisation et validation de l'agrégation par défaut
         if "default_aggregation" in fields:
-            fields["default_aggregation"] = normalize_default_aggregation(
-                fields["default_aggregation"]
-            )
+            aggregation = fields["default_aggregation"]
+            if isinstance(aggregation, bool):
+                raise ValueError("default_aggregation must be a string or None")
+            fields["default_aggregation"] = normalize_default_aggregation(aggregation)
 
         # Vérification de l'existence d'une ligne pour la colonne visée
         metadata_table = self._qualified("metadata")
@@ -1010,9 +879,33 @@ class BaseSchemaManager(ABC):
                 f"SELECT name, parent_name FROM {metadata_table}"
             ).fetchall()
             parent_of = {name: parent for name, parent in current_rows}
-            parent_of[column] = new_parent
+            parent_of[column] = str(new_parent)
             # Validation de la hiérarchie
             validate_hierarchy_forest(parent_of)
+
+        # Une colonne de hiérarchie reste catégorielle : refus de is_categorical=False
+        if fields.get("is_categorical") is False:
+            # Colonne parente d'une autre colonne
+            _crow = self.conn.execute(
+                f"SELECT COUNT(*) FROM {metadata_table} WHERE parent_name = ?",
+                [column],
+            ).fetchone()
+            is_parent = _crow is not None and _crow[0] > 0
+            # Colonne enfant : le parent déclaré dans ce même appel prime sur l'état
+            # stocké
+            if "parent_name" in fields:
+                has_parent = new_parent is not None
+            else:
+                _prow2 = self.conn.execute(
+                    f"SELECT parent_name FROM {metadata_table} WHERE name = ?",
+                    [column],
+                ).fetchone()
+                has_parent = _prow2 is not None and _prow2[0] is not None
+            if is_parent or has_parent:
+                raise ValueError(
+                    f"Column {column!r} is part of a column hierarchy and must stay"
+                    " categorical"
+                )
 
         # Construction de la clause SET (identifiants entre guillemets, valeurs liées)
         set_clause = ", ".join(f"{quote_ident(name)} = ?" for name in fields)
@@ -1032,8 +925,8 @@ class BaseSchemaManager(ABC):
                 if _crow is not None and not _crow[0]:
                     # Forçage du statut catégoriel
                     self.conn.execute(
-                        f"UPDATE {metadata_table} SET is_categorical = TRUE, "
-                        "is_categorical_forced = TRUE WHERE name = ?",
+                        f"UPDATE {metadata_table} SET is_categorical = TRUE"
+                        " WHERE name = ?",
                         [hierarchy_col],
                     )
                     # Warning
@@ -1056,28 +949,6 @@ class BaseSchemaManager(ABC):
         self.logger.info(
             f"Updated metadata fields {sorted(fields)} for column {column}"
         )
-
-    # Méthode de mise à jour du statut catégoriel d'une donnée
-    def _update_categorical_status(self, col_name: str, is_categorical: bool) -> None:
-        """
-        Update categorical status in metadata.
-
-        Args:
-            col_name: Column name
-            is_categorical: New categorical status
-        """
-        # Exécution de la requête de mise à jour
-        self.conn.execute(
-            f"UPDATE {self._qualified('metadata')} "
-            "SET is_categorical = ? WHERE name = ?",
-            [is_categorical, col_name],
-        )
-
-        # Invalidation du cache
-        self._invalidate_metadata_cache()
-
-        # Logging
-        self.logger.info(f"Updated categorical status for {col_name}: {is_categorical}")
 
     # Méthode de suppression des méta-données pour une colonne
     def delete_column_metadata(self, column_name: str) -> None:
@@ -1277,104 +1148,6 @@ class BaseSchemaManager(ABC):
             self.logger.error(f"An error occurred while detecting null values: {e}")
             raise
 
-    # Méthode d'actualisation du statut catégoriel des colonnes textuelles
-    def _refresh_categorical_flags(
-        self, report: OperationReport | None = None
-    ) -> list[str]:
-        """
-        Recompute the ``is_categorical`` flag of every eligible VARCHAR column.
-
-        The status is pure UI metadata: it is derived from the current distinct
-        count of the fact table compared against ``categorical_threshold``, and only
-        a plain ``UPDATE metadata`` is issued — the fact table is never rewritten.
-        Columns whose status was forced by the producer
-        (``is_categorical_forced``) are skipped, and an ``UPDATE`` is emitted only
-        when the boolean actually changes.
-
-        Args:
-            report: When given, each flip is appended to
-                ``report.metadata_changes`` as ``"is_categorical(col): before ->
-                after"``.
-
-        Returns:
-            List of column names whose flag was flipped. Empty when nothing changed
-            or when no threshold is configured.
-
-        Example:
-            >>> manager._refresh_categorical_flags()
-            ['high_cardinality']
-        """
-        # Liste des colonnes dont le statut a effectivement basculé
-        changed: list[str] = []
-
-        # Absence de seuil : le statut catégoriel n'est pas ré-évaluable
-        if self.categorical_threshold is None:
-            return changed
-
-        try:
-            # Chargement des méta-données courantes
-            current_metadata = self._load_current_metadata()
-            if len(current_metadata) == 0:
-                return changed
-
-            # Sélection des colonnes textuelles dont le statut n'a pas été forcé
-            candidates = current_metadata.filter(
-                (nw.col("sql_type") == "VARCHAR") & (~nw.col("is_categorical_forced"))
-            )
-
-            # Colonnes réellement présentes dans la table des faits
-            fact_columns = set(self._get_fact_table_columns())
-            # Nom qualifié de la table des faits
-            fact_table = self._qualified("fact_table")
-
-            for col_name, was_categorical in zip(
-                candidates["name"].to_list(),
-                candidates["is_categorical"].to_list(),
-            ):
-                # Colonne absente de la table des faits : rien à recalculer
-                if col_name not in fact_columns:
-                    continue
-
-                # Comptage des modalités sur l'état courant de la table des faits
-                quoted_col = quote_ident(col_name)
-                row = self.conn.execute(
-                    f"SELECT COUNT(DISTINCT {quoted_col}) FROM {fact_table}"
-                    f" WHERE {quoted_col} IS NOT NULL"
-                ).fetchone()
-                n_distinct = int(row[0]) if row is not None else 0
-
-                # Statut attendu : au moins une modalité observée et seuil respecté.
-                # Une colonne entièrement nulle n'est pas catégorielle, l'absence de
-                # modalités ne constituant pas une information de cardinalité.
-                is_categorical = 0 < n_distinct <= self.categorical_threshold
-
-                # Écriture uniquement en cas de bascule effective
-                if bool(was_categorical) is is_categorical:
-                    continue
-
-                # Mise à jour du booléen et invalidation du cache
-                self._update_categorical_status(col_name, is_categorical)
-                changed.append(col_name)
-                # Logging
-                self.logger.info(
-                    f"Categorical status of '{col_name}' set to {is_categorical}"
-                    f" ({n_distinct} distinct values, threshold"
-                    f" {self.categorical_threshold})"
-                )
-                # Ajout au rapport
-                if report is not None:
-                    report.metadata_changes.append(
-                        f"is_categorical({col_name}):"
-                        f" {bool(was_categorical)} -> {is_categorical}"
-                    )
-
-            return changed
-
-        except Exception as e:
-            # Logging
-            self.logger.error(f"Error refreshing categorical flags: {e}")
-            return changed
-
     # Méthode d'horodatage de la dernière écriture réussie
     def _touch_dataset_metadata(self) -> None:
         """
@@ -1398,6 +1171,31 @@ class BaseSchemaManager(ABC):
         except Exception as e:
             # Erreur non bloquante : l'horodatage ne conditionne pas l'écriture
             self.logger.warning(f"Could not stamp dataset_metadata.updated_at: {e}")
+
+    # Méthode de validation de l'état de la base de données
+    def validate_database_state(
+        self, validation_level: ValidationLevel = ValidationLevel.STANDARD
+    ) -> ValidationReport | None:
+        """
+        Validate the current state of the database.
+
+        Args:
+            validation_level: Level of validation to perform.
+
+        Returns:
+            ValidationReport | None: The auditor's report, or None when validation
+            is disabled (no auditor).
+
+        Example:
+            >>> report = updater.validate_database_state(ValidationLevel.COMPREHENSIVE)
+            >>> if report is not None and report.get_critical_issues_count() > 0:
+            ...     print("Critical issues detected!")
+        """
+        # Vérification qu'un auditeur est renseigné
+        if self.auditor is None:
+            self.logger.warning("Validation disabled - no auditor available")
+            return None
+        return self.auditor.validate_database(validation_level)
 
     @abstractmethod
     def validate_operation(self, operation_type: str, **kwargs: Any) -> bool:

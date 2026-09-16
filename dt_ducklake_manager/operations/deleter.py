@@ -8,14 +8,15 @@ from typing import Any
 # DuckDB
 import duckdb
 
-# Import des gestionnaires
-from .._internal.managers.base import BaseSchemaManager
-from .._internal.managers.data import DataManager
 from ..maintenance.auditor import DatabaseAuditor, ValidationLevel
 from ..reporting import OperationReport
 
 # Import des utilitaires
 from ..utils.sql import _build_where_clause
+
+# Import des gestionnaires
+from ._base import BaseSchemaManager
+from ._data import DataManager
 
 # Emplacement du fichier
 FILE_PATH = Path(os.path.abspath(__file__))
@@ -46,7 +47,6 @@ class DatabaseDeleter(BaseSchemaManager):
     def __init__(
         self,
         connection: duckdb.DuckDBPyConnection | None = None,
-        categorical_threshold: int | None = 50,
         log_filename: str | os.PathLike[str] | None = None,
         enable_validation: bool = True,
         auto_cleanup: bool = True,
@@ -60,7 +60,6 @@ class DatabaseDeleter(BaseSchemaManager):
             connection: DuckDB connection attached to a DuckLake catalog, obtained
                 via ``DuckLakeConnector.connect()``. If None, an in-memory connection
                 is created (for unit tests only).
-            categorical_threshold: Threshold for determining categorical variables.
             log_filename: Path to log file.
             enable_validation: Whether to enable pre/post operation validation.
             auto_cleanup: Whether to automatically clean up orphaned data.
@@ -79,7 +78,6 @@ class DatabaseDeleter(BaseSchemaManager):
         # Initialisation du parent
         super().__init__(
             connection=connection,
-            categorical_threshold=categorical_threshold,
             log_filename=log_filename,
             schema=schema,
             catalog_alias=catalog_alias,
@@ -88,7 +86,6 @@ class DatabaseDeleter(BaseSchemaManager):
         # Initialisation des gestionnaires spécialisés
         self.data_mgr = DataManager(
             connection=connection,
-            categorical_threshold=categorical_threshold,
             log_filename=log_filename,
             schema=schema,
             catalog_alias=catalog_alias,
@@ -97,7 +94,6 @@ class DatabaseDeleter(BaseSchemaManager):
         self.auditor = (
             DatabaseAuditor(
                 connection=connection,
-                categorical_threshold=categorical_threshold,
                 log_filename=log_filename,
                 schema=schema,
                 catalog_alias=catalog_alias,
@@ -259,7 +255,7 @@ class DatabaseDeleter(BaseSchemaManager):
         final_report = self.last_report
         assert final_report is not None  # posé par _transaction sur tout succès
         if rows_deleted > 0 and compact_after_update:
-            self._run_ducklake_compaction(report=final_report)
+            self.maintenance.compact(schema=self.schema, report=final_report)
 
         self._finalize_report_after_write(final_report)
         self.logger.info(final_report.summary())
@@ -563,13 +559,12 @@ class DatabaseDeleter(BaseSchemaManager):
         Args:
             report: In-progress report of the enclosing transaction (reused by the
                 nested ``delete_columns`` call, per ``_transaction``'s reentrance
-                rule), appended to (``metadata_changes``) for categorical flips.
+                rule).
         """
         try:
             # Initialisation du dictionnaire résultat
             results: dict[str, Any] = {
                 "null_columns": [],
-                "categorical_changes": [],
             }
 
             # Étape 1: Suppression des colonnes ne contenant que des nulles
@@ -585,9 +580,6 @@ class DatabaseDeleter(BaseSchemaManager):
                     null_only_columns, use_transaction=False
                 )
                 results["null_columns"] = list(column_report.columns_dropped)
-
-            # Étape 2: Actualisation du statut catégoriel après suppression
-            results["categorical_changes"] = self._refresh_categorical_flags(report)
 
             return results
 
@@ -825,58 +817,24 @@ class DatabaseDeleter(BaseSchemaManager):
             self.logger.error(f"Error getting deletion status: {e}")
             return {"error": str(e), "timestamp": datetime.now().isoformat()}
 
-    # Méthode de validation de l'état de la base de données
-    def validate_database_state(
-        self, validation_level: ValidationLevel = ValidationLevel.STANDARD
-    ) -> Any:
-        """
-        Validate the current state of the database.
-
-        Args:
-            validation_level: Level of validation to perform
-
-        Returns:
-            ValidationReport from the auditor
-
-        Example:
-            >>> report = deleter.validate_database_state(ValidationLevel.COMPREHENSIVE)
-            >>> if report.get_critical_issues_count() > 0:
-            ...     print("Critical issues detected!")
-        """
-        # Vérification que l'auditeur existe
-        if not self.auditor:
-            # Logging
-            self.logger.warning("Validation disabled - no auditor available")
-            return None
-
-        return self.auditor.validate_database(validation_level)
-
     # Méthode de nettoyage de la base de données
-    def cleanup_database(self, comprehensive: bool = True) -> dict[str, Any]:
+    def cleanup_database(self) -> dict[str, Any]:
         """
-        Perform comprehensive database cleanup operations.
+        Drop the fact table columns that only hold null values.
 
-        Args:
-            comprehensive: Whether to perform comprehensive cleanup
+        Each dropped column goes through ``delete_columns`` (metadata row,
+        ``cluster_by`` and ``parent_name`` references included).
 
         Returns:
-            Dictionary with cleanup results
+            Dictionary with cleanup results (``null_columns``: dropped columns), or
+            ``{"error": ...}`` on failure.
 
         Example:
-            >>> results = deleter.cleanup_database(comprehensive=True)
+            >>> results = deleter.cleanup_database()
             >>> print(f"Cleaned: {results}")
         """
         try:
-            if comprehensive:
-                return self._cleanup_orphaned_data_comprehensive()
-            else:
-                # Nettoyage basique : actualisation du seul statut catégoriel
-                results = {
-                    "categorical_changes": self._refresh_categorical_flags(),
-                }
-                # Logging
-                self.logger.info("Basic database cleanup completed")
-                return results
+            return self._cleanup_orphaned_data_comprehensive()
 
         except Exception as e:
             # Logging

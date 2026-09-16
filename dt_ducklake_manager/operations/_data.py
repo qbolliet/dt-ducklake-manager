@@ -9,13 +9,13 @@ import duckdb
 import narwhals as nw
 from narwhals.typing import IntoDataFrame
 
-from ...utils.sql import _build_where_clause, quote_ident
+from ..utils.sql import _build_where_clause, quote_ident
 
 # Import des utilitaires
-from ...utils.types import map_python_to_sql_type
+from ..utils.types import map_python_to_sql_type
 
 # Import du gestionnaire de base
-from .base import BaseSchemaManager
+from ._base import BaseSchemaManager
 
 # Emplacement du fichier
 FILE_PATH = Path(os.path.abspath(__file__))
@@ -234,7 +234,7 @@ class DataManager(BaseSchemaManager):
             return False
 
         try:
-            # Enregistrement d'une vue temporaire (polars natif pour DuckDB)
+            # Enregistrement d'une vue temporaire (objet natif du backend pour DuckDB)
             self.conn.register("temp_fact_creation", nw.to_native(df_nw))
 
             # Création de la table des faits
@@ -645,7 +645,7 @@ class DataManager(BaseSchemaManager):
             # Préparation des colonnes manquantes
             self._ensure_columns_exist(df)
 
-            # Enregistrement d'une vue temporaire (polars natif pour DuckDB)
+            # Enregistrement d'une vue temporaire (objet natif du backend pour DuckDB)
             self.conn.register("temp_insert", nw.to_native(df))
 
             # Insertion des données.
@@ -714,7 +714,7 @@ class DataManager(BaseSchemaManager):
             # Préparation des colonnes manquantes
             self._ensure_columns_exist(df)
 
-            # Enregistrement d'une vue temporaire (polars natif pour DuckDB)
+            # Enregistrement d'une vue temporaire (objet natif du backend pour DuckDB)
             self.conn.register("temp_upsert", nw.to_native(df))
 
             # Nom qualifié de la table des faits

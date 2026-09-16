@@ -10,9 +10,6 @@ import duckdb
 import narwhals as nw
 from narwhals.typing import IntoDataFrame
 
-# Import des gestionnaires
-from .._internal.managers.base import BaseSchemaManager
-from .._internal.managers.data import DataManager
 from ..maintenance.auditor import DatabaseAuditor, IssueSeverity, ValidationLevel
 from ..reporting import OperationReport
 
@@ -23,6 +20,10 @@ from ..utils.sql import (
     remove_dataframe_duplicates,
 )
 from ..utils.types import map_python_to_sql_type, validate_column_metadata
+
+# Import des gestionnaires
+from ._base import BaseSchemaManager
+from ._data import DataManager
 
 # Emplacement du fichier
 FILE_PATH = Path(os.path.abspath(__file__))
@@ -66,7 +67,9 @@ class DatabaseUpdater(BaseSchemaManager):
             connection: DuckDB connection attached to a DuckLake catalog, obtained
                 via ``DuckLakeConnector.connect()``. If None, an in-memory connection
                 is created (for unit tests only).
-            categorical_threshold: Threshold for determining categorical variables.
+            categorical_threshold: Maximum number of distinct non-null values for a
+                textual column to be flagged categorical when it is created (by
+                ``allow_new_columns`` or ``add_columns``). Never re-evaluated.
             log_filename: Path to log file.
             max_workers: Maximum number of parallel workers.
             batch_size: Size of batches for processing.
@@ -104,7 +107,6 @@ class DatabaseUpdater(BaseSchemaManager):
         self.auditor = (
             DatabaseAuditor(
                 connection=connection,
-                categorical_threshold=categorical_threshold,
                 log_filename=log_filename,
                 schema=schema,
                 catalog_alias=catalog_alias,
@@ -322,7 +324,7 @@ class DatabaseUpdater(BaseSchemaManager):
         # delta) : la maintenance ne fait jamais partie de la transaction.
         final_report = self.last_report
         if compact_after_update:
-            self._run_ducklake_compaction(report=final_report)
+            self.maintenance.compact(schema=self.schema, report=final_report)
         if final_report is not None:
             self._finalize_report_after_write(final_report)
             self.logger.info(final_report.summary())
@@ -420,8 +422,7 @@ class DatabaseUpdater(BaseSchemaManager):
         if not self._update_metadata_safe(update_df, report):
             raise RuntimeError("metadata update failed")
 
-        # Étape 4 : mise à jour de la table de faits (avant le recalcul du statut
-        # catégoriel, qui lit l'état post-upsert)
+        # Étape 4 : mise à jour de la table de faits
         if use_batch_processing and len(update_df) > self.batch_size:
             if not self._update_fact_table_batch(update_df, report):
                 raise RuntimeError("fact table update failed (batch processing)")
@@ -429,12 +430,7 @@ class DatabaseUpdater(BaseSchemaManager):
             if not self._update_fact_table_direct(update_df, report):
                 raise RuntimeError("fact table update failed (direct)")
 
-        # Étape 5 : actualisation du statut catégoriel des colonnes VARCHAR
-        # (le comptage porte sur l'état post-upsert de la table de faits)
-        if not self._update_categorical_flags(report):
-            raise RuntimeError("categorical flag refresh failed")
-
-        # Étape 6 : validation post-update
+        # Étape 5 : validation post-update
         if self.enable_validation and self.auditor:
             validation_report = self.auditor.validate_database(ValidationLevel.STANDARD)
             # Problèmes critiques : annulation de l'ensemble de la mise à jour
@@ -479,41 +475,6 @@ class DatabaseUpdater(BaseSchemaManager):
         except Exception as e:
             # Logging
             self.logger.error(f"Error updating metadata: {e}")
-            return False
-
-    # Méthode auxiliaire d'actualisation du statut catégoriel
-    def _update_categorical_flags(self, report: OperationReport | None = None) -> bool:
-        """Refresh the ``is_categorical`` flag of VARCHAR columns after an upsert.
-
-        The categorical status is pure UI metadata: it is recomputed from the
-        post-upsert distinct count of the fact table and compared against
-        ``categorical_threshold``. Only a plain ``UPDATE metadata`` is issued —
-        the fact table is never rewritten — and columns whose status was forced by
-        the producer are left untouched.
-
-        Args:
-            report: When given, each flip is appended to
-                ``report.metadata_changes``.
-
-        Returns:
-            True if the flags were refreshed (or nothing had to change), False on
-            error.
-
-        Examples:
-            >>> updater._update_categorical_flags()
-            True
-        """
-        try:
-            # Délégation au recalcul partagé avec le gestionnaire de suppression
-            changed = self._refresh_categorical_flags(report)
-            # Logging
-            if changed:
-                self.logger.info(f"Categorical status refreshed for columns: {changed}")
-            return True
-
-        except Exception as e:
-            # Logging
-            self.logger.error(f"Error updating categorical flags: {e}")
             return False
 
     # Méthode auxiliaire de mise à jour directe de la table des faits
@@ -728,7 +689,7 @@ class DatabaseUpdater(BaseSchemaManager):
                     SELECT 1 FROM {fact_table} f
                     WHERE {conditions}
                 )
-            """).pl(),
+            """).to_arrow_table(),
                 eager_only=True,
             )
 
@@ -740,7 +701,7 @@ class DatabaseUpdater(BaseSchemaManager):
                     SELECT 1 FROM {fact_table} f
                     WHERE {conditions}
                 )
-            """).pl(),
+            """).to_arrow_table(),
                 eager_only=True,
             )
 
@@ -867,26 +828,33 @@ class DatabaseUpdater(BaseSchemaManager):
     ) -> OperationReport:
         """
         Add value column(s) to the fact table from a DataFrame keyed by the
-        primary keys.
+        primary keys, merging rows on those keys (outer merge).
 
-        ``df`` must carry every primary key column (to identify which existing
-        rows receive a value) plus one or more other columns, the values to add.
-        This is **not** an upsert: no row is inserted, and a combination of primary
-        keys present in ``df`` but absent from the fact table is skipped with a
-        warning.
+        ``df`` must carry every primary key column plus one or more other columns,
+        the values to add. Rows are matched on the primary keys:
+
+        - key combination present in both: the row receives ``df``'s values;
+        - key combination only in ``df``: a new row is **inserted** with the primary
+          keys and ``df``'s columns, every other value column of the fact table
+          left NULL;
+        - key combination only in the fact table: the row keeps NULL in the new
+          column(s) (and its previous values in overwritten ones).
 
         Implemented as ``ALTER TABLE ... ADD COLUMN`` for every genuinely new
         column, followed by a **single** ``UPDATE fact_table ... FROM <df> WHERE
-        <primary keys match>`` covering all of them, inside one DuckDB transaction:
-        on any failure, neither the column(s) nor their ``metadata`` row(s)
-        survive. An ``UPDATE`` that touches every row of the fact table is a
-        complete copy-on-write rewrite; the row count about to be touched is
-        logged before it runs, and ``rewrite_data_files`` is called afterwards with
-        a low ``delete_threshold`` to clear the resulting delete-tombstones.
+        <primary keys match>`` covering all of them, then a single ``INSERT ...
+        SELECT`` of the unmatched combinations sorted by ``cluster_by``, inside one
+        DuckDB transaction: on any failure, neither the column(s), their
+        ``metadata`` row(s) nor the inserted rows survive. An ``UPDATE`` that
+        touches every row of the fact table is a complete copy-on-write rewrite;
+        the row count about to be touched is logged before it runs, and
+        ``rewrite_data_files`` is called afterwards with a low ``delete_threshold``
+        to clear the resulting delete-tombstones.
 
         Args:
             df: DataFrame carrying every primary key column plus the value
-                column(s) to add. Must be unique on the primary keys.
+                column(s) to add. Must be unique on the primary keys, with no null
+                primary key.
             column_metadata: Per-added-column UI fields (``label``, ``unit``,
                 ``display_format``, ``family``, ``description``,
                 ``default_aggregation``, ``parent_name``). Applies to newly added
@@ -905,12 +873,14 @@ class DatabaseUpdater(BaseSchemaManager):
                 ``extra_info``.
 
         Returns:
-            OperationReport: report describing what was actually added/updated.
+            OperationReport: report describing what was actually added, updated
+            (``rows_updated``) and inserted (``rows_inserted``).
 
         Raises:
             ValueError: If no primary key is defined on the fact table, if ``df``
-                is missing a primary key column, if ``df`` is not unique on the
-                primary keys, if ``df`` carries no value column, if a value column
+                is missing a primary key column, if a primary key of ``df`` holds a
+                null, if ``df`` is not unique on the primary keys, if ``df``
+                carries no value column, if a value column
                 already exists and ``overwrite`` is False, or if ``column_metadata``
                 is malformed.
 
@@ -919,7 +889,7 @@ class DatabaseUpdater(BaseSchemaManager):
             >>> updater.add_columns(df_with_score, overwrite=True)
             >>> # Diffusion explicite d'une valeur portée par une clé partielle :
             >>> keys = updater.get_key_combinations(['region', 'produit'])
-            >>> df_partial = keys.join(df_score, on=['region', 'produit'])
+            >>> df_partial = keys.to_polars().join(df_score, on=['region', 'produit'])
             >>> updater.add_columns(df_partial)
         """
         # Conversion vers narwhals dès le point d'entrée public
@@ -939,6 +909,11 @@ class DatabaseUpdater(BaseSchemaManager):
             raise ValueError(
                 f"df is missing primary key column(s): {sorted(missing_keys)}"
             )
+
+        # Les clés primaires de df ne peuvent être nulles : elles créent des lignes
+        null_keys = [k for k in primary_keys if df_nw[k].null_count() > 0]
+        if null_keys:
+            raise ValueError(f"df has null value(s) in primary key(s) {null_keys}")
 
         # df doit être unique sur les clés primaires : sinon la valeur affectée à
         # une même ligne de la fact table serait indéterminée (dernière ligne du
@@ -1005,17 +980,8 @@ class DatabaseUpdater(BaseSchemaManager):
                     f"f.{quote_ident(k)} = t.{quote_ident(k)}" for k in primary_keys
                 )
 
-                # Comptage des combinaisons de df sans correspondance en base : pas
-                # d'insertion (ce n'est pas un upsert), seulement un avertissement
-                # journalisé avec un échantillon.
-                unmatched_rows = self.conn.execute(f"""
-                    SELECT {", ".join(quote_ident(k) for k in primary_keys)}
-                    FROM {view_name} t
-                    WHERE NOT EXISTS (
-                        SELECT 1 FROM {fact_table} f WHERE {join_condition}
-                    )
-                    LIMIT 5
-                """).fetchall()
+                # Comptage des combinaisons de df sans correspondance en base, à
+                # insérer après l'UPDATE
                 _unmatched_row = self.conn.execute(f"""
                     SELECT COUNT(*) FROM {view_name} t
                     WHERE NOT EXISTS (
@@ -1023,12 +989,6 @@ class DatabaseUpdater(BaseSchemaManager):
                     )
                 """).fetchone()
                 unmatched_count = _unmatched_row[0] if _unmatched_row is not None else 0
-                if unmatched_count > 0:
-                    self.logger.warning(
-                        f"add_columns: {unmatched_count} key combination(s) in df have"
-                        f" no match in fact_table and will not be inserted (sample:"
-                        f" {unmatched_rows})"
-                    )
 
                 # Volume avant écriture : une UPDATE touchant toutes les lignes est une
                 # réécriture complète de la table (copy-on-write).
@@ -1041,6 +1001,7 @@ class DatabaseUpdater(BaseSchemaManager):
                 # _transaction n'a pas pu obtenir la mesure DuckLake réelle
                 # (table_changes), qui la remplacera si elle est disponible.
                 report.rows_updated = rows_updated
+                report.rows_inserted = unmatched_count
                 self.logger.info(
                     f"add_columns: about to UPDATE {rows_updated} of {total_rows}"
                     f" fact_table row(s) (copy-on-write rewrite of touched files)"
@@ -1059,12 +1020,30 @@ class DatabaseUpdater(BaseSchemaManager):
                     WHERE {join_condition}
                 """)
 
-                self.conn.execute(f"DROP VIEW {view_name}")
+                # Insertion des combinaisons absentes de la base (fusion externe) :
+                # les autres colonnes de valeur prennent NULL. Tri par cluster_by
+                # pour préserver l'élagage par fichier.
+                if unmatched_count > 0:
+                    insert_columns = ", ".join(
+                        quote_ident(c) for c in [*primary_keys, *new_columns]
+                    )
+                    order_clause = self.data_mgr._cluster_by_order_clause(
+                        list(df_nw.columns)
+                    )
+                    self.conn.execute(f"""
+                        INSERT INTO {fact_table} ({insert_columns})
+                        SELECT {insert_columns} FROM {view_name} t
+                        WHERE NOT EXISTS (
+                            SELECT 1 FROM {fact_table} f WHERE {join_condition}
+                        )
+                        {order_clause}
+                    """)
+                    self.logger.info(
+                        f"add_columns: inserted {unmatched_count} new key"
+                        " combination(s) absent from fact_table"
+                    )
 
-                # Actualisation du statut catégoriel des colonnes VARCHAR concernées
-                # (ajout d'une colonne catégorielle, ou overwrite d'une colonne
-                # existante dont la cardinalité a changé)
-                self._refresh_categorical_flags(report)
+                self.conn.execute(f"DROP VIEW {view_name}")
 
                 # dataset_metadata.updated_at
                 self._touch_dataset_metadata()
@@ -1077,8 +1056,8 @@ class DatabaseUpdater(BaseSchemaManager):
                 pass
             raise
 
-        # Nombre de lignes de la base restées NULL : celles qu'aucune ligne de df
-        # n'est venue mettre à jour
+        # Nombre de lignes préexistantes de la base restées NULL : celles qu'aucune
+        # ligne de df n'est venue mettre à jour
         rows_left_null = total_rows - rows_updated
         self.logger.info(
             f"add_columns: {rows_updated} row(s) updated, {rows_left_null}"
@@ -1091,7 +1070,9 @@ class DatabaseUpdater(BaseSchemaManager):
         final_report = self.last_report
         assert final_report is not None  # posé par _transaction sur tout succès
         if compact_after_update:
-            self._run_ducklake_compaction(delete_threshold=0.05, report=final_report)
+            self.maintenance.compact(
+                schema=self.schema, delete_threshold=0.05, report=final_report
+            )
 
         self._invalidate_metadata_cache()
         self._finalize_report_after_write(final_report)
@@ -1117,7 +1098,8 @@ class DatabaseUpdater(BaseSchemaManager):
 
         Returns:
             nw.DataFrame: Distinct combinations of ``columns`` present in the fact
-            table, one row per combination.
+            table, one row per combination (pyarrow backend: convert it with
+            ``to_polars()``/``to_pandas()`` before joining a native DataFrame).
 
         Raises:
             ValueError: If no primary key is defined on the fact table and
@@ -1126,7 +1108,7 @@ class DatabaseUpdater(BaseSchemaManager):
 
         Examples:
             >>> keys = updater.get_key_combinations(['region', 'produit'])
-            >>> df_partial = keys.join(df_score, on=['region', 'produit'])
+            >>> df_partial = keys.to_polars().join(df_score, on=['region', 'produit'])
             >>> updater.add_columns(df_partial)
         """
         # Colonnes par défaut : toutes les clés primaires
@@ -1148,8 +1130,9 @@ class DatabaseUpdater(BaseSchemaManager):
         column_list = ", ".join(quote_ident(c) for c in columns)
         result = self.conn.execute(
             f"SELECT DISTINCT {column_list} FROM {self._qualified('fact_table')}"
-        ).pl()
-        return nw.from_native(result, eager_only=True)
+        ).to_arrow_table()
+        combinations: nw.DataFrame[Any] = nw.from_native(result, eager_only=True)
+        return combinations
 
     # Méthodes publiques additionnelles
     # Méthode d'extraction du statut de la base de données
@@ -1194,32 +1177,6 @@ class DatabaseUpdater(BaseSchemaManager):
             # Logging
             self.logger.error(f"Error getting update status: {e}")
             return {"error": str(e), "timestamp": datetime.now()}
-
-    # Méthode de validation de l'état de la base de données
-    def validate_database_state(
-        self, validation_level: ValidationLevel = ValidationLevel.STANDARD
-    ) -> Any:
-        """
-        Validate the current state of the database.
-
-        Args:
-            validation_level: Level of validation to perform
-
-        Returns:
-            ValidationReport from the auditor
-
-        Example:
-            >>> report = updater.validate_database_state(ValidationLevel.COMPREHENSIVE)
-            >>> if report.get_critical_issues_count() > 0:
-            ...     print("Critical issues detected!")
-        """
-        # Vérification qu'un auditeur est renseigné
-        if not self.auditor:
-            # Logging
-            self.logger.warning("Validation disabled - no auditor available")
-            return None
-
-        return self.auditor.validate_database(validation_level)
 
     # Méthode d'optimisation de la base de données
     def optimize_database(self) -> bool:

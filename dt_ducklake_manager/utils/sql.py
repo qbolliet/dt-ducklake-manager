@@ -114,6 +114,110 @@ def qualify_table(table: str, schema: str = "main", catalog: str | None = None) 
     return f"{quote_ident(schema)}.{quote_ident(table)}"
 
 
+# Mixin des classes rattachées à un schéma (et un catalogue) DuckLake
+class SchemaScoped:
+    """Mixin giving schema-aware classes their shared table helpers.
+
+    Hosts the single definition of the helpers every schema-aware class needs
+    (managers, builder, auditor, recovery manager): qualifying a bare table name,
+    checking a table exists and counting its rows. The host class must set
+    ``conn``, ``schema`` and ``_catalog`` (the effective alias returned by
+    :func:`resolve_catalog`) before calling them.
+
+    Attributes:
+        conn (duckdb.DuckDBPyConnection): Connection used by the helpers.
+        schema (str): Target DuckLake schema.
+        _catalog (str | None): Attached catalog alias, ``None`` when no catalog of
+            that name is attached (in-memory test connections).
+
+    Examples:
+        >>> import duckdb
+        >>> class Reader(SchemaScoped):
+        ...     def __init__(self, conn):
+        ...         self.conn, self.schema, self._catalog = conn, "main", None
+        >>> Reader(duckdb.connect())._qualified("fact_table")
+        '"main"."fact_table"'
+    """
+
+    conn: "duckdb.DuckDBPyConnection"
+    schema: str
+    _catalog: str | None
+
+    # Méthode de qualification d'un nom de table par le schéma (et le catalogue)
+    def _qualified(self, table: str) -> str:
+        """Return ``table`` qualified by this instance's schema and catalog.
+
+        Args:
+            table: Bare table name (e.g. ``'fact_table'``, ``'metadata'``).
+
+        Returns:
+            str: The quoted identifier, catalog-qualified only when an alias is
+            actually attached.
+
+        Examples:
+            >>> manager._qualified("fact_table")
+            '"main"."fact_table"'
+        """
+        return qualify_table(table, self.schema, self._catalog)
+
+    # Méthode de vérification de l'existence d'une table dans le schéma
+    def _table_exists(self, table_name: str) -> bool:
+        """Check whether a bare-named table exists in this instance's schema.
+
+        Filtering on the schema (and on the catalog when one is attached) matters:
+        the same ``fact_table`` may exist in a neighbouring schema or catalog and
+        would otherwise give a false positive.
+
+        Args:
+            table_name: Bare table name.
+
+        Returns:
+            bool: True if the table exists, False otherwise (including when the
+            lookup itself fails).
+
+        Examples:
+            >>> manager._table_exists("fact_table")
+            True
+        """
+        # Filtre optionnel sur le catalogue effectif
+        catalog_filter = " AND table_catalog = ?" if self._catalog is not None else ""
+        params: list[str] = [table_name, self.schema]
+        if self._catalog is not None:
+            params.append(self._catalog)
+        try:
+            row = self.conn.execute(
+                "SELECT COUNT(*) FROM information_schema.tables"
+                f" WHERE table_name = ? AND table_schema = ?{catalog_filter}",
+                params,
+            ).fetchone()
+        except Exception:
+            return False
+        return row is not None and row[0] > 0
+
+    # Méthode de comptage des lignes d'une table du schéma
+    def _count_rows(self, table: str) -> int:
+        """Count the rows of a bare-named table of this instance's schema.
+
+        Args:
+            table: Bare table name (e.g. ``'fact_table'``).
+
+        Returns:
+            int: Row count, or ``0`` if the table cannot be read (e.g. not created
+            yet).
+
+        Examples:
+            >>> manager._count_rows("fact_table")
+            3
+        """
+        try:
+            row = self.conn.execute(
+                f"SELECT COUNT(*) FROM {self._qualified(table)}"
+            ).fetchone()
+        except Exception:
+            return 0
+        return int(row[0]) if row is not None else 0
+
+
 # Fonction de suppression des duplicats d'un jeu de données
 def remove_dataframe_duplicates(
     df: IntoDataFrame,

@@ -6,7 +6,6 @@ from datetime import datetime
 from typing import Any
 
 import duckdb
-import narwhals as nw
 import polars as pl
 
 # Module de tests
@@ -224,83 +223,15 @@ def test_update_database_with_dedup_on_update(
 # ---------------------------------------------------------------------------
 
 
-# Test de conversion non-catégorielle → catégorielle après remplacement de lignes
-def test_update_database_non_categorical_becomes_categorical(
+# Test que l'ajout de modalités ne recalcule pas le statut catégoriel
+def test_update_database_keeps_categorical_status(
     updater: DatabaseUpdater, built_ducklake_schema: Any
 ) -> None:
-    """Test that a non-categorical column becomes categorical when its
-    unique value count drops to or below the threshold after an update.
-
-    The sample schema is built with categorical_threshold=4.
-    The column 'high_cardinality'
-    initially has 5 unique values (val_100..val_104) and is therefore NOT categorical.
-    After replacing all existing rows (id=1..5) with values from a set of only 3 unique
-    labels, only the metadata flag should flip — the fact table is never rewritten.
-
-    Args:
-        updater: DatabaseUpdater fixture.
-        built_ducklake_schema: DuckDB connection with the built schema.
-    """
-    # Vérification initiale :
-    # high_cardinality n'est pas catégorielle (5 valeurs > seuil=4)
-    is_cat_before = built_ducklake_schema.execute(
-        "SELECT is_categorical FROM metadata WHERE name = 'high_cardinality'"
-    ).fetchone()[0]
-    assert is_cat_before is False
-
-    # Remplacement de toutes les lignes existantes (id=1..5) via upsert :
-    # les 5 nouvelles valeurs de high_cardinality
-    # n'appartiennent qu'à 3 modalités distinctes :
-    # (grp_A, grp_B, grp_C), ce qui est ≤ seuil=4
-    # → conversion en variable catégorielle attendue.
-    replacing_df = pl.DataFrame(
-        {
-            "id": [1, 2, 3, 4, 5],
-            "category": ["A", "B", "A", "C", "B"],
-            "value": [0.1, 0.2, 0.3, 0.4, 0.5],
-            "date": pl.date_range(
-                datetime(2024, 1, 1), datetime(2024, 1, 5), "1d", eager=True
-            ),
-            "status": ["active", "inactive", "active", "active", "inactive"],
-            "high_cardinality": ["grp_A", "grp_B", "grp_C", "grp_A", "grp_B"],
-        }
-    )
-
-    result = updater.update_database(
-        update_df=replacing_df,
-        keep="first",
-        use_transaction=False,
-    )
-
-    assert result is True
-
-    # Vérification : high_cardinality est désormais catégorielle dans les métadonnées
-    is_cat_after = built_ducklake_schema.execute(
-        "SELECT is_categorical FROM metadata WHERE name = 'high_cardinality'"
-    ).fetchone()[0]
-    assert is_cat_after is True
-
-    # Vérification : les libellés d'origine sont toujours stockés tels quels
-    stored_labels = {
-        row[0]
-        for row in built_ducklake_schema.execute(
-            "SELECT DISTINCT high_cardinality FROM fact_table"
-        ).fetchall()
-    }
-    assert stored_labels == {"grp_A", "grp_B", "grp_C"}
-
-
-# Test de conversion catégorielle → non-catégorielle après ajout de nouvelles modalités
-def test_update_database_categorical_becomes_non_categorical(
-    updater: DatabaseUpdater, built_ducklake_schema: Any
-) -> None:
-    """Test that a categorical column loses its categorical status when the number of
-    distinct values exceeds the threshold after inserting new rows.
+    """Test that an update never re-evaluates is_categorical.
 
     The column 'category' starts with 3 unique values (A, B, C) and is categorical
-    (threshold=4). After inserting rows that introduce 2 additional values (D, E),
-    the fact table holds 5 modalities which exceeds the threshold, flipping the
-    metadata flag to non-categorical.
+    (threshold=4). Inserting rows with 2 additional values (D, E) brings it to 5
+    modalities, but the status is inferred once, at creation, and stays True.
 
     Args:
         updater: DatabaseUpdater fixture.
@@ -313,8 +244,7 @@ def test_update_database_categorical_becomes_non_categorical(
     assert is_cat_before is True
 
     # Insertion de nouvelles lignes portant 2 modalités inédites pour category (D et E):
-    # après insertion, la fact_table comptera [A, B, C, D, E] = 5 modalités > seuil=4
-    # → bascule du seul booléen is_categorical attendue.
+    # la fact_table comptera 5 modalités > seuil=4, sans effet sur le statut.
     expansion_df = pl.DataFrame(
         {
             "id": [10, 11, 12],
@@ -334,11 +264,15 @@ def test_update_database_categorical_becomes_non_categorical(
 
     assert result is True
 
-    # Vérification : category n'est plus catégorielle dans les métadonnées
+    # Vérification : category reste catégorielle dans les métadonnées
     is_cat_after = built_ducklake_schema.execute(
         "SELECT is_categorical FROM metadata WHERE name = 'category'"
     ).fetchone()[0]
-    assert is_cat_after is False
+    assert is_cat_after is True
+    assert updater.last_report is not None
+    assert not any(
+        c.startswith("is_categorical") for c in updater.last_report.metadata_changes
+    )
 
     # Vérification : les libellés d'origine sont conservés, D et E compris
     stored_labels = {
@@ -405,47 +339,6 @@ def test_update_with_null_categorical_preserves_null_in_fact_table(
     }
     assert "-1" not in stored_labels
     assert "nan" not in stored_labels
-
-
-# Test qu'une colonne au statut forcé n'est jamais rebasculée par un update
-def test_update_does_not_reflip_forced_categorical_column(
-    updater: DatabaseUpdater, built_ducklake_schema: Any
-) -> None:
-    """Test that a forced categorical column keeps its status across an update.
-
-    'high_cardinality' is forced to categorical even though it exceeds the
-    threshold; an update must leave that decision untouched.
-    """
-    # Forçage du statut catégoriel, au-delà du seuil
-    built_ducklake_schema.execute(
-        "UPDATE metadata SET is_categorical = TRUE, is_categorical_forced = TRUE"
-        " WHERE name = 'high_cardinality'"
-    )
-    updater._invalidate_metadata_cache()
-
-    expansion_df = pl.DataFrame(
-        {
-            "id": [50, 51],
-            "category": ["A", "B"],
-            "value": [1.0, 2.0],
-            "date": [datetime(2024, 6, 1), datetime(2024, 6, 2)],
-            "status": ["active", "inactive"],
-            "high_cardinality": ["val_600", "val_601"],
-        }
-    )
-
-    assert (
-        updater.update_database(
-            update_df=expansion_df, keep="first", use_transaction=False
-        )
-        is True
-    )
-
-    # Le statut forcé est conservé malgré le dépassement du seuil
-    is_cat_after = built_ducklake_schema.execute(
-        "SELECT is_categorical FROM metadata WHERE name = 'high_cardinality'"
-    ).fetchone()[0]
-    assert is_cat_after is True
 
 
 # Test que dataset_metadata.updated_at avance après un update réussi
@@ -624,11 +517,11 @@ def test_update_database_compacts_on_real_ducklake_catalog(tmp_path: Any) -> Non
     """Test that update_database succeeds end-to-end against a real DuckLake catalog.
 
     The in-memory ``built_ducklake_schema`` fixture used elsewhere in this file
-    can't exercise ``_run_ducklake_compaction`` for real: DuckLake table functions
+    can't exercise ``DuckLakeMaintenance.compact`` for real: DuckLake table functions
     need an actually attached catalog. This test attaches a real one and checks
     that ``update_database`` (with ``compact_after_update=True``, the default)
     still returns True and the new rows land — i.e. the ``DuckLakeMaintenance``
-    wiring in ``_run_ducklake_compaction`` doesn't break the write path.
+    wiring in ``DuckLakeMaintenance.compact`` doesn't break the write path.
 
     Args:
         tmp_path: pytest temporary directory.
@@ -791,31 +684,104 @@ def test_add_columns_existing_column_with_overwrite_updates_values(
     assert row[0] == 99.0
 
 
-# Test que les combinaisons de df sans correspondance en base ne sont pas insérées
-def test_add_columns_unmatched_combination_not_inserted(
-    updater: DatabaseUpdater, built_ducklake_schema: Any, caplog: Any
+# Test que les combinaisons de df absentes de la base sont insérées
+def test_add_columns_inserts_new_key_combinations(
+    updater: DatabaseUpdater, built_ducklake_schema: Any
 ) -> None:
-    """Test that a df key combination absent from fact_table is skipped, not inserted.
+    """Test that a df key combination absent from fact_table is inserted.
+
+    The inserted row carries the primary key and the new column; every former
+    value column is NULL. The matched row gets its value.
 
     Args:
         updater: DatabaseUpdater fixture (ids 1..5).
         built_ducklake_schema: DuckDB connection.
-        caplog: pytest fixture capturing log records.
     """
-    initial_count = built_ducklake_schema.execute(
-        "SELECT COUNT(*) FROM fact_table"
-    ).fetchone()[0]
+    df = pl.DataFrame({"id": [1, 999], "score": [10.0, 20.0]})
+    report = updater.add_columns(df)
+    assert isinstance(report, OperationReport)
+    assert report.rows_updated == 1
+    assert report.rows_inserted == 1
+
+    assert (
+        built_ducklake_schema.execute("SELECT COUNT(*) FROM fact_table").fetchone()[0]
+        == 6
+    )
+    new_row = built_ducklake_schema.execute(
+        "SELECT score, category, value, date, status, high_cardinality"
+        " FROM fact_table WHERE id = 999"
+    ).fetchone()
+    assert new_row == (20.0, None, None, None, None, None)
+    matched = built_ducklake_schema.execute(
+        "SELECT score, category FROM fact_table WHERE id = 1"
+    ).fetchone()
+    assert matched == (10.0, "A")
+
+
+# Test d'overwrite combiné à de nouvelles clés
+def test_add_columns_overwrite_with_new_keys(
+    updater: DatabaseUpdater, built_ducklake_schema: Any
+) -> None:
+    """Test overwrite=True on an existing column with both known and new keys.
+
+    Known keys absent from df keep their previous value; new keys are inserted.
+
+    Args:
+        updater: DatabaseUpdater fixture (ids 1..5).
+        built_ducklake_schema: DuckDB connection.
+    """
+    df = pl.DataFrame({"id": [2, 1000], "value": [9.9, 7.7]})
+    report = updater.add_columns(df, overwrite=True)
+    assert report.rows_updated == 1
+    assert report.rows_inserted == 1
+
+    rows = dict(
+        built_ducklake_schema.execute(
+            "SELECT id, value FROM fact_table WHERE id IN (1, 2, 1000)"
+        ).fetchall()
+    )
+    assert rows == {1: 0.1, 2: 9.9, 1000: 7.7}
+
+
+# Test qu'une clé primaire nulle dans df est refusée
+def test_add_columns_null_primary_key_raises(updater: DatabaseUpdater) -> None:
+    """Test that add_columns refuses a df with a null primary key.
+
+    Args:
+        updater: DatabaseUpdater fixture.
+    """
+    df = pl.DataFrame({"id": [1, None], "score": [10.0, 20.0]})
+    with pytest.raises(ValueError, match="null value"):
+        updater.add_columns(df)
+
+
+# Test qu'un échec annule aussi les lignes insérées
+def test_add_columns_failure_rolls_back_inserted_rows(
+    updater: DatabaseUpdater, built_ducklake_schema: Any, monkeypatch: Any
+) -> None:
+    """Test that a failure after the insert leaves no inserted row behind.
+
+    Args:
+        updater: DatabaseUpdater fixture (ids 1..5).
+        built_ducklake_schema: DuckDB connection.
+        monkeypatch: pytest fixture for patching.
+    """
+
+    def failing_touch() -> None:
+        raise RuntimeError("simulated failure")
+
+    monkeypatch.setattr(updater, "_touch_dataset_metadata", failing_touch)
 
     df = pl.DataFrame({"id": [1, 999], "score": [10.0, 20.0]})
-    result = updater.add_columns(df)
-    assert isinstance(result, OperationReport)
+    with pytest.raises(RuntimeError, match="simulated failure"):
+        updater.add_columns(df)
 
-    final_count = built_ducklake_schema.execute(
-        "SELECT COUNT(*) FROM fact_table"
-    ).fetchone()[0]
-    assert final_count == initial_count
-
-    assert any("no match in fact_table" in record.message for record in caplog.records)
+    ids = {
+        row[0]
+        for row in built_ducklake_schema.execute("SELECT id FROM fact_table").fetchall()
+    }
+    assert ids == {1, 2, 3, 4, 5}
+    assert "score" not in updater._get_fact_table_columns()
 
 
 # Test que les lignes de la base sans correspondance dans df restent NULL
@@ -939,11 +905,13 @@ def test_get_key_combinations_explicit_broadcast_recipe(
 
     # Jointure explicite puis retrait de la colonne de clé partielle : seule 'id'
     # (clé primaire de la fact table) doit rester à côté de la valeur diffusée.
+    # Les combinaisons sont renvoyées en narwhals (backend pyarrow) : conversion
+    # vers le backend de l'appelant avant la jointure
     broadcast_df = (
-        nw.to_native(keys).join(df_partial, on="category", how="inner").drop("category")
+        keys.to_polars().join(df_partial, on="category", how="inner").drop("category")
     )
 
-    result = updater.add_columns(nw.from_native(broadcast_df, eager_only=True))
+    result = updater.add_columns(broadcast_df)
     assert isinstance(result, OperationReport)
 
     rows = dict(
@@ -1083,8 +1051,8 @@ def test_update_rolls_back_on_last_step_failure(
 ) -> None:
     """Test that a failure on the last step also rolls the fact upsert back.
 
-    ``_update_categorical_flags`` runs after the rows have been written: its
-    failure must undo them.
+    Post-update validation runs after the rows have been written: its failure
+    must undo them.
 
     Args:
         updater: DatabaseUpdater fixture.
@@ -1092,7 +1060,11 @@ def test_update_rolls_back_on_last_step_failure(
     """
     before = _snapshot_state(updater.conn)
 
-    updater._update_categorical_flags = lambda *a, **k: False  # type: ignore[method-assign]
+    def _boom(*args: object, **kwargs: object) -> None:
+        raise RuntimeError("échec de la validation")
+
+    assert updater.auditor is not None
+    updater.auditor.validate_database = _boom  # type: ignore[method-assign]
 
     assert updater.update_database(update_df, keep="first") is False
     assert _snapshot_state(updater.conn) == before
@@ -1206,11 +1178,11 @@ def test_add_columns_rolls_back_column_and_metadata(updater: DatabaseUpdater) ->
     """
     before = _snapshot_state(updater.conn)
 
-    # Échec simulé du rafraîchissement du statut catégoriel, après l'UPDATE
-    def _boom(*args: object, **kwargs: object) -> list[str]:
+    # Échec simulé de l'horodatage de dataset_metadata, après l'UPDATE
+    def _boom(*args: object, **kwargs: object) -> None:
         raise RuntimeError("échec après écriture")
 
-    updater._refresh_categorical_flags = _boom  # type: ignore[method-assign]
+    updater._touch_dataset_metadata = _boom  # type: ignore[method-assign]
 
     score_df = pl.DataFrame({"id": [1, 2, 3], "score": [10.0, 20.0, 30.0]})
     with pytest.raises(RuntimeError, match="échec après écriture"):

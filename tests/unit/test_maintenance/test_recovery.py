@@ -121,7 +121,6 @@ def recovery_manager(built_ducklake_schema: Any) -> DatabaseRecoveryManager:
     """
     return DatabaseRecoveryManager(
         connection=built_ducklake_schema,
-        categorical_threshold=4,
     )
 
 
@@ -155,7 +154,7 @@ def ducklake_recovery_manager(tmp_path: Any) -> DatabaseRecoveryManager:
     # Écriture supplémentaire : l'historique compte alors plusieurs snapshots
     conn.execute("INSERT INTO fact_table (id, category) VALUES (4, 'C')")
 
-    return DatabaseRecoveryManager(connection=conn, categorical_threshold=4)
+    return DatabaseRecoveryManager(connection=conn)
 
 
 # Test de l'initialisation du gestionnaire de récupération

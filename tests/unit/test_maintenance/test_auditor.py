@@ -264,9 +264,7 @@ def test_database_auditor_initialization_with_connection(
         built_ducklake_schema: Fixture providing a DuckDB connection with a built
         schema.
     """
-    auditor = DatabaseAuditor(
-        connection=built_ducklake_schema, categorical_threshold=10
-    )
+    auditor = DatabaseAuditor(connection=built_ducklake_schema)
     assert auditor is not None
 
 
@@ -559,9 +557,8 @@ def test_validate_metadata_fact_consistency_detects_orphan_metadata(
     """
     # Ajout d'une ligne de méta-données sans colonne correspondante
     built_ducklake_schema.execute(
-        "INSERT INTO metadata (name, label, sql_type, is_categorical,"
-        " is_categorical_forced, is_primary_key)"
-        " VALUES ('ghost', 'Ghost', 'VARCHAR', FALSE, FALSE, FALSE)"
+        "INSERT INTO metadata (name, label, sql_type, is_categorical, is_primary_key)"
+        " VALUES ('ghost', 'Ghost', 'VARCHAR', FALSE, FALSE)"
     )
 
     auditor = DatabaseAuditor(connection=built_ducklake_schema)

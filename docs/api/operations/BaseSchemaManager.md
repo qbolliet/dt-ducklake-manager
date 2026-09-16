@@ -1,1 +1,1 @@
-::: dt_ducklake_manager._internal.managers.base.BaseSchemaManager
+::: dt_ducklake_manager.operations._base.BaseSchemaManager

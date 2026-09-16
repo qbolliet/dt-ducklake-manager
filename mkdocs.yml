@@ -101,6 +101,8 @@ nav:
   - operations:
     - DatabaseDeleter: api/operations/DatabaseDeleter.md
     - DatabaseUpdater: api/operations/DatabaseUpdater.md
+    - BaseSchemaManager: api/operations/BaseSchemaManager.md
+    - DataManager: api/operations/DataManager.md
   - reporting:
     - OperationReport: api/reporting/OperationReport.md
   - schema:
@@ -110,7 +112,3 @@ nav:
     - remove_dataframe_duplicates: api/utils/remove_dataframe_duplicates.md
     - build_database_duplicate_removal_query: api/utils/build_database_duplicate_removal_query.md
     - map_python_to_sql_type: api/utils/map_python_to_sql_type.md
-  - _internal:
-    - managers:
-      - BaseSchemaManager: api/_internal/managers/BaseSchemaManager.md
-      - DataManager: api/_internal/managers/DataManager.md

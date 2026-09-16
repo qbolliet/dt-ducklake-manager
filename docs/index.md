@@ -43,7 +43,12 @@ import pandas as pd
 from dt_ducklake_manager.connection import DuckLakeConnector
 from dt_ducklake_manager.schema import DuckLakeTablesBuilder
 from dt_ducklake_manager.operations import DatabaseUpdater, DatabaseDeleter
-from dt_ducklake_manager.maintenance import DatabaseAuditor, DuckLakeMaintenance, ValidationLevel
+from dt_ducklake_manager.maintenance import (
+    DatabaseAuditor,
+    DuckLakeMaintenance,
+    MaintenancePolicy,
+    ValidationLevel,
+)
 
 # 0. Open a connection attached to the DuckLake catalog
 connection = DuckLakeConnector(
@@ -82,7 +87,7 @@ print(report.recommendations)
 
 # 5. Run full maintenance (compaction, snapshot expiry)
 maintenance = DuckLakeMaintenance(connection)
-maintenance.full_maintenance("main", "fact_table")
+maintenance.maintain(MaintenancePolicy(retention_days=30))
 ```
 
 More detailed examples and parametrization walkthroughs are available in the `notebooks/` folder.

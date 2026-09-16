@@ -43,9 +43,8 @@ def test_deleter_initialization(built_ducklake_schema: Any) -> None:
         built_ducklake_schema: Fixture providing a DuckDB connection with a built
         schema.
     """
-    deleter = DatabaseDeleter(connection=built_ducklake_schema, categorical_threshold=4)
+    deleter = DatabaseDeleter(connection=built_ducklake_schema)
     assert deleter is not None
-    assert deleter.categorical_threshold == 4
 
 
 # Test de l'initialisation avec enable_validation=False
@@ -236,48 +235,31 @@ def test_delete_columns_single_column(
 # ---------------------------------------------------------------------------
 
 
-# Test de conversion non-catégorielle → catégorielle après suppression de lignes
-def test_delete_rows_non_categorical_becomes_categorical(
+# Test que la suppression de lignes ne recalcule pas le statut catégoriel
+def test_delete_rows_keeps_categorical_status(
     deleter: DatabaseDeleter, built_ducklake_schema: Any
 ) -> None:
-    """Test that a non-categorical column becomes categorical when its
-    unique value count drops to or below the threshold after rows are deleted.
+    """Test that deleting rows never re-evaluates is_categorical.
 
-    The sample schema is built with categorical_threshold=4. The column
-    'high_cardinality'
-    initially holds 5 unique values (val_100..val_104) and is NOT categorical. The row
-    with id=5 carries the only occurrence of 'val_104'. Deleting that row leaves exactly
-    4 distinct values (val_100..val_103) which equals the threshold, flipping the
-    metadata flag. The fact table itself is never rewritten.
+    'high_cardinality' holds 5 distinct values (threshold 4) and is not
+    categorical. Deleting the only row carrying 'val_104' leaves 4 values, but the
+    status is inferred once, at creation, and stays False.
 
     Args:
         deleter: DatabaseDeleter fixture with auto_cleanup=True.
         built_ducklake_schema: DuckDB connection with the built schema.
     """
-    # Vérification initiale : high_cardinality n'est pas catégorielle (5 valeurs >
-    # seuil=4)
-    is_cat_before = built_ducklake_schema.execute(
-        "SELECT is_categorical FROM metadata WHERE name = 'high_cardinality'"
-    ).fetchone()[0]
-    assert is_cat_before is False
-
-    # Suppression de la ligne id=5 (seul porteur de 'val_104') :
-    # après suppression, high_cardinality n'aura plus que 4 valeurs uniques
-    # (val_100..val_103)
-    # ce qui est ≤ seuil=4 → bascule du booléen is_categorical déclenchée par le
-    # nettoyage automatique (_refresh_categorical_flags via
-    # _cleanup_orphaned_data_comprehensive).
     report = deleter.delete_rows(
         filters=[("id", "=", 5)],
         use_transaction=False,
     )
     assert report.rows_deleted == 1
+    assert report.metadata_changes == []
 
-    # Vérification : high_cardinality est désormais catégorielle dans les métadonnées
     is_cat_after = built_ducklake_schema.execute(
         "SELECT is_categorical FROM metadata WHERE name = 'high_cardinality'"
     ).fetchone()[0]
-    assert is_cat_after is True
+    assert is_cat_after is False
 
     # Vérification : les libellés d'origine sont toujours stockés tels quels
     stored_labels = {
@@ -422,7 +404,7 @@ def test_delete_rows_compacts_on_real_ducklake_catalog(tmp_path: Any) -> None:
 
     Mirrors ``test_update_database_compacts_on_real_ducklake_catalog``: the
     in-memory fixture used elsewhere in this file can't exercise
-    ``_run_ducklake_compaction`` for real.
+    ``DuckLakeMaintenance.compact`` for real.
 
     Args:
         tmp_path: pytest temporary directory.
@@ -445,7 +427,7 @@ def test_delete_rows_compacts_on_real_ducklake_catalog(tmp_path: Any) -> None:
             df, categorical_threshold=4, primary_keys=["id"], connection=conn
         ).build_schema()
 
-    deleter = DatabaseDeleter(connection=conn, categorical_threshold=4)
+    deleter = DatabaseDeleter(connection=conn)
     report = deleter.delete_rows(filters=[("id", "=", 1)], use_transaction=False)
 
     assert report.rows_deleted == 1
@@ -493,7 +475,7 @@ def test_delete_columns_does_not_change_file_count(tmp_path: Any) -> None:
     ).fetchone()[0]
     assert file_count_before > 0
 
-    deleter = DatabaseDeleter(connection=conn, categorical_threshold=4)
+    deleter = DatabaseDeleter(connection=conn)
     result = deleter.delete_columns(["value"], use_transaction=False)
     assert result.columns_dropped == ["value"]
 

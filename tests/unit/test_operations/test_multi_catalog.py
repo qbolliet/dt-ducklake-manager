@@ -142,7 +142,6 @@ def test_deleter_touches_only_its_catalog(
 
     deleter = DatabaseDeleter(
         connection=conn,
-        categorical_threshold=4,
         enable_validation=False,
         auto_cleanup=False,
         schema="main",
