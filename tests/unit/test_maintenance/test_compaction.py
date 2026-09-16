@@ -201,7 +201,7 @@ def test_rewrite_data_files_zero_when_no_deletions(
     # ne peut pas être atteint
     _, _, files_processed, _ = maint.rewrite_data_files("main", table)
     assert files_processed == 0
-    assert any("seuil de suppression" in record.message for record in caplog.records)
+    assert any("deletion threshold" in record.message for record in caplog.records)
 
 
 # Test que rewrite_data_files réécrit effectivement après un UPDATE partiel
