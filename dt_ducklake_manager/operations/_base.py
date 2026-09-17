@@ -141,8 +141,7 @@ class BaseSchemaManager(SchemaScoped, ABC):
 
         # Indicateur de transaction DuckDB ouverte par ce gestionnaire.
         # Garde de ré-entrance : DuckDB rejette un BEGIN imbriqué, et une opération
-        # publique peut en appeler une autre (ex. delete_columns depuis le nettoyage
-        # de delete_rows).
+        # publique peut en appeler une autre.
         self._in_transaction = False
 
         # Rapport de la transaction actuellement ouverte (None hors transaction) :
@@ -999,19 +998,13 @@ class BaseSchemaManager(SchemaScoped, ABC):
             >>> manager._clear_child_parent_references('region')
             ['departement']
         """
-        # Table des méta-données
-        metadata_table = self._qualified("metadata")
         # Extraction des enfants associés à la colonne
-        children = [
-            row[0]
-            for row in self.conn.execute(
-                f"SELECT name FROM {metadata_table} WHERE parent_name = ?", [column]
-            ).fetchall()
-        ]
+        children = self._get_hierarchy_children(column)
         # Retrait du parent
         if children:
             self.conn.execute(
-                f"UPDATE {metadata_table} SET parent_name = NULL WHERE parent_name = ?",
+                f"UPDATE {self._qualified('metadata')} SET parent_name = NULL"
+                " WHERE parent_name = ?",
                 [column],
             )
             # Invalidation du cache
@@ -1022,6 +1015,200 @@ class BaseSchemaManager(SchemaScoped, ABC):
                 f" parent_name was cleared to NULL (cascade=True)"
             )
         return children
+
+    # Méthode auxiliaire de suppression physique d'une colonne de la table des faits
+    def _drop_fact_table_column(self, column: str) -> bool:
+        """
+        Drop a column from the fact table (``ALTER TABLE ... DROP COLUMN``).
+
+        Only the physical column is dropped: its ``metadata`` row, ``cluster_by``
+        and ``parent_name`` references are handled by
+        ``_drop_column_with_references``.
+
+        Args:
+            column: Name of the column to drop.
+
+        Returns:
+            bool: True if the column was dropped, False on failure (logged).
+
+        Example:
+            >>> manager._drop_fact_table_column('old_col')
+            True
+        """
+        try:
+            # Exécution de la requête de suppression de la colonne sur la table
+            self.conn.execute(
+                f"ALTER TABLE {self._qualified('fact_table')}"
+                f" DROP COLUMN {quote_ident(column)}"
+            )
+            # Logging
+            self.logger.info(f"Dropped column {column} from fact table")
+            return True
+        except Exception as e:
+            # Logging
+            self.logger.error(f"Error dropping fact table column {column}: {e}")
+            return False
+
+    # Méthode de suppression d'une colonne et de toutes ses références
+    def _drop_column_with_references(self, column: str, cascade: bool = False) -> bool:
+        """
+        Drop a fact table column together with every reference to it.
+
+        Ordered steps: children detachment (``parent_name`` set to ``NULL``, only
+        when ``cascade``), ``ALTER TABLE ... DROP COLUMN``, ``metadata`` row removal
+        and ``cluster_by`` update. Shared by ``DatabaseDeleter.delete_columns`` and
+        ``_cleanup_null_only_columns`` so that a dropped column never leaves a
+        dangling reference behind. No transaction is opened here: the caller owns
+        it.
+
+        Args:
+            column: Name of the column to drop. Must exist in the fact table.
+            cascade: Whether to detach the hierarchy children of ``column`` before
+                dropping it. Defaults to False.
+
+        Returns:
+            bool: True if the column was dropped, False if the ``DROP COLUMN``
+            failed (nothing else is then modified, except detached children).
+
+        Raises:
+            Exception: Any error raised while removing the metadata row or updating
+                ``cluster_by``, re-raised as is.
+
+        Example:
+            >>> manager._drop_column_with_references('region', cascade=True)
+            True
+        """
+        # Détachement des colonnes enfants d'une hiérarchie (cascade uniquement)
+        if cascade:
+            self._clear_child_parent_references(column)
+
+        # Suppression physique de la colonne
+        if not self._drop_fact_table_column(column):
+            return False
+
+        # Suppression de la ligne de méta-données correspondante
+        self.delete_column_metadata(column)
+
+        # Retrait de la colonne de cluster_by si elle en faisait partie
+        self._remove_from_cluster_by(column)
+        return True
+
+    # Méthode de nettoyage des colonnes ne contenant que des valeurs nulles
+    def _cleanup_null_only_columns(self, use_transaction: bool = True) -> list[str]:
+        """
+        Drop the fact table columns that only hold null values.
+
+        Each column goes through ``_drop_column_with_references`` (``metadata``
+        row, ``cluster_by`` included). Some null-only columns are kept on purpose:
+
+        - every column when the fact table is **empty**: all its columns are then
+          trivially null-only, and dropping them would wipe the schema out before
+          the next load;
+        - primary key columns;
+        - a hierarchy parent that still has children once the other null-only
+          columns are dropped (a warning is logged and added to the report). A
+          parent whose children are all null-only too is dropped after them.
+
+        Runs inside ``_transaction``: nested in another operation (e.g. the cleanup
+        step of ``delete_rows``), it reuses its transaction and report; otherwise it
+        opens its own, so a failure leaves no column half-dropped.
+
+        Args:
+            use_transaction: Whether to run inside a DuckDB transaction when none is
+                already open. Defaults to True.
+
+        Returns:
+            list[str]: Names of the dropped columns, in drop order. Empty when
+            nothing was dropped.
+
+        Raises:
+            Exception: Any error raised while detecting or dropping the columns;
+                the transaction (if any) is rolled back before re-raising.
+
+        Examples:
+            >>> manager.conn.execute("UPDATE fact_table SET score = NULL")
+            >>> manager._cleanup_null_only_columns()
+            ['score']
+        """
+        with self._transaction(
+            "cleanup_null_only_columns", use_transaction=use_transaction
+        ) as report:
+            # Table vide : toutes les colonnes sont trivialement nulles, rien à
+            # décider
+            if self._count_rows("fact_table") == 0:
+                # Logging
+                self.logger.info("Fact table is empty: null-only cleanup skipped")
+                return []
+
+            # Colonnes candidates, clés primaires exclues
+            primary_keys = set(self._get_primary_key_columns())
+            pending = [
+                c for c in self._get_null_only_columns() if c not in primary_keys
+            ]
+
+            # Suppression itérative : une colonne parente devient supprimable dès que
+            # ses enfants (eux-mêmes nuls) ont été supprimés, quel que soit l'ordre
+            # des colonnes dans la table.
+            dropped: list[str] = []
+            progress = True
+            while pending and progress:
+                progress = False
+                for column in list(pending):
+                    if self._get_hierarchy_children(column):
+                        continue
+                    pending.remove(column)
+                    if self._drop_column_with_references(column):
+                        dropped.append(column)
+                        progress = True
+                    else:
+                        report.warnings.append(
+                            f"Null-only column '{column}' could not be dropped"
+                        )
+
+            # Colonnes parentes conservées : enfants non nuls
+            for column in pending:
+                # Message
+                warning = (
+                    f"Null-only column '{column}' kept: it is the hierarchy parent of"
+                    f" {self._get_hierarchy_children(column)}"
+                )
+                # Logging
+                self.logger.warning(warning)
+                # Ajout au rapport
+                report.warnings.append(warning)
+
+            if dropped:
+                # Ajout au rapport
+                report.columns_dropped.extend(dropped)
+                self._touch_dataset_metadata()
+                # Logging
+                self.logger.info(f"Dropped null-only columns: {dropped}")
+
+            return dropped
+
+    # Méthode de lecture des colonnes enfants d'une colonne dans une hiérarchie
+    def _get_hierarchy_children(self, column: str) -> list[str]:
+        """
+        Get the columns whose ``parent_name`` is ``column``.
+
+        Args:
+            column: Name of the potential hierarchy parent.
+
+        Returns:
+            list[str]: Names of the child columns. Empty when ``column`` is not a
+            hierarchy parent.
+
+        Example:
+            >>> manager._get_hierarchy_children('region')
+            ['departement']
+        """
+        return [
+            row[0]
+            for row in self.conn.execute(
+                f"SELECT name FROM {self._qualified('metadata')} WHERE parent_name = ?",
+                [column],
+            ).fetchall()
+        ]
 
     # Méthodes de résolution des conflits de types
     def _resolve_type_conflicts(

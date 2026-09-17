@@ -179,8 +179,10 @@ class DatabaseDeleter(BaseSchemaManager):
                 transaction, so that a failure mid-deletion leaves the fact table
                 exactly as it was. Defaults to True. When False the steps run in
                 autocommit mode and a failure leaves partial state behind.
-            perform_cleanup: Whether to cleanup orphaned data (None = use auto_cleanup
-                setting)
+            perform_cleanup: Whether to drop the columns left null-only by the
+                deletion (None = use auto_cleanup setting). Runs after the deletion
+                is committed, in its own transaction: a cleanup failure is reported
+                in ``report.warnings`` without restoring the deleted rows.
             compact_after_update: Whether to run DuckLake compaction (merge small delta
                 files and rewrite delete files) immediately after a successful deletion.
                 Adds write latency but keeps read performance optimal. Defaults to True.
@@ -224,7 +226,7 @@ class DatabaseDeleter(BaseSchemaManager):
             f"{perform_cleanup})"
         )
 
-        # Bloc transactionnel unique : la suppression et son nettoyage forment un
+        # Bloc transactionnel unique : la suppression et sa validation forment un
         # tout, annulé en bloc sur exception.
         try:
             with self._transaction(
@@ -234,7 +236,7 @@ class DatabaseDeleter(BaseSchemaManager):
                 commit_message=commit_message,
                 commit_info=commit_info,
             ) as report:
-                rows_deleted = self._run_delete_rows(filters, perform_cleanup, report)
+                rows_deleted = self._run_delete_rows(filters, report)
         except Exception as e:
             # Logging
             self.logger.error(f"Error during row deletion: {e}")
@@ -250,10 +252,18 @@ class DatabaseDeleter(BaseSchemaManager):
         # Horodatage de la dernière écriture réussie
         self._touch_dataset_metadata()
 
-        # Compaction DuckLake optionnelle après le commit (réécriture des delete
-        # files) : la maintenance ne fait jamais partie de la transaction.
         final_report = self.last_report
         assert final_report is not None  # posé par _transaction sur tout succès
+
+        # Suppression des colonnes devenues entièrement nulles, après le commit :
+        # DuckDB refuse de valider une transaction mêlant DELETE et DROP COLUMN sur
+        # la même table. Transaction distincte, non critique : un échec est reporté
+        # sans annuler la suppression des lignes.
+        if perform_cleanup and rows_deleted > 0:
+            self._run_post_delete_cleanup(final_report, use_transaction)
+
+        # Compaction DuckLake optionnelle après le commit (réécriture des delete
+        # files) : la maintenance ne fait jamais partie de la transaction.
         if rows_deleted > 0 and compact_after_update:
             self.maintenance.compact(schema=self.schema, report=final_report)
 
@@ -261,26 +271,56 @@ class DatabaseDeleter(BaseSchemaManager):
         self.logger.info(final_report.summary())
         return final_report
 
+    # Méthode de nettoyage des colonnes nulles après une suppression de lignes
+    def _run_post_delete_cleanup(
+        self, report: OperationReport, use_transaction: bool
+    ) -> None:
+        """Drop the columns left null-only by a committed row deletion.
+
+        Runs ``_cleanup_null_only_columns`` in its own transaction and merges its
+        outcome into the ``delete_rows`` report: dropped columns go to
+        ``report.columns_dropped``, warnings to ``report.warnings``. A failure is
+        logged and reported as a warning; the row deletion stays committed.
+        ``self.last_report`` is set back to ``report`` in every case.
+
+        Args:
+            report: Report of the committed ``delete_rows`` operation, updated in
+                place.
+            use_transaction: Whether the cleanup runs inside a DuckDB transaction.
+        """
+        try:
+            # Ajout au rapport et suppression des colonnes de null
+            report.columns_dropped.extend(
+                self._cleanup_null_only_columns(use_transaction=use_transaction)
+            )
+            cleanup_report = self.last_report
+            if cleanup_report is not None and cleanup_report is not report:
+                report.warnings.extend(cleanup_report.warnings)
+        except Exception as e:
+            # Logging
+            self.logger.warning(f"Cleanup failed, but row deletion completed: {e}")
+            # Ajout au rapport
+            report.warnings.append(f"Null-only column cleanup failed: {e}")
+        finally:
+            # Mise à jour du dernier rapport
+            self.last_report = report
+
     # Méthode d'exécution de la suppression des lignes
     def _run_delete_rows(
         self,
         filters: str | list[Any] | dict[Any, Any] | None,
-        perform_cleanup: bool,
         report: OperationReport,
     ) -> int:
         """Run the ordered steps of a row deletion.
 
-        Steps, in order: deletion of the matching rows, orphaned-data cleanup (when
-        requested), post-deletion validation. Called from inside the transaction
-        opened by ``delete_rows``: a failure raises, so the deletion is rolled back
-        and the rows return.
+        Steps, in order: deletion of the matching rows, post-deletion validation.
+        Called from inside the transaction opened by ``delete_rows``: a failure
+        raises, so the deletion is rolled back and the rows return. The null-only
+        column cleanup runs afterwards, once committed (``_run_post_delete_cleanup``).
 
         Args:
             filters: Filter conditions (SQL string or structured filters).
-            perform_cleanup: Whether to drop null-only columns and refresh
-                categorical flags after the deletion.
-            report: In-progress report of the enclosing transaction, appended to
-                (``columns_dropped``, ``metadata_changes``) by the cleanup step.
+            report: In-progress report of the enclosing transaction.
 
         Returns:
             Number of rows deleted.
@@ -289,9 +329,9 @@ class DatabaseDeleter(BaseSchemaManager):
             RuntimeError: If post-deletion validation finds critical issues, naming
                 the step reached.
         """
-        # Comptage initial : le nombre de lignes supprimées est mesuré sur la table elle-même,
-        # la valeur retournée par data_mgr ne couvrant pas les suppressions en
-        # cascade éventuelles.
+        # Comptage initial : le nombre de lignes supprimées est mesuré sur la table
+        # elle-même, la valeur retournée par data_mgr ne couvrant pas les suppressions
+        # en cascade éventuelles.
         _row = self.conn.execute(
             f"SELECT COUNT(*) FROM {self._qualified('fact_table')}"
         ).fetchone()
@@ -311,16 +351,11 @@ class DatabaseDeleter(BaseSchemaManager):
         # qui la remplacera si elle est disponible.
         report.rows_deleted = rows_deleted
 
-        # Aucune suppression : rien à nettoyer ni à valider
+        # Aucune suppression : rien à valider
         if rows_deleted == 0:
             return 0
 
-        # Étape 2 : nettoyage des données orphelines si activé.
-        # Non critique : un échec est journalisé sans annuler la suppression.
-        if perform_cleanup and not self._cleanup_orphaned_data_comprehensive(report):
-            self.logger.warning("Cleanup failed, but row deletion completed")
-
-        # Étape 3 : validation post-suppression
+        # Étape 2 : validation post-suppression
         if self.enable_validation and self.auditor:
             validation_report = self.auditor.validate_database(ValidationLevel.BASIC)
             critical_issues = validation_report.get_critical_issues_count()
@@ -487,23 +522,11 @@ class DatabaseDeleter(BaseSchemaManager):
         # Traitement de chaque colonne
         for column in valid_columns:
             try:
-                # Détachement des colonnes enfants d'une hiérarchie avant
-                # suppression (cascade=True uniquement)
-                if cascade:
-                    self._clear_child_parent_references(column)
-
-                # Suppression de la colonne de la fact table
-                if not self._drop_fact_table_column(column):
-                    results[column] = False
-                    continue
-
-                # Suppression de la ligne de méta-données correspondante
-                self.delete_column_metadata(column)
-
-                # Retrait de la colonne de cluster_by si elle en faisait partie
-                self._remove_from_cluster_by(column)
-
-                results[column] = True
+                # Suppression de la colonne et de ses références (parent_name si
+                # cascade, metadata, cluster_by)
+                results[column] = self._drop_column_with_references(
+                    column, cascade=cascade
+                )
 
             except Exception as e:
                 # Logging
@@ -536,57 +559,6 @@ class DatabaseDeleter(BaseSchemaManager):
                 results[col] = False
 
         return results
-
-    # Méthodes de suppression sécurisées
-    # Méthode auxiliaire de suppression d'une colonne de la table des faits
-    def _drop_fact_table_column(self, column: str) -> bool:
-        """Drop a column from the fact table."""
-        try:
-            # Suppression des colonnes
-            dropped_columns = self.data_mgr.drop_columns([column])
-            return len(dropped_columns) > 0
-        except Exception as e:
-            # Logging
-            self.logger.error(f"Error dropping fact table column {column}: {e}")
-            return False
-
-    # Méthode auxiliaire de suppression des données orphelines
-    def _cleanup_orphaned_data_comprehensive(
-        self, report: OperationReport | None = None
-    ) -> dict[str, Any]:
-        """Comprehensive cleanup of orphaned data.
-
-        Args:
-            report: In-progress report of the enclosing transaction (reused by the
-                nested ``delete_columns`` call, per ``_transaction``'s reentrance
-                rule).
-        """
-        try:
-            # Initialisation du dictionnaire résultat
-            results: dict[str, Any] = {
-                "null_columns": [],
-            }
-
-            # Étape 1: Suppression des colonnes ne contenant que des nulles
-            # Utilisation de delete_columns pour assurer le nettoyage complet
-            # (métadonnées comprises)
-            null_only_columns = self._get_null_only_columns()
-            if null_only_columns:
-                # Suppression via delete_columns (sans transaction car déjà dans un
-                # contexte) : réutilise le rapport englobant (report reentrance de
-                # _transaction), donc column_report.columns_dropped == ce que le
-                # rapport englobant porte déjà.
-                column_report = self.delete_columns(
-                    null_only_columns, use_transaction=False
-                )
-                results["null_columns"] = list(column_report.columns_dropped)
-
-            return results
-
-        except Exception as e:
-            # Logging
-            self.logger.error(f"Error during comprehensive cleanup: {e}")
-            return {}
 
     # Méthodes d'analyse des dépendances
     # Méthode auxiliaire d'analyse des dépendances associées à une colonne
@@ -646,14 +618,7 @@ class DatabaseDeleter(BaseSchemaManager):
 
                 # Vérification si la colonne est parente d'une autre colonne dans une
                 # hiérarchie : dépendance critique sauf cascade=True.
-                hierarchy_children = [
-                    row[0]
-                    for row in self.conn.execute(
-                        f"SELECT name FROM {self._qualified('metadata')}"
-                        " WHERE parent_name = ?",
-                        [column],
-                    ).fetchall()
-                ]
+                hierarchy_children = self._get_hierarchy_children(column)
                 column_deps["hierarchy_children"] = hierarchy_children
                 if hierarchy_children:
                     if cascade:
@@ -822,19 +787,21 @@ class DatabaseDeleter(BaseSchemaManager):
         """
         Drop the fact table columns that only hold null values.
 
-        Each dropped column goes through ``delete_columns`` (metadata row,
-        ``cluster_by`` and ``parent_name`` references included).
+        Delegates to ``_cleanup_null_only_columns`` inside a single transaction:
+        metadata rows and ``cluster_by`` are updated alongside; primary keys,
+        hierarchy parents that still have children and every column of an empty
+        fact table are kept.
 
         Returns:
             Dictionary with cleanup results (``null_columns``: dropped columns), or
-            ``{"error": ...}`` on failure.
+            ``{"error": ...}`` on failure (nothing is then dropped).
 
         Example:
             >>> results = deleter.cleanup_database()
             >>> print(f"Cleaned: {results}")
         """
         try:
-            return self._cleanup_orphaned_data_comprehensive()
+            return {"null_columns": self._cleanup_null_only_columns()}
 
         except Exception as e:
             # Logging

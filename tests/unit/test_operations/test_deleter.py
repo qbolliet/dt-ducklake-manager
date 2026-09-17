@@ -511,26 +511,57 @@ def _snapshot_state(conn: Any) -> dict[str, Any]:
     }
 
 
-# Test qu'un échec après suppression restaure les lignes supprimées
+# Test qu'un échec avant le commit restaure les lignes supprimées
 def test_delete_rows_rolls_back_on_exception(deleter: DatabaseDeleter) -> None:
-    """Test that a failure after the DELETE restores every deleted row.
+    """Test that a failure after the DELETE, before COMMIT, restores every row.
 
     Args:
         deleter: DatabaseDeleter fixture.
     """
     before = _snapshot_state(deleter.conn)
 
-    # Exception simulée dans le nettoyage, après la suppression des lignes
-    def _boom(report: Any = None) -> dict[str, Any]:
+    # Exception simulée dans la validation post-suppression, après le DELETE
+    def _boom(level: Any = None) -> Any:
         raise RuntimeError("échec après suppression")
 
-    deleter._cleanup_orphaned_data_comprehensive = _boom  # type: ignore[method-assign]
+    assert deleter.auditor is not None
+    deleter.auditor.validate_database = _boom  # type: ignore[method-assign]
 
     report = deleter.delete_rows(filters=[("id", "=", 1)])
     assert report.warnings
 
     # Les lignes supprimées sont revenues
     assert _snapshot_state(deleter.conn) == before
+
+
+# Test qu'un échec du nettoyage post-commit conserve la suppression des lignes
+def test_delete_rows_keeps_deletion_when_cleanup_fails(
+    deleter: DatabaseDeleter,
+) -> None:
+    """Test that a failing null-only cleanup does not restore the deleted rows.
+
+    The cleanup runs after COMMIT (DuckDB cannot commit a DELETE and a DROP
+    COLUMN on the same table together): its failure is only reported.
+
+    Args:
+        deleter: DatabaseDeleter fixture.
+    """
+    initial_count = deleter.conn.execute("SELECT COUNT(*) FROM fact_table").fetchone()[
+        0
+    ]
+
+    def _boom(use_transaction: bool = True) -> list[str]:
+        raise RuntimeError("échec du nettoyage")
+
+    deleter._cleanup_null_only_columns = _boom  # type: ignore[method-assign]
+
+    report = deleter.delete_rows(filters=[("id", "=", 1)], compact_after_update=False)
+
+    assert report.rows_deleted == 1
+    assert any("échec du nettoyage" in w for w in report.warnings)
+    assert deleter.last_report is report
+    count_after = deleter.conn.execute("SELECT COUNT(*) FROM fact_table").fetchone()[0]
+    assert count_after == initial_count - 1
 
 
 # Test que des problèmes critiques post-suppression annulent la suppression
@@ -575,10 +606,10 @@ def test_delete_rows_without_transaction_keeps_partial_state(
         0
     ]
 
-    def _boom(report: Any = None) -> dict[str, Any]:
+    def _boom(use_transaction: bool = True) -> list[str]:
         raise RuntimeError("échec après suppression")
 
-    deleter._cleanup_orphaned_data_comprehensive = _boom  # type: ignore[method-assign]
+    deleter._cleanup_null_only_columns = _boom  # type: ignore[method-assign]
 
     report = deleter.delete_rows(filters=[("id", "=", 1)], use_transaction=False)
     assert report.warnings

@@ -790,27 +790,6 @@ class DatabaseUpdater(BaseSchemaManager):
             self.logger.error(f"Error removing database duplicates: {e}")
             return False
 
-    # Méthode auxiliaire de nettoyage des données orphelines
-    def _cleanup_orphaned_data(self) -> None:
-        """Clean up orphaned data after update operations.
-
-        Drops columns of the fact table that hold only null values.
-        """
-        try:
-            # Suppression des colonnes ne contenant que des nulles.
-            # La ligne de méta-données correspondante est retirée en même temps,
-            # faute de quoi metadata et fact_table divergeraient.
-            null_only_columns = self._get_null_only_columns()
-            if null_only_columns:
-                dropped_columns = self.data_mgr.drop_columns(null_only_columns)
-                for column in dropped_columns:
-                    self.delete_column_metadata(column)
-                if dropped_columns:
-                    self.logger.info(f"Dropped null-only columns: {dropped_columns}")
-
-        except Exception as e:
-            self.logger.error(f"Error cleaning orphaned data: {e}")
-
     # ---------------------------------------------------------------------------
     # Gestion explicite des colonnes : ajout de colonnes de valeurs
     # ---------------------------------------------------------------------------
@@ -1196,8 +1175,8 @@ class DatabaseUpdater(BaseSchemaManager):
             if not self.data_mgr.optimize_table():
                 self.logger.warning("Failed to optimize fact table")
 
-            # Nettoyage des données orphelines
-            self._cleanup_orphaned_data()
+            # Suppression des colonnes entièrement nulles (références comprises)
+            self._cleanup_null_only_columns()
 
             # Logging
             self.logger.info("Database optimization completed")
