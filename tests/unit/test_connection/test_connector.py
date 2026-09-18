@@ -193,6 +193,68 @@ def test_attach_on_existing_connection(ducklake_paths: tuple[str, str]) -> None:
     existing_conn.close()
 
 
+# Test que attach(activate_schema=True) active bien le catalogue cible
+def test_attach_activate_schema_true_activates_catalog(
+    ducklake_paths: tuple[str, str],
+) -> None:
+    """Test that attach() with the default ``activate_schema=True`` runs the ``USE``.
+
+    Args:
+        ducklake_paths: Fixture providing (catalog_path, data_path).
+    """
+    catalog, data_dir = ducklake_paths
+    conn = duckdb.connect(":memory:")
+    conn.execute("INSTALL ducklake; LOAD ducklake;")
+
+    DuckLakeConnector(catalog, data_dir, catalog_alias="lake_a").attach(conn)
+
+    # Le USE {alias}.{schema} a fait du catalogue attaché le catalogue courant
+    current = conn.execute("SELECT current_catalog()").fetchone()
+    assert current is not None
+    assert current[0] == "lake_a"
+    conn.close()
+
+
+# Test qu'attach(activate_schema=False) ne vole pas le catalogue courant
+def test_attach_activate_schema_false_keeps_current_catalog(tmp_path: Path) -> None:
+    """Test that attach(activate_schema=False) does not steal the current catalog.
+
+    Attaching a *secondary* catalog to a connection must not change the session's
+    current catalog: the ``USE`` normally issued for the target schema is skipped.
+
+    Args:
+        tmp_path: pytest temporary directory.
+    """
+    # Deux catalogues DuckLake distincts
+    cat1 = str(tmp_path / "primary.ducklake")
+    data1 = str(tmp_path / "data1")
+    cat2 = str(tmp_path / "secondary.ducklake")
+    data2 = str(tmp_path / "data2")
+    os.makedirs(data1)
+    os.makedirs(data2)
+
+    conn = duckdb.connect(":memory:")
+    conn.execute("INSTALL ducklake; LOAD ducklake;")
+
+    # Premier catalogue : attaché normalement, devient le catalogue courant
+    DuckLakeConnector(cat1, data1, catalog_alias="lake_a").attach(conn)
+    before = conn.execute("SELECT current_catalog()").fetchone()
+    assert before is not None and before[0] == "lake_a"
+
+    # Second catalogue : attaché sans activation, le catalogue courant est préservé
+    DuckLakeConnector(cat2, data2, catalog_alias="lake_b").attach(
+        conn, activate_schema=False
+    )
+    after = conn.execute("SELECT current_catalog()").fetchone()
+    assert after is not None and after[0] == "lake_a"
+
+    # Le second catalogue reste néanmoins attaché et interrogeable via son alias
+    rows = conn.execute("SELECT database_name FROM duckdb_databases()").fetchall()
+    databases = [row[0] for row in rows]
+    assert "lake_b" in databases
+    conn.close()
+
+
 # ---------------------------------------------------------------------------
 # Tests de _build_attach_sql()
 # ---------------------------------------------------------------------------
@@ -254,6 +316,130 @@ def test_build_attach_sql_snapshot_time(ducklake_paths: tuple[str, str]) -> None
     )
     sql = connector._build_attach_sql()
     assert "SNAPSHOT_TIME '2025-01-01 00:00:00'" in sql
+
+
+# Test de la construction de la clause ATTACH avec DATA_INLINING_ROW_LIMIT
+def test_build_attach_sql_data_inlining_row_limit(
+    ducklake_paths: tuple[str, str],
+) -> None:
+    """Test that data_inlining_row_limit adds a bare-integer ATTACH option.
+
+    Args:
+        ducklake_paths: Fixture providing (catalog_path, data_path).
+    """
+    catalog, data_dir = ducklake_paths
+    connector = DuckLakeConnector(catalog, data_dir, data_inlining_row_limit=0)
+    sql = connector._build_attach_sql()
+    assert "DATA_INLINING_ROW_LIMIT 0" in sql
+
+
+# Test que data_inlining_row_limit est absent par défaut
+def test_build_attach_sql_no_data_inlining_row_limit_by_default(
+    ducklake_paths: tuple[str, str],
+) -> None:
+    """Test that DATA_INLINING_ROW_LIMIT is omitted when not configured.
+
+    Args:
+        ducklake_paths: Fixture providing (catalog_path, data_path).
+    """
+    catalog, data_dir = ducklake_paths
+    connector = DuckLakeConnector(catalog, data_dir)
+    sql = connector._build_attach_sql()
+    assert "DATA_INLINING_ROW_LIMIT" not in sql
+
+
+# ---------------------------------------------------------------------------
+# Tests des options DuckLake (ducklake_options, §5.4)
+# ---------------------------------------------------------------------------
+
+
+# Test que ducklake_options='recommended' positionne les options recommandées
+def test_ducklake_options_recommended(ducklake_paths: tuple[str, str]) -> None:
+    """Test that 'recommended' applies RECOMMENDED_DUCKLAKE_OPTIONS after connect.
+
+    Args:
+        ducklake_paths: Fixture providing (catalog_path, data_path).
+    """
+    catalog, data_dir = ducklake_paths
+    conn = DuckLakeConnector(
+        catalog, data_dir, ducklake_options="recommended"
+    ).connect()
+
+    options = dict(
+        conn.execute("SELECT option_name, value FROM ducklake_options('db')").fetchall()
+    )
+    assert options["parquet_compression"] == "zstd"
+    assert options["target_file_size"] == "100000000"
+    assert options["parquet_row_group_size"] == "122880"
+    conn.close()
+
+
+# Test qu'un dictionnaire explicite d'options est appliqué
+def test_ducklake_options_explicit_dict(ducklake_paths: tuple[str, str]) -> None:
+    """Test that an explicit ducklake_options dict is applied after connect.
+
+    Args:
+        ducklake_paths: Fixture providing (catalog_path, data_path).
+    """
+    catalog, data_dir = ducklake_paths
+    conn = DuckLakeConnector(
+        catalog, data_dir, ducklake_options={"parquet_compression": "gzip"}
+    ).connect()
+
+    options = dict(
+        conn.execute("SELECT option_name, value FROM ducklake_options('db')").fetchall()
+    )
+    assert options["parquet_compression"] == "gzip"
+    conn.close()
+
+
+# Test qu'aucune option n'est appliquée sur une connexion en lecture seule
+def test_ducklake_options_not_applied_on_read_only(
+    ducklake_paths: tuple[str, str],
+) -> None:
+    """Test that ducklake_options is never applied on a read-only connection.
+
+    Args:
+        ducklake_paths: Fixture providing (catalog_path, data_path).
+    """
+    catalog, data_dir = ducklake_paths
+    # Création initiale (lecture-écriture, sans options particulières)
+    DuckLakeConnector(catalog, data_dir).connect().close()
+
+    # Réouverture en lecture seule avec des options demandées : ne doivent pas être
+    # appliquées (set_option échouerait de toute façon sur une connexion read-only)
+    ro_conn = DuckLakeConnector(
+        catalog, data_dir, read_only=True, ducklake_options="recommended"
+    ).connect()
+    options = dict(
+        ro_conn.execute(
+            "SELECT option_name, value FROM ducklake_options('db')"
+        ).fetchall()
+    )
+    assert "parquet_compression" not in options
+    ro_conn.close()
+
+
+# Test que data_inlining_row_limit=0 désactive effectivement l'inlining
+def test_data_inlining_row_limit_zero_disables_inlining(
+    ducklake_paths: tuple[str, str],
+) -> None:
+    """Test that data_inlining_row_limit=0 makes a small insert produce a file.
+
+    Args:
+        ducklake_paths: Fixture providing (catalog_path, data_path).
+    """
+    catalog, data_dir = ducklake_paths
+    conn = DuckLakeConnector(catalog, data_dir, data_inlining_row_limit=0).connect()
+    conn.execute("CREATE TABLE t (a INTEGER)")
+    conn.execute("INSERT INTO t VALUES (1), (2)")
+
+    file_count = conn.execute(
+        "SELECT file_count FROM ducklake_table_info('db') WHERE table_name = 't'"
+    ).fetchone()[0]
+    # Sans inlining, même un petit INSERT produit immédiatement un fichier Parquet
+    assert file_count == 1
+    conn.close()
 
 
 # ---------------------------------------------------------------------------

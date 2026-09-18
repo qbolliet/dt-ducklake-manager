@@ -1,8 +1,6 @@
 # Importation des modules
 # Modules de base
-import json
 import os
-import shutil
 import time
 from dataclasses import dataclass, field
 from enum import Enum
@@ -12,13 +10,11 @@ from typing import Any
 # DuckDB
 import duckdb
 import narwhals as nw
-import polars as pl
-
-from .._internal.managers.dimension import DimensionManager
 
 # Import des utilitaires
 from ..utils.logger import _init_logger
-from ..utils.sql import qualify_table
+from ..utils.sql import SchemaScoped, quote_ident, resolve_catalog
+from ..utils.types import METADATA_COLUMNS, metadata_table_ddl
 
 # Import des gestionnaires
 from .auditor import DatabaseAuditor, ValidationIssue, ValidationLevel
@@ -38,40 +34,15 @@ class RecoveryStrategy(Enum):
     ``DuckLakeConnector(..., snapshot_version=N)`` and reload the data.
 
     For structural or consistency issues that do not require rolling back data,
-    the in-place repair strategies (``REPAIR_SCHEMA``, ``REBUILD_DIMENSIONS``,
+    the in-place repair strategies (``REPAIR_SCHEMA``,
     ``CLEAN_ORPHANED_DATA``, ``VALIDATE_AND_FIX``) operate directly on the live
     catalog without touching the snapshot history.
     """
 
     USE_SNAPSHOT_HISTORY = "use_snapshot_history"
     REPAIR_SCHEMA = "repair_schema"
-    REBUILD_DIMENSIONS = "rebuild_dimensions"
     CLEAN_ORPHANED_DATA = "clean_orphaned_data"
     VALIDATE_AND_FIX = "validate_and_fix"
-
-
-# Classe de point de récupération de la base de données
-@dataclass
-class RecoveryPoint:
-    """
-    Recovery point containing the state of the database.
-
-    Attributes:
-        recovery_id (str): Unique identifier of the recovery point
-        timestamp (float): Creation timestamp
-        backup_path (str): Path to the backup files
-        metadata (dict): Metadata about the database state
-        validation_report (Optional[ValidationReport]): Validation report at the time of
-            backup
-        description (str): Description of the recovery point
-    """
-
-    recovery_id: str
-    timestamp: float
-    backup_path: str
-    metadata: dict[str, Any] = field(default_factory=dict)
-    validation_report: Any | None = None
-    description: str = ""
 
 
 # Classe d'opération de récupération
@@ -82,7 +53,8 @@ class RecoveryOperation:
 
     Attributes:
         strategy (RecoveryStrategy): Recovery strategy to use
-        target_recovery_point (Optional[str]): ID of the target recovery point
+        target_recovery_point (Optional[str]): Target DuckLake ``snapshot_id``
+            (as a string) for ``USE_SNAPSHOT_HISTORY``
         parameters (dict): Strategy-specific parameters
         auto_validate (bool): Whether to automatically validate after recovery
         description (str): Description of the operation
@@ -121,32 +93,35 @@ class RecoveryResult:
 
 
 # Classe de récupération de la base de données
-class DatabaseRecoveryManager:
+class DatabaseRecoveryManager(SchemaScoped):
     """
-    Manages database recovery operations and backup/restore functionality.
+    Manages database recovery, built on DuckLake time travel.
 
-    Provides comprehensive error recovery mechanisms including automatic backup
-    creation,
-    validation-driven repair, schema consistency restoration, and transaction rollback.
+    Recovery from a bad write is **not** an application-level restore: DuckLake
+    persists the full snapshot history, so the mechanism is to list the snapshots
+    (:meth:`list_ducklake_snapshots`), pick one, and reopen the catalog on it via
+    ``DuckLakeConnector(..., snapshot_version=N)`` — the procedure spelled out by
+    :attr:`RecoveryStrategy.USE_SNAPSHOT_HISTORY`. No backup file is written, and
+    none is needed: a failed operation is already rolled back by its own DuckDB
+    transaction.
+
+    The remaining strategies (``REPAIR_SCHEMA``, ``CLEAN_ORPHANED_DATA``,
+    ``VALIDATE_AND_FIX``) repair structural or consistency issues in place, on the
+    live catalog, without touching the snapshot history.
 
     Attributes:
         conn (duckdb.DuckDBPyConnection): Database connection
-        backup_dir (Path): Directory for storing backups
+        catalog_alias (str): Alias of the attached DuckLake catalog
+        schema (str): DuckLake schema to recover
         auditor (DatabaseAuditor): Database auditor for validation
         logger: Logger instance for recovery tracking
-        max_backup_age_days (int): Maximum age for keeping backups
-        auto_backup_on_changes (bool): Whether to create automatic backups
     """
 
     # Initialisation
     def __init__(
         self,
         connection: duckdb.DuckDBPyConnection | None = None,
-        backup_dir: str | os.PathLike[str] | None = None,
-        categorical_threshold: int | None = 50,
         log_filename: str | os.PathLike[str] | None = None,
-        max_backup_age_days: int = 30,
-        auto_backup_on_changes: bool = True,
         catalog_alias: str = "db",
         schema: str = "main",
     ):
@@ -157,14 +132,7 @@ class DatabaseRecoveryManager:
             connection: DuckDB connection attached to a DuckLake catalog, obtained
                 via ``DuckLakeConnector.connect()``. If None, an in-memory connection
                 is created (for unit tests only).
-            backup_dir: Directory for storing metadata backups (JSON + CSV export of
-                the metadata table). Full-data backups are not needed here because
-                DuckLake natively persists the complete snapshot history.
-            categorical_threshold: Threshold for determining categorical variables.
             log_filename: Path to log file.
-            max_backup_age_days: Maximum age for keeping metadata backup files on disk.
-            auto_backup_on_changes: Whether to create an automatic metadata backup
-                before destructive in-place operations (e.g. REPAIR_SCHEMA).
             catalog_alias: Alias of the attached DuckLake catalog, used to query
                 available snapshots via ``ducklake_snapshots()``. Defaults to ``'db'``.
             schema: DuckLake schema to recover. Used for snapshot queries and to
@@ -173,209 +141,28 @@ class DatabaseRecoveryManager:
 
         Example:
             >>> conn = DuckLakeConnector('catalog.ducklake', 'data/').connect()
-            >>> recovery_mgr = DatabaseRecoveryManager(conn,
-            backup_dir='/path/to/backups')
+            >>> recovery_mgr = DatabaseRecoveryManager(conn, schema='predictions')
         """
         # Initialisation de la connexion DuckLake.
         self.conn = connection if connection is not None else duckdb.connect(":memory:")
         self.catalog_alias = catalog_alias
         self.schema = schema
 
-        # Configuration des répertoires
-        if backup_dir is None:
-            backup_dir = os.path.join(FILE_PATH.parents[2], "data/backups")
-
-        self.backup_dir = Path(backup_dir)
-        self.backup_dir.mkdir(parents=True, exist_ok=True)
+        # Alias de catalogue effectif : qualification par le catalogue uniquement
+        # s'il est réellement attaché (None pour les connexions in-memory des tests).
+        self._catalog = resolve_catalog(self.conn, self.catalog_alias)
 
         # Initialisation des composants
         self.auditor = DatabaseAuditor(
-            connection, categorical_threshold, log_filename, schema=schema
+            connection,
+            log_filename,
+            schema=schema,
+            catalog_alias=catalog_alias,
         )
 
-        # Initialisation du logger
-        if log_filename is None:
-            log_filename = os.path.join(
-                FILE_PATH.parents[2], "logs/database_recovery.log"
-            )
-        self.logger = _init_logger(filename=log_filename)
-
-        # Configuration
-        self.categorical_threshold = categorical_threshold
-        self.max_backup_age_days = max_backup_age_days
-        self.auto_backup_on_changes = auto_backup_on_changes
-
-        # État interne
-        self._recovery_points: dict[str, RecoveryPoint] = {}
-        self._load_existing_recovery_points()
-
-    # Méthode de qualification d'un nom de table par le schéma cible
-    def _qualified(self, table: str) -> str:
-        """Return a table name qualified by this manager's schema.
-
-        Args:
-            table: Bare table name (e.g. ``'fact_table'``).
-
-        Returns:
-            The ``'<schema>.<table>'`` identifier.
-        """
-        # Délégation à l'utilitaire central de qualification
-        return qualify_table(table, self.schema)
-
-    # Méthodes de gestion des points de récupération
-    # Méthode de création d'un point de récupération
-    def create_recovery_point(
-        self,
-        description: str = "",
-        force_validation: bool = True,
-    ) -> str | None:
-        """
-        Create a metadata recovery point with optional pre-validation.
-
-        Exports the ``metadata`` table to CSV and writes a system health snapshot
-        to JSON. For full data recovery, rely on DuckLake's native snapshot history
-        via ``USE_SNAPSHOT_HISTORY``.
-
-        Args:
-            description: Human-readable description of the recovery point.
-            force_validation: Whether to run a standard validation before backup.
-
-        Returns:
-            Recovery point ID if successful, None otherwise.
-
-        Example:
-            >>> recovery_id = recovery_mgr.create_recovery_point(
-            ...     description="Before schema repair"
-            ... )
-        """
-        try:
-            # Génération d'un ID unique
-            recovery_id = f"recovery_{int(time.time())}_{len(self._recovery_points)}"
-            # Génération d'un timestamp
-            timestamp = time.time()
-
-            # Validation préalable si demandée
-            validation_report = None
-            if force_validation:
-                validation_report = self.auditor.validate_database(
-                    ValidationLevel.STANDARD
-                )
-
-                # Vérification des issues critiques
-                if validation_report.get_critical_issues_count() > 0:
-                    self.logger.warning(
-                        f"Creating recovery point with "
-                        f"{validation_report.get_critical_issues_count()} critical"
-                        f" issues"
-                    )
-
-            # Création du répertoire de sauvegarde
-            backup_path = self.backup_dir / recovery_id
-            backup_path.mkdir(exist_ok=True)
-
-            # Seule la sauvegarde des métadonnées est supportée
-            success = self._create_metadata_backup(backup_path)
-
-            if not success:
-                # Nettoyage en cas d'échec
-                shutil.rmtree(backup_path, ignore_errors=True)
-                return None
-
-            # Création de l'objet RecoveryPoint
-            recovery_point = RecoveryPoint(
-                recovery_id=recovery_id,
-                timestamp=timestamp,
-                backup_path=str(backup_path),
-                metadata=self._collect_database_metadata(),
-                validation_report=validation_report,
-                description=description,
-            )
-
-            # Sauvegarde des informations du point de récupération
-            self._save_recovery_point_info(recovery_point)
-
-            # Ajout au cache
-            self._recovery_points[recovery_id] = recovery_point
-
-            # Nettoyage des anciens points de récupération
-            self._cleanup_old_recovery_points()
-
-            # Logging
-            self.logger.info(f"Created recovery point {recovery_id}")
-            return recovery_id
-
-        except Exception as e:
-            # Logging
-            self.logger.error(f"Error creating recovery point: {e}")
-            return None
-
-    # Méthode d'énumération des points de récupération
-    def list_recovery_points(self) -> list[RecoveryPoint]:
-        """
-        List available recovery points.
-
-        Returns:
-            List of recovery points sorted by timestamp (newest first)
-
-        Example:
-            >>> points = recovery_mgr.list_recovery_points()
-            >>> for point in points:
-            ...     print(f"{point.recovery_id}: {point.description}")
-        """
-        try:
-            # Extraction des points de récupération
-            points = list(self._recovery_points.values())
-
-            # Tri par timestamp décroissant
-            points.sort(key=lambda p: p.timestamp, reverse=True)
-
-            return points
-
-        except Exception as e:
-            # Logging
-            self.logger.error(f"Error listing recovery points: {e}")
-            return []
-
-    # Méthode de suppression d'un point de récupération
-    def delete_recovery_point(self, recovery_id: str) -> bool:
-        """
-        Delete a specific recovery point.
-
-        Args:
-            recovery_id: ID of the recovery point to delete
-
-        Returns:
-            True if deletion was successful
-
-        Example:
-            >>> success = recovery_mgr.delete_recovery_point("recovery_1234567890_0")
-        """
-        try:
-            # Impossible de supprimer un point de récupération qui n'existe pas
-            if recovery_id not in self._recovery_points:
-                # Logging
-                self.logger.error(f"Recovery point {recovery_id} not found")
-                return False
-
-            # Extraction du point de récupération à supprimer
-            recovery_point = self._recovery_points[recovery_id]
-
-            # Suppression des fichiers de sauvegarde
-            backup_path = Path(recovery_point.backup_path)
-            if backup_path.exists():
-                shutil.rmtree(backup_path, ignore_errors=True)
-
-            # Suppression du cache
-            del self._recovery_points[recovery_id]
-
-            # Logging
-            self.logger.info(f"Deleted recovery point {recovery_id}")
-            return True
-
-        except Exception as e:
-            # Logging
-            self.logger.error(f"Error deleting recovery point {recovery_id}: {e}")
-            return False
+        # Initialisation du logger nommé.
+        # Chemin par défaut centralisé dans utils.logger : <cwd>/logs/<name>.log.
+        self.logger = _init_logger(filename=log_filename, name="database_recovery")
 
     # Méthodes de récupération
     # Méthode de récupération de la base de données
@@ -396,8 +183,8 @@ class DatabaseRecoveryManager:
         Example:
             >>> op = RecoveryOperation(
             ...     strategy=RecoveryStrategy.RESTORE_BACKUP,
-            ...     target_recovery_point="recovery_1234567890_0",
-            ...     description="Restore from backup after corruption"
+            ...     target_recovery_point="17",
+            ...     description="Restore from snapshot 17 after corruption"
             ... )
             >>> result = recovery_mgr.recover_database(op, confirm_destructive=True)
         """
@@ -417,21 +204,15 @@ class DatabaseRecoveryManager:
                     error_message="Recovery operation validation failed",
                 )
 
-            # Sauvegarde automatique des métadonnées avant les opérations in-place
-            # destructrices.
-            # Les opérations sur les données sont couvertes par l'historique DuckLake.
-            if operation.strategy == RecoveryStrategy.REPAIR_SCHEMA:
-                self.create_recovery_point(
-                    description=f"Auto-backup before {operation.strategy.value}",
-                )
+            # Aucune sauvegarde applicative avant une réparation in-place :
+            # l'état antérieur reste accessible par time travel (snapshot courant
+            # relevé avant l'opération via list_ducklake_snapshots).
 
             # Exécution de la stratégie de récupération
             if operation.strategy == RecoveryStrategy.USE_SNAPSHOT_HISTORY:
                 result = self._recover_use_snapshot_history(operation)
             elif operation.strategy == RecoveryStrategy.REPAIR_SCHEMA:
                 result = self._recover_repair_schema(operation)
-            elif operation.strategy == RecoveryStrategy.REBUILD_DIMENSIONS:
-                result = self._recover_rebuild_dimensions(operation)
             elif operation.strategy == RecoveryStrategy.CLEAN_ORPHANED_DATA:
                 result = self._recover_clean_orphaned_data(operation)
             elif operation.strategy == RecoveryStrategy.VALIDATE_AND_FIX:
@@ -584,45 +365,6 @@ class DatabaseRecoveryManager:
                 error_message=str(e),
             )
 
-    # Méthodes de sauvegarde privées
-    # Méthode de sauvegarde des méta-données
-    def _create_metadata_backup(self, backup_path: Path) -> bool:
-        """Create a metadata-only backup (metadata table and system info).
-
-        Args:
-            backup_path: Directory path where metadata backup will be stored.
-
-        Returns:
-            True if backup completed successfully, False on error.
-        """
-        try:
-            # Sauvegarde de la table metadata si elle existe
-            if self._table_exists("metadata"):
-                metadata_file = backup_path / "metadata.csv"
-                export_query = (
-                    f"COPY {self._qualified('metadata')} TO '{metadata_file}'"
-                    f" (FORMAT CSV, HEADER)"
-                )
-                self.conn.execute(export_query)
-
-            # Sauvegarde des informations système
-            system_info = {
-                "database_info": self.auditor.get_quick_health_check(),
-                "timestamp": time.time(),
-            }
-
-            # Exportation dans un fichier json
-            system_file = backup_path / "system_info.json"
-            with open(system_file, "w") as f:
-                json.dump(system_info, f, indent=2, default=str)
-
-            return True
-
-        except Exception as e:
-            # Logging
-            self.logger.error(f"Error creating metadata backup: {e}")
-            return False
-
     # Méthodes de récupération spécialisées
     # Méthode de récupération par historique des snapshots DuckLake
     def _recover_use_snapshot_history(
@@ -652,14 +394,18 @@ class DatabaseRecoveryManager:
             and a step-by-step restoration guide in ``recommendations``.
         """
         try:
+            # Initialisation de la liste des opérations
             operations_performed: list[str] = []
 
-            # Interrogation de l'historique des snapshots DuckLake
+            # Interrogation de l'historique des snapshots DuckLake.
             try:
-                snapshots_df = self.conn.execute(
-                    f"SELECT * FROM {self.catalog_alias}.ducklake_snapshots"
-                    f"('{self.schema}') ORDER BY snapshot_id DESC"
-                ).pl()
+                snapshots_df = nw.from_native(
+                    self.conn.execute(
+                        f"SELECT * FROM ducklake_snapshots('{self.catalog_alias}')"
+                        " ORDER BY snapshot_id DESC"
+                    ).to_arrow_table(),
+                    eager_only=True,
+                )
             except Exception as e:
                 return RecoveryResult(
                     success=False,
@@ -669,7 +415,9 @@ class DatabaseRecoveryManager:
                     f"{e}",
                 )
 
+            # Comptage des snapshots
             snapshot_count = len(snapshots_df)
+            # Ajout à la liste des opérations
             operations_performed.append(
                 f"{snapshot_count} snapshot(s) disponible(s) dans le catalogue "
                 f"'{self.catalog_alias}.{self.schema}'"
@@ -677,6 +425,7 @@ class DatabaseRecoveryManager:
 
             # Présentation structurée de chaque snapshot avec horodatage lisible
             for row in snapshots_df.iter_rows(named=True):
+                # Extraction de l'identifiant du snapshot
                 snap_id = row.get("snapshot_id", "N/A")
                 # Récupération de l'horodatage selon le nom de colonne retourné par
                 # DuckLake
@@ -685,6 +434,7 @@ class DatabaseRecoveryManager:
                     snap_time_str = snap_time.strftime("%Y-%m-%d %H:%M:%S")
                 else:
                     snap_time_str = str(snap_time) if snap_time is not None else "N/A"
+                # Ajout à la liste des opérations
                 operations_performed.append(
                     f"  snapshot_id={snap_id}  |  {snap_time_str}"
                 )
@@ -735,10 +485,12 @@ class DatabaseRecoveryManager:
                 f" snapshot_version={suggested_id}).connect()",
                 "",
                 "Étape 2 — Lire les tables depuis cette connexion :",
-                "  fact_df = conn_old.execute('SELECT * FROM fact_table').pl()",
-                "  meta_df = conn_old.execute('SELECT * FROM metadata').pl()",
-                "  # Répéter pour chaque table de dimension :",
-                "  #   dim_df = conn_old.execute('SELECT * FROM dim_<col>').pl()",
+                "  fact_df = conn_old.execute('SELECT * FROM fact_table')"
+                ".to_arrow_table()",
+                "  meta_df = conn_old.execute('SELECT * FROM metadata')"
+                ".to_arrow_table()",
+                "  ds_df   = conn_old.execute('SELECT * FROM dataset_metadata')"
+                ".to_arrow_table()",
                 "",
                 "Étape 3 — Vider les tables du catalogue courant et réinsérer les"
                 " données :",
@@ -746,7 +498,7 @@ class DatabaseRecoveryManager:
                 "  conn.register('_restore_fact', fact_df)",
                 "  conn.execute('INSERT INTO fact_table SELECT * FROM _restore_fact')",
                 "  conn.execute('DROP VIEW _restore_fact')",
-                "  # Répéter pour metadata et chaque table de dimension",
+                "  # Répéter pour metadata et dataset_metadata",
                 "",
                 "Étape 4 — Valider l'intégrité après restauration :",
                 f"  auditor = DatabaseAuditor(conn, schema='{self.schema}')",
@@ -771,17 +523,21 @@ class DatabaseRecoveryManager:
             )
 
     # Méthode publique de consultation de l'historique des snapshots DuckLake
-    def list_ducklake_snapshots(self) -> pl.DataFrame | None:
-        """Return the full DuckLake snapshot history as a Polars DataFrame.
+    def list_ducklake_snapshots(self) -> nw.DataFrame[Any] | None:
+        """Return the full DuckLake snapshot history as a narwhals DataFrame.
 
-        Convenience wrapper around the ``ducklake_snapshots()`` table function.
-        Useful for inspecting the snapshot inventory directly before choosing a
-        ``snapshot_version`` for time-travel restoration.
+        Convenience wrapper around the ``ducklake_snapshots(catalog)`` table
+        function, and the entry point of the recovery procedure: pick a
+        ``snapshot_id`` here, then reopen the catalog on it with
+        ``DuckLakeConnector(..., snapshot_version=N)`` and copy the data back.
+        The history is catalog-wide, covering every schema it holds.
 
         Returns:
-            Polars DataFrame with one row per snapshot (columns depend on the
+            narwhals DataFrame (pyarrow backend, ``.to_native()`` gives the
+            ``pyarrow.Table``) with one row per snapshot (columns depend on the
             DuckLake version), sorted by ``snapshot_id`` descending.
-            Returns None if the catalog cannot be queried.
+            Returns None if the catalog cannot be queried (e.g. a plain in-memory
+            connection with no DuckLake catalog attached).
 
         Example:
             >>> snapshots = recovery_mgr.list_ducklake_snapshots()
@@ -789,11 +545,15 @@ class DatabaseRecoveryManager:
             ...     print(snapshots)
         """
         try:
-            return self.conn.execute(
-                f"SELECT * FROM {self.catalog_alias}.ducklake_snapshots"
-                f"('{self.schema}') ORDER BY snapshot_id DESC"
-            ).pl()
+            # Inventaire des snapshots
+            snapshots = self.conn.execute(
+                f"SELECT * FROM ducklake_snapshots('{self.catalog_alias}')"
+                " ORDER BY snapshot_id DESC"
+            ).to_arrow_table()
+            history: nw.DataFrame[Any] = nw.from_native(snapshots, eager_only=True)
+            return history
         except Exception as e:
+            # Logging d'erreur
             self.logger.error(f"Impossible de lister les snapshots DuckLake : {e}")
             return None
 
@@ -874,45 +634,15 @@ class DatabaseRecoveryManager:
                 "missing" in issue.description.lower()
                 and issue.table_name == "metadata"
             ):
-                self.conn.execute(f"""
-                    CREATE TABLE IF NOT EXISTS {self._qualified("metadata")} (
-                        name VARCHAR,
-                        label VARCHAR,
-                        python_type VARCHAR,
-                        sql_type VARCHAR,
-                        is_categorical BOOLEAN,
-                        is_primary_key BOOLEAN DEFAULT FALSE
-                    )
-                """)
+                self.conn.execute(
+                    metadata_table_ddl(self._qualified("metadata"), if_not_exists=True)
+                )
                 self.logger.info("Created missing metadata table")
                 return True
 
             # Cas 2: Colonnes manquantes dans metadata → ajout avec valeurs par défaut
             if "Missing required columns in metadata" in issue.description:
                 return self._add_missing_metadata_columns(issue)
-
-            # Cas 3: Table de dimension manquante pour colonne catégorielle
-            if (
-                "Dimension table" in issue.description
-                and "missing" in issue.description.lower()
-            ):
-                col_name = issue.column_name
-                if col_name:
-                    # Récupération des valeurs distinctes de la fact_table puis
-                    # création/mise à jour de la table de dimension.
-                    # update_dimension_values crée la table si elle n'existe pas encore.
-                    dim_mgr = DimensionManager(
-                        self.conn, self.categorical_threshold, schema=self.schema
-                    )
-                    fact_table = self._qualified("fact_table")
-                    values_pl = self.conn.execute(
-                        f"SELECT DISTINCT {col_name} FROM {fact_table}"
-                        f" WHERE {col_name} IS NOT NULL"
-                    ).pl()[col_name]
-                    values_nw = nw.from_native(values_pl, series_only=True)
-                    dim_mgr.update_dimension_values(col_name, values_nw)
-                    self.logger.info(f"Created missing dimension table for {col_name}")
-                    return True
 
             # Autres cas: pas de fix automatique possible
             return False
@@ -934,14 +664,7 @@ class DatabaseRecoveryManager:
         """
         try:
             # Colonnes requises pour la table metadata
-            required_columns = {
-                "name": "VARCHAR",
-                "label": "VARCHAR",
-                "python_type": "VARCHAR",
-                "sql_type": "VARCHAR",
-                "is_categorical": "BOOLEAN",
-                "is_primary_key": "BOOLEAN DEFAULT FALSE",
-            }
+            required_columns = METADATA_COLUMNS
 
             # Nom qualifié de la table de métadonnées
             metadata_table = self._qualified("metadata")
@@ -958,7 +681,8 @@ class DatabaseRecoveryManager:
             for col_name, col_type in required_columns.items():
                 if col_name not in existing_columns:
                     self.conn.execute(
-                        f"ALTER TABLE {metadata_table} ADD COLUMN {col_name} {col_type}"
+                        f"ALTER TABLE {metadata_table} ADD COLUMN"
+                        f" {quote_ident(col_name)} {col_type}"
                     )
                     self.logger.info(
                         f"Added missing column {col_name} to metadata table"
@@ -969,103 +693,6 @@ class DatabaseRecoveryManager:
         except Exception as e:
             self.logger.error(f"Error adding missing metadata columns: {e}")
             return False
-
-    # Méthode de reconstruction des tables de dimension corrompues
-    def _recover_rebuild_dimensions(
-        self, operation: RecoveryOperation
-    ) -> RecoveryResult:
-        """Recover by rebuilding corrupted dimension tables.
-
-        Cleans orphaned entries, recreates missing tables, and synchronizes
-        dimension values with fact table data.
-
-        Args:
-            operation: Recovery operation parameters.
-
-        Returns:
-            RecoveryResult with details of dimension table repairs.
-        """
-        try:
-            # Initialisation de la liste des opérations réalisées
-            operations_performed = []
-
-            # Reconstruction des tables de dimension corrompues
-            # Initialisation du gestionnaire des dimensions
-            dim_mgr = DimensionManager(
-                self.conn, self.categorical_threshold, schema=self.schema
-            )
-
-            # Étape 1: Nettoyage des entrées orphelines
-            cleaned = dim_mgr.cleanup_orphaned_dimension_entries()
-            # Parcours des résultats du nettoyage
-            for dim_name, count in cleaned.items():
-                if count > 0:
-                    operations_performed.append(
-                        f"Cleaned {count} orphaned entries from {dim_name}"
-                    )
-
-            # Étape 2: Reconstruction des tables de dimension manquantes
-            try:
-                metadata = self.conn.execute(
-                    f"SELECT name, is_categorical FROM {self._qualified('metadata')}"
-                ).pl()
-                categorical_cols = metadata.filter(pl.col("is_categorical"))[
-                    "name"
-                ].to_list()
-
-                for col_name in categorical_cols:
-                    dim_table = f"dim_{col_name}"
-                    if not self._table_exists(dim_table):
-                        # Recréation de la table de dimension à partir de la fact_table.
-                        # update_dimension_values crée la table si elle n'existe pas.
-                        values_pl = self.conn.execute(
-                            f"SELECT DISTINCT {col_name} FROM"
-                            f" {self._qualified('fact_table')} WHERE"
-                            f" {col_name} IS NOT NULL"
-                        ).pl()[col_name]
-                        values_nw = nw.from_native(values_pl, series_only=True)
-                        added = dim_mgr.update_dimension_values(col_name, values_nw)
-                        operations_performed.append(
-                            f"Recreated {dim_table} with {added} values"
-                        )
-            except Exception as e:
-                operations_performed.append(f"Error rebuilding missing tables: {e}")
-
-            # Étape 3: Synchronisation des entrées manquantes dans les tables existantes
-            try:
-                for col_name in categorical_cols:
-                    dim_table = f"dim_{col_name}"
-                    if self._table_exists(dim_table):
-                        # Ajout des valeurs de fact_table manquantes dans dimension
-                        fact_values = self.conn.execute(
-                            f"SELECT DISTINCT {col_name} FROM"
-                            f" {self._qualified('fact_table')} WHERE"
-                            f" {col_name} IS NOT NULL"
-                        ).pl()[col_name]
-                        added = dim_mgr.update_dimension_values(col_name, fact_values)
-                        if added > 0:
-                            operations_performed.append(
-                                f"Added {added} missing entries to {dim_table}"
-                            )
-            except Exception as e:
-                operations_performed.append(f"Error syncing dimension entries: {e}")
-
-            operations_performed.append("Dimension table reconstruction completed")
-
-            return RecoveryResult(
-                success=True,
-                strategy_used=operation.strategy,
-                recovery_time=0,
-                operations_performed=operations_performed,
-            )
-
-        except Exception as e:
-            return RecoveryResult(
-                success=False,
-                strategy_used=operation.strategy,
-                recovery_time=0,
-                error_message=str(e),
-            )
 
     # Méthode de nettoyage des données orphelines
     def _recover_clean_orphaned_data(
@@ -1090,13 +717,13 @@ class DatabaseRecoveryManager:
             # Utilisation du deleter pour nettoyer
             deleter = DatabaseDeleter(
                 self.conn,
-                self.categorical_threshold,
                 enable_validation=False,
                 auto_cleanup=True,
                 schema=self.schema,
+                catalog_alias=self.catalog_alias,
             )
             # Nettoyage de la base de données
-            cleanup_results = deleter.cleanup_database(comprehensive=True)
+            cleanup_results = deleter.cleanup_database()
             # Parcours des résultats
             for category, result in cleanup_results.items():
                 if result:
@@ -1147,16 +774,7 @@ class DatabaseRecoveryManager:
             for issue in validation_report.issues:
                 try:
                     # Correction basée sur le type d'issue
-                    if issue.issue_type.value == "orphaned_reference":
-                        # Nettoyage des références orphelines
-                        cleaned = self._cleanup_orphaned_references_for_issue(issue)
-                        if cleaned:
-                            operations_performed.append(
-                                f"Fixed orphaned references: {issue.description}"
-                            )
-                            fixed_count += 1
-
-                    elif issue.issue_type.value == "data_integrity":
+                    if issue.issue_type.value == "data_integrity":
                         # Correction des problèmes d'intégrité des données
                         if "null values" in issue.description.lower():
                             fixed = self._fix_null_value_issue(issue)
@@ -1172,15 +790,6 @@ class DatabaseRecoveryManager:
                         if fixed:
                             operations_performed.append(
                                 f"Fixed missing metadata: {issue.description}"
-                            )
-                            fixed_count += 1
-
-                    elif issue.issue_type.value == "invalid_dimension":
-                        # Correction des problèmes de dimension invalide
-                        fixed = self._fix_invalid_dimension_issue(issue)
-                        if fixed:
-                            operations_performed.append(
-                                f"Fixed invalid dimension: {issue.description}"
                             )
                             fixed_count += 1
 
@@ -1264,15 +873,9 @@ class DatabaseRecoveryManager:
                 )
                 return False
 
-            # Vérification du point de récupération si nécessaire
-            if operation.target_recovery_point:
-                if operation.target_recovery_point not in self._recovery_points:
-                    # Logging
-                    self.logger.error(
-                        f"Target recovery point {operation.target_recovery_point} not"
-                        f" found"
-                    )
-                    return False
+            # L'existence du snapshot cible est vérifiée par la stratégie
+            # elle-même (_recover_use_snapshot_history), qui dispose de
+            # l'historique complet.
 
             return True
 
@@ -1321,7 +924,6 @@ class DatabaseRecoveryManager:
                 return RecoveryStrategy.VALIDATE_AND_FIX
 
             dominant_issue = sorted_issues[0][0]
-            dominant_score = sorted_issues[0][1]["score"]
             critical_count = validation_report.get_critical_issues_count()
 
             # Stratégie basée sur le problème dominant avec seuils de gravité
@@ -1332,8 +934,6 @@ class DatabaseRecoveryManager:
 
             # Mapping type de problème → stratégie avec prise en compte du score
             strategy_mapping = {
-                "orphaned_reference": RecoveryStrategy.CLEAN_ORPHANED_DATA,
-                "invalid_dimension": RecoveryStrategy.REBUILD_DIMENSIONS,
                 "schema_inconsistency": RecoveryStrategy.REPAIR_SCHEMA
                 if allow_destructive
                 else RecoveryStrategy.VALIDATE_AND_FIX,
@@ -1342,14 +942,6 @@ class DatabaseRecoveryManager:
                 "type_mismatch": RecoveryStrategy.VALIDATE_AND_FIX,
                 "constraint_violation": RecoveryStrategy.VALIDATE_AND_FIX,
             }
-
-            # Si le score dominant est élevé (>= 8), considérer une stratégie plus
-            # agressive
-            if dominant_score >= 8 and allow_destructive:
-                if dominant_issue == "schema_inconsistency":
-                    return RecoveryStrategy.REPAIR_SCHEMA
-                elif dominant_issue in ["invalid_dimension", "orphaned_reference"]:
-                    return RecoveryStrategy.REBUILD_DIMENSIONS
 
             return strategy_mapping.get(
                 dominant_issue, RecoveryStrategy.VALIDATE_AND_FIX
@@ -1360,219 +952,7 @@ class DatabaseRecoveryManager:
             self.logger.error(f"Error determining recovery strategy: {e}")
             return None
 
-    # Méthode auxiliaire de collecte des méta données d ela base
-    def _collect_database_metadata(self) -> dict[str, Any]:
-        """Collect database metadata for recovery point creation.
-
-        Returns:
-            Dictionary containing timestamp, tables list, and health check info.
-        """
-        try:
-            metadata = {
-                "timestamp": time.time(),
-                "tables": self._get_all_tables(),
-                "health_check": {},
-            }
-
-            # Ajout des informations de santé
-            try:
-                metadata["health_check"] = self.auditor.get_quick_health_check()
-            except Exception:
-                metadata["health_check"] = {"status": "unknown"}
-
-            return metadata
-
-        except Exception as e:
-            # Logging
-            self.logger.error(f"Error collecting database metadata: {e}")
-            return {"error": str(e)}
-
-    # Méthode auxiliaire d'extraction de l'ensemble des tables de la base de données
-    def _get_all_tables(self) -> list[str]:
-        """Get list of all tables in the database.
-
-        Returns:
-            List of table names, empty list on error.
-        """
-        try:
-            # Exécution de la requête, filtrée sur le schéma cible
-            result = self.conn.execute(
-                "SELECT table_name FROM information_schema.tables "
-                "WHERE table_schema = ?",
-                [self.schema],
-            ).fetchall()
-            return [row[0] for row in result]
-        except Exception:
-            return []
-
-    # Méthode auxiliaire de vérification de l'existence d'une table dans la base de
-    # données
-    def _table_exists(self, table_name: str) -> bool:
-        """Check if a (bare-named) table exists in the recovered schema.
-
-        Args:
-            table_name: Bare name of the table to check.
-
-        Returns:
-            True if table exists, False otherwise.
-        """
-        try:
-            # Exécution de la requête (table qualifiée par le schéma)
-            self.conn.execute(f"SELECT 1 FROM {self._qualified(table_name)} LIMIT 1")
-            return True
-        except Exception:
-            return False
-
-    # Méthode de sauvegarde des informations d'un point de récupération
-    def _save_recovery_point_info(self, recovery_point: RecoveryPoint) -> None:
-        """Save recovery point information to disk.
-
-        Args:
-            recovery_point: RecoveryPoint object to serialize and save.
-        """
-        try:
-            # Identification du chemin
-            info_file = Path(recovery_point.backup_path) / "recovery_point.json"
-
-            # Sérialisation des données
-            data = {
-                "recovery_id": recovery_point.recovery_id,
-                "timestamp": recovery_point.timestamp,
-                "backup_path": recovery_point.backup_path,
-                "metadata": recovery_point.metadata,
-                "description": recovery_point.description,
-                "validation_report_summary": {
-                    "total_issues": len(recovery_point.validation_report.issues)
-                    if recovery_point.validation_report
-                    else 0,
-                    "critical_issues": (
-                        recovery_point.validation_report.get_critical_issues_count()
-                    )
-                    if recovery_point.validation_report
-                    else 0,
-                }
-                if recovery_point.validation_report
-                else None,
-            }
-            # Exportation en json
-            with open(info_file, "w") as f:
-                json.dump(data, f, indent=2, default=str)
-
-        except Exception as e:
-            # Logging
-            self.logger.error(f"Error saving recovery point info: {e}")
-
-    # Méthode de chargement des points de récupération existants
-    def _load_existing_recovery_points(self) -> None:
-        """Load existing recovery points from backup directory."""
-        try:
-            # Vérification que le répertoire existe
-            if not self.backup_dir.exists():
-                return
-
-            # Parcours des répertoires
-            for backup_dir in self.backup_dir.iterdir():
-                if backup_dir.is_dir():
-                    # Idnetification du chemin
-                    info_file = backup_dir / "recovery_point.json"
-                    # Extraction des informations
-                    if info_file.exists():
-                        try:
-                            # Chargement du json
-                            with open(info_file) as f:
-                                data = json.load(f)
-
-                            # Reconstruction de l'objet RecoveryPoint
-                            recovery_point = RecoveryPoint(
-                                recovery_id=data["recovery_id"],
-                                timestamp=data["timestamp"],
-                                backup_path=data["backup_path"],
-                                metadata=data.get("metadata", {}),
-                                description=data.get("description", ""),
-                            )
-                            # Ajout aux points de sauvegarde
-                            self._recovery_points[recovery_point.recovery_id] = (
-                                recovery_point
-                            )
-
-                        except Exception as e:
-                            # Logging
-                            self.logger.warning(
-                                f"Error loading recovery point from {backup_dir}: {e}"
-                            )
-            # Logging
-            self.logger.info(
-                f"Loaded {len(self._recovery_points)} existing recovery points"
-            )
-
-        except Exception as e:
-            # Logging
-            self.logger.error(f"Error loading existing recovery points: {e}")
-
-    # Méthode auxiliaire de nettoyage des anciens points de récupération
-    def _cleanup_old_recovery_points(self) -> None:
-        """Clean up recovery points older than max_backup_age_days."""
-        try:
-            # Détermination du moment à partir duquel supprimer des points de sauvegarde
-            cutoff_time = time.time() - (self.max_backup_age_days * 24 * 60 * 60)
-            # Détermination des points de sauvegarde à supprimer
-            old_points = [
-                rp
-                for rp in self._recovery_points.values()
-                if rp.timestamp < cutoff_time
-            ]
-
-            # Suppression des points
-            for recovery_point in old_points:
-                self.delete_recovery_point(recovery_point.recovery_id)
-
-            if old_points:
-                # Logging
-                self.logger.info(f"Cleaned up {len(old_points)} old recovery points")
-
-        except Exception as e:
-            # Logging
-            self.logger.error(f"Error cleaning up old recovery points: {e}")
-
-    def _cleanup_orphaned_references_for_issue(self, issue: ValidationIssue) -> bool:
-        """
-        Clean orphaned references for a specific issue.
-
-        Args:
-            issue: The validation issue to fix
-
-        Returns:
-            True if cleanup was successful
-        """
-        try:
-            col_name = issue.column_name
-            if not col_name:
-                return False
-
-            # Noms qualifiés par le schéma
-            fact_table = self._qualified("fact_table")
-            dim_table = self._qualified(f"dim_{col_name}")
-
-            if issue.table_name == "fact_table":
-                # Références orphelines dans fact_table → mettre à NULL
-                self.conn.execute(f"""
-                    UPDATE {fact_table} SET {col_name} = NULL
-                    WHERE {col_name} NOT IN (SELECT value FROM {dim_table})
-                """)
-            else:
-                # Entrées orphelines dans dimension → supprimer
-                self.conn.execute(f"""
-                    DELETE FROM {dim_table}
-                    WHERE value NOT IN (SELECT DISTINCT {col_name} FROM {fact_table}
-                    WHERE {col_name} IS NOT NULL)
-                """)
-
-            return True
-
-        except Exception as e:
-            self.logger.error(f"Failed to cleanup orphaned references: {e}")
-            return False
-
+    # Méthode auxiliaire de correction d'un problème de valeur nulle
     def _fix_null_value_issue(self, issue: ValidationIssue) -> bool:
         """
         Fix null value issues by deleting affected rows.
@@ -1598,7 +978,9 @@ class DatabaseRecoveryManager:
             initial_count = _r1[0] if _r1 is not None else 0
 
             # Suppression des lignes contenant des valeurs nulles
-            self.conn.execute(f"DELETE FROM {fact_table} WHERE {col_name} IS NULL")
+            self.conn.execute(
+                f"DELETE FROM {fact_table} WHERE {quote_ident(col_name)} IS NULL"
+            )
 
             # Comptage des lignes après suppression
             _r2 = self.conn.execute(f"SELECT COUNT(*) FROM {fact_table}").fetchone()
@@ -1640,13 +1022,12 @@ class DatabaseRecoveryManager:
                     self.conn.execute(
                         f"""
                         INSERT INTO {self._qualified("metadata")} (name, label,
-                        python_type, sql_type, is_categorical, is_primary_key)
-                        VALUES (?, ?, ?, ?, FALSE, FALSE)
+                        sql_type, is_categorical, is_primary_key)
+                        VALUES (?, ?, ?, FALSE, FALSE)
                     """,
                         [
                             col_name,
                             col_name.replace("_", " ").title(),
-                            "object",
                             sql_type,
                         ],
                     )
@@ -1671,61 +1052,7 @@ class DatabaseRecoveryManager:
             self.logger.error(f"Failed to fix missing metadata: {e}")
             return False
 
-    def _fix_invalid_dimension_issue(self, issue: ValidationIssue) -> bool:
-        """
-        Fix invalid dimension table issues.
-
-        Args:
-            issue: The validation issue to fix
-
-        Returns:
-            True if fix was applied successfully
-        """
-        try:
-            col_name = issue.column_name
-            if not col_name:
-                return False
-
-            # Nom nu (pour _table_exists) et nom qualifié (pour le SQL)
-            dim_name = f"dim_{col_name}"
-            dim_table = self._qualified(dim_name)
-            fact_table = self._qualified("fact_table")
-            dim_mgr = DimensionManager(
-                self.conn, self.categorical_threshold, schema=self.schema
-            )
-
-            # Cas 1: Table de dimension manquante → création
-            # update_dimension_values crée la table si elle n'existe pas.
-            if "missing" in issue.description.lower():
-                values_pl = self.conn.execute(
-                    f"SELECT DISTINCT {col_name} FROM {fact_table} WHERE {col_name} IS"
-                    f" NOT NULL"
-                ).pl()[col_name]
-                dim_mgr.update_dimension_values(
-                    col_name, nw.from_native(values_pl, series_only=True)
-                )
-                self.logger.info(f"Created missing dimension table {dim_table}")
-                return True
-
-            # Cas 2: Table de dimension corrompue → reconstruction
-            if self._table_exists(dim_name):
-                self.conn.execute(f"DROP TABLE {dim_table}")
-                values_pl = self.conn.execute(
-                    f"SELECT DISTINCT {col_name} FROM {fact_table} WHERE {col_name} IS"
-                    f" NOT NULL"
-                ).pl()[col_name]
-                dim_mgr.update_dimension_values(
-                    col_name, nw.from_native(values_pl, series_only=True)
-                )
-                self.logger.info(f"Rebuilt corrupted dimension table {dim_table}")
-                return True
-
-            return False
-
-        except Exception as e:
-            self.logger.error(f"Failed to fix invalid dimension: {e}")
-            return False
-
+    # Méthode de correction d'une incohérence de typage
     def _fix_type_mismatch_issue(self, issue: ValidationIssue) -> bool:
         """
         Fix type mismatch issues by casting or widening column type.
@@ -1741,26 +1068,37 @@ class DatabaseRecoveryManager:
             if not col_name:
                 return False
 
-            # Élargissement du type vers le type le moins restrictif (généralement
-            # VARCHAR)
-            # Note: DuckDB ne supporte pas ALTER COLUMN TYPE directement, donc
-            # recréation nécessaire
+            # Alignement de la méta-donnée sur le type physique réel de la colonne.
+            # La table des faits fait foi : écrire un type arbitraire dans metadata
+            # fabriquerait précisément l'incohérence que l'auditeur signale.
+            structure = self.conn.execute(
+                f"DESCRIBE {self._qualified('fact_table')}"
+            ).fetchall()
+            col_info = next((row for row in structure if row[0] == col_name), None)
+            if col_info is None:
+                return False
+            actual_sql_type = col_info[1]
+
             self.conn.execute(
                 f"""
                 UPDATE {self._qualified("metadata")}
-                SET sql_type = 'VARCHAR', python_type = 'object'
+                SET sql_type = ?
                 WHERE name = ?
             """,
-                [col_name],
+                [actual_sql_type, col_name],
             )
 
-            self.logger.info(f"Updated type for column {col_name} to VARCHAR")
+            self.logger.info(
+                f"Aligned metadata type for column {col_name} on"
+                f" fact_table ({actual_sql_type})"
+            )
             return True
 
         except Exception as e:
             self.logger.error(f"Failed to fix type mismatch: {e}")
             return False
 
+    # Méthode de correction d'une violation de contrainte sur les données
     def _fix_constraint_violation_issue(self, issue: ValidationIssue) -> bool:
         """
         Fix constraint violation issues (e.g., remove duplicates).

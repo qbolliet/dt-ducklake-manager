@@ -98,7 +98,7 @@ def test_validation_report_get_issues_by_severity(empty_report: Any) -> None:
     )
     empty_report.add_issue(
         ValidationIssue(
-            IssueType.ORPHANED_REFERENCE, IssueSeverity.CRITICAL, "dim_category"
+            IssueType.MISSING_METADATA, IssueSeverity.CRITICAL, "dataset_metadata"
         )
     )
 
@@ -125,15 +125,15 @@ def test_validation_report_get_issues_by_type(empty_report: Any) -> None:
     )
     empty_report.add_issue(
         ValidationIssue(
-            IssueType.ORPHANED_REFERENCE, IssueSeverity.MEDIUM, "dim_status"
+            IssueType.MISSING_METADATA, IssueSeverity.MEDIUM, "dataset_metadata"
         )
     )
 
     # Vérification du filtrage par type DATA_INTEGRITY
     data_issues = empty_report.get_issues_by_type(IssueType.DATA_INTEGRITY)
     assert len(data_issues) == 2
-    orphan_issues = empty_report.get_issues_by_type(IssueType.ORPHANED_REFERENCE)
-    assert len(orphan_issues) == 1
+    metadata_issues = empty_report.get_issues_by_type(IssueType.MISSING_METADATA)
+    assert len(metadata_issues) == 1
 
 
 # Test du comptage des problèmes critiques
@@ -264,10 +264,24 @@ def test_database_auditor_initialization_with_connection(
         built_ducklake_schema: Fixture providing a DuckDB connection with a built
         schema.
     """
-    auditor = DatabaseAuditor(
-        connection=built_ducklake_schema, categorical_threshold=10
-    )
+    auditor = DatabaseAuditor(connection=built_ducklake_schema)
     assert auditor is not None
+
+
+# Test que l'alias du catalogue est conservé au même titre que le schéma
+def test_database_auditor_catalog_alias(built_ducklake_schema: Any) -> None:
+    """Test that ``catalog_alias`` defaults to 'db' and is stored when provided.
+
+    Args:
+        built_ducklake_schema: Fixture providing a DuckDB connection with a built
+        schema.
+    """
+    assert DatabaseAuditor(connection=built_ducklake_schema).catalog_alias == "db"
+    custom = DatabaseAuditor(
+        connection=built_ducklake_schema, schema="predictions", catalog_alias="my_lake"
+    )
+    assert custom.catalog_alias == "my_lake"
+    assert custom.schema == "predictions"
 
 
 # Test de validate_database au niveau BASIC
@@ -448,31 +462,127 @@ def test_validate_ducklake_maintenance_silent_on_in_memory(
     assert len(report.issues) == 0
 
 
-# Test de la correction du filtre python_type dans _validate_categorical_thresholds
-def test_validate_categorical_thresholds_detects_string_columns_with_low_cardinality(
-    built_ducklake_schema: Any,
-) -> None:
-    """Test that _validate_categorical_thresholds correctly identifies non-categorical
-    String columns using the Narwhals type name 'String' (not pandas 'object').
-
-    With categorical_threshold=10, 'high_cardinality' (5 unique values, not marked
-    categorical) should be flagged as a potential categorical column.
+# Test que _validate_dataset_metadata signale une table absente
+def test_validate_dataset_metadata_missing_table(built_ducklake_schema: Any) -> None:
+    """Test that a missing dataset_metadata table is reported.
 
     Args:
         built_ducklake_schema: Fixture providing a DuckDB connection with a built
         schema.
     """
-    # Utilisation d'un seuil supérieur aux 5 valeurs uniques de high_cardinality pour
-    # déclencher la détection
-    auditor = DatabaseAuditor(
-        connection=built_ducklake_schema, categorical_threshold=10
+    # Suppression de la table descriptive du jeu de résultats
+    built_ducklake_schema.execute("DROP TABLE dataset_metadata")
+
+    auditor = DatabaseAuditor(connection=built_ducklake_schema)
+    report = ValidationReport(validation_level=ValidationLevel.BASIC)
+
+    auditor._validate_dataset_metadata(report)
+
+    issues = report.get_issues_by_type(IssueType.MISSING_METADATA)
+    assert len(issues) == 1
+    assert issues[0].table_name == "dataset_metadata"
+
+
+# Test que _validate_dataset_metadata accepte une table à une seule ligne
+def test_validate_dataset_metadata_single_row(built_ducklake_schema: Any) -> None:
+    """Test that a well-formed dataset_metadata table raises no issue.
+
+    Args:
+        built_ducklake_schema: Fixture providing a DuckDB connection with a built
+        schema.
+    """
+    auditor = DatabaseAuditor(connection=built_ducklake_schema)
+    report = ValidationReport(validation_level=ValidationLevel.BASIC)
+
+    auditor._validate_dataset_metadata(report)
+
+    assert len(report.issues) == 0
+    assert "dataset_metadata" in report.tables_validated
+
+
+# Test que _validate_dataset_metadata signale une cardinalité anormale
+def test_validate_dataset_metadata_extra_row(built_ducklake_schema: Any) -> None:
+    """Test that a dataset_metadata table holding more than one row is reported.
+
+    Args:
+        built_ducklake_schema: Fixture providing a DuckDB connection with a built
+        schema.
+    """
+    # Ajout d'une seconde ligne descriptive, ce que le schéma interdit
+    built_ducklake_schema.execute(
+        "INSERT INTO dataset_metadata (schema_version) VALUES (1)"
     )
-    report = ValidationReport(validation_level=ValidationLevel.COMPREHENSIVE)
 
-    auditor._validate_categorical_thresholds(report)
+    auditor = DatabaseAuditor(connection=built_ducklake_schema)
+    report = ValidationReport(validation_level=ValidationLevel.BASIC)
 
-    # Vérification que la colonne 'high_cardinality' est détectée comme potentiellement
-    # catégorielle
-    perf_issues = report.get_issues_by_type(IssueType.PERFORMANCE_ISSUE)
-    column_names = [issue.column_name for issue in perf_issues]
-    assert "high_cardinality" in column_names
+    auditor._validate_dataset_metadata(report)
+
+    issues = report.get_issues_by_type(IssueType.MISSING_METADATA)
+    assert len(issues) == 1
+    assert issues[0].affected_rows == 2
+
+
+# Test que _validate_metadata_fact_consistency détecte une colonne non décrite
+def test_validate_metadata_fact_consistency_detects_undescribed_column(
+    built_ducklake_schema: Any,
+) -> None:
+    """Test that a fact table column without a metadata row is reported.
+
+    Args:
+        built_ducklake_schema: Fixture providing a DuckDB connection with a built
+        schema.
+    """
+    # Ajout d'une colonne à la table des faits sans ligne de méta-données
+    built_ducklake_schema.execute("ALTER TABLE fact_table ADD COLUMN ghost VARCHAR")
+
+    auditor = DatabaseAuditor(connection=built_ducklake_schema)
+    report = ValidationReport(validation_level=ValidationLevel.STANDARD)
+
+    auditor._validate_metadata_fact_consistency(report)
+
+    issues = report.get_issues_by_type(IssueType.MISSING_METADATA)
+    assert [issue.column_name for issue in issues] == ["ghost"]
+
+
+# Test que _validate_metadata_fact_consistency détecte une méta-donnée orpheline
+def test_validate_metadata_fact_consistency_detects_orphan_metadata(
+    built_ducklake_schema: Any,
+) -> None:
+    """Test that a metadata row without a fact table column is reported.
+
+    Args:
+        built_ducklake_schema: Fixture providing a DuckDB connection with a built
+        schema.
+    """
+    # Ajout d'une ligne de méta-données sans colonne correspondante
+    built_ducklake_schema.execute(
+        "INSERT INTO metadata (name, label, sql_type, is_categorical, is_primary_key)"
+        " VALUES ('ghost', 'Ghost', 'VARCHAR', FALSE, FALSE)"
+    )
+
+    auditor = DatabaseAuditor(connection=built_ducklake_schema)
+    report = ValidationReport(validation_level=ValidationLevel.STANDARD)
+
+    auditor._validate_metadata_fact_consistency(report)
+
+    issues = report.get_issues_by_type(IssueType.SCHEMA_INCONSISTENCY)
+    assert [issue.column_name for issue in issues] == ["ghost"]
+
+
+# Test que _validate_metadata_fact_consistency ne signale rien sur un schéma sain
+def test_validate_metadata_fact_consistency_clean_schema(
+    built_ducklake_schema: Any,
+) -> None:
+    """Test that a freshly built schema raises no consistency issue.
+
+    Args:
+        built_ducklake_schema: Fixture providing a DuckDB connection with a built
+        schema.
+    """
+    auditor = DatabaseAuditor(connection=built_ducklake_schema)
+    report = ValidationReport(validation_level=ValidationLevel.STANDARD)
+
+    auditor._validate_metadata_fact_consistency(report)
+
+    assert len(report.issues) == 0

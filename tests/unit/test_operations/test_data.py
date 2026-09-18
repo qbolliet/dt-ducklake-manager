@@ -9,7 +9,7 @@ import polars as pl
 import pytest
 
 # Module du package à tester
-from dt_ducklake_manager._internal.managers.data import DataManager
+from dt_ducklake_manager.operations._data import DataManager
 
 # ---------------------------------------------------------------------------
 # Fixtures locales
@@ -87,6 +87,15 @@ def test_data_manager_initialization(built_ducklake_schema: Any) -> None:
     mgr = DataManager(connection=built_ducklake_schema, batch_size=500)
     assert mgr is not None
     assert mgr.batch_size == 500
+
+    # Alias du catalogue : défaut 'db', valeur explicite conservée
+    assert mgr.catalog_alias == "db"
+    assert (
+        DataManager(
+            connection=built_ducklake_schema, catalog_alias="my_lake"
+        ).catalog_alias
+        == "my_lake"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -231,3 +240,117 @@ def test_delete_rows_all(data_manager: Any, built_ducklake_schema: Any) -> None:
     ]
     assert after == 0
     assert deleted == before
+
+
+# ---------------------------------------------------------------------------
+# Tests de _cluster_by_order_clause() et du tri des lots (§5.3)
+# ---------------------------------------------------------------------------
+
+
+# Test que _cluster_by_order_clause reprend cluster_by tel que persisté
+def test_cluster_by_order_clause_uses_persisted_value(data_manager: Any) -> None:
+    """Test that the ORDER BY clause reflects dataset_metadata.cluster_by.
+
+    Args:
+        data_manager: DataManager fixture (built with primary_keys=['id'], so
+            cluster_by defaults to ['id']).
+    """
+    clause = data_manager._cluster_by_order_clause(["id", "category", "value"])
+    assert clause == 'ORDER BY "id"'
+
+
+# Test que _cluster_by_order_clause ne conserve que les colonnes du lot
+def test_cluster_by_order_clause_filters_to_batch_columns(data_manager: Any) -> None:
+    """Test that columns absent from the batch are dropped from the ORDER BY.
+
+    Args:
+        data_manager: DataManager fixture.
+    """
+    data_manager.update_cluster_by(["category", "id"])
+    # Lot ne portant que 'id' (ex. add_columns partiel) : seule 'id' doit apparaître,
+    # dans l'ordre de cluster_by
+    clause = data_manager._cluster_by_order_clause(["id", "value"])
+    assert clause == 'ORDER BY "id"'
+    # Lot sans aucune colonne de cluster_by : pas de tri
+    assert data_manager._cluster_by_order_clause(["value"]) == ""
+
+
+# Test que _cluster_by_order_clause retourne "" sans cluster_by défini
+def test_cluster_by_order_clause_empty_without_cluster_by(
+    built_ducklake_schema: Any,
+) -> None:
+    """Test that the clause is empty when dataset_metadata.cluster_by is NULL.
+
+    Args:
+        built_ducklake_schema: DuckDB connection with a built schema.
+    """
+    built_ducklake_schema.execute("UPDATE dataset_metadata SET cluster_by = NULL")
+    mgr = DataManager(connection=built_ducklake_schema, categorical_threshold=4)
+    assert mgr._cluster_by_order_clause(["id", "value"]) == ""
+
+
+# Test que insert_data trie effectivement le lot selon cluster_by
+def test_insert_data_sorts_batch_by_cluster_by(
+    data_manager: Any, built_ducklake_schema: Any
+) -> None:
+    """Test that a batch inserted out of order lands sorted by cluster_by.
+
+    Args:
+        data_manager: DataManager fixture.
+        built_ducklake_schema: DuckDB connection.
+    """
+    data_manager.update_cluster_by(["value"])
+    # Lot volontairement non trié sur 'value'
+    out_of_order = pl.DataFrame(
+        {
+            "id": [90, 91, 92],
+            "category": ["A", "B", "A"],
+            "value": [9.0, 5.0, 7.0],
+            "date": pl.date_range(
+                datetime(2024, 7, 1), datetime(2024, 7, 3), "1d", eager=True
+            ),
+            "status": ["active", "active", "active"],
+            "high_cardinality": ["val_900", "val_901", "val_902"],
+        }
+    )
+    data_manager.insert_data(out_of_order, use_batch=False)
+
+    # Les trois nouvelles lignes, lues sans tri explicite, doivent apparaître dans
+    # l'ordre d'insertion physique : croissant sur value
+    rows = built_ducklake_schema.execute(
+        "SELECT value FROM fact_table WHERE id IN (90, 91, 92)"
+    ).fetchall()
+    values = [r[0] for r in rows]
+    assert values == sorted(values)
+
+
+# Test que upsert_data trie les lignes nouvellement insérées selon cluster_by
+def test_upsert_data_sorts_new_rows_by_cluster_by(
+    data_manager: Any, built_ducklake_schema: Any
+) -> None:
+    """Test that upsert_data sorts the newly-inserted rows by cluster_by.
+
+    Args:
+        data_manager: DataManager fixture.
+        built_ducklake_schema: DuckDB connection.
+    """
+    data_manager.update_cluster_by(["value"])
+    out_of_order = pl.DataFrame(
+        {
+            "id": [95, 96, 97],
+            "category": ["A", "B", "A"],
+            "value": [9.5, 5.5, 7.5],
+            "date": pl.date_range(
+                datetime(2024, 7, 5), datetime(2024, 7, 7), "1d", eager=True
+            ),
+            "status": ["active", "active", "active"],
+            "high_cardinality": ["val_950", "val_951", "val_952"],
+        }
+    )
+    data_manager.upsert_data(out_of_order, merge_keys=["id"], use_batch=False)
+
+    rows = built_ducklake_schema.execute(
+        "SELECT value FROM fact_table WHERE id IN (95, 96, 97)"
+    ).fetchall()
+    values = [r[0] for r in rows]
+    assert values == sorted(values)

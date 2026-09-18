@@ -9,7 +9,6 @@ license = "MIT"
 dependencies = [
     "duckdb>=1.5.3,<2",
     "narwhals>=2.21.2,<3",
-    "polars>=1.39.3,<2",
     "psycopg2>=2.9.12",
     "pyarrow>=23.0.1",
 ]
@@ -19,6 +18,7 @@ dev = [
     "ipykernel>=7.2.0",
     "mypy>=2.1.0",
     "pandas>=3.0.3",
+    "polars>=1.39.3,<2",
     "pre-commit>=4.6.0",
     "pytest>=8.3.4",
     "ruff>=0.15.14",
@@ -60,6 +60,8 @@ ignore_missing_imports = true
 [[tool.mypy.overrides]]
 module = "tests.*"
 disallow_untyped_decorators = false
+# fetchone()[0] sur un COUNT(*) ou une ligne fraîchement insérée : jamais None
+disable_error_code = ["index"]
 
 [tool.taskipy.tasks]
 test = "pytest -m \"not integration\""

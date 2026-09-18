@@ -51,7 +51,6 @@ def deleter(built_ducklake_schema: Any) -> DatabaseDeleter:
     """
     return DatabaseDeleter(
         connection=built_ducklake_schema,
-        categorical_threshold=4,
         enable_validation=True,
         auto_cleanup=True,
     )

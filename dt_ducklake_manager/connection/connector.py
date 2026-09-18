@@ -3,6 +3,7 @@
 import os
 from enum import StrEnum
 from pathlib import Path
+from typing import Literal
 
 # DuckDB
 import duckdb
@@ -13,8 +14,20 @@ import psycopg2
 # Module d'initialisation du logger
 from ..utils.logger import _init_logger
 
-# Emplacement du fichier
-FILE_PATH = Path(os.path.abspath(__file__))
+# Nom du logger de ce module (fichier par défaut : <cwd>/logs/ducklake_connector.log)
+_LOGGER_NAME = "ducklake_connector"
+
+# Options DuckLake recommandées : compression zstd, format Parquet v2, taille
+# cible de fichier (unité obligatoire), taille de row group alignée sur des lots
+# de quelques dizaines de milliers de lignes.
+# `data_inlining_row_limit` est volontairement exclu : c'est un argument dédié du
+# connecteur (option d'ATTACH), pas une option de post-attachement.
+RECOMMENDED_DUCKLAKE_OPTIONS: dict[str, str | int] = {
+    "parquet_compression": "zstd",
+    "parquet_version": 2,
+    "target_file_size": "100MB",
+    "parquet_row_group_size": 122880,
+}
 
 
 # Énumération des backends de catalogue supportés par DuckLake
@@ -84,10 +97,11 @@ class DuckLakeConnector:
 
     A single catalog can host **several schemas** (one per result set, e.g.
     ``predictions`` and ``shapley``), each carrying its own ``fact_table``,
-    ``metadata`` and ``dim_*`` tables. The ``schema`` argument selects which one this
-    connection activates; ``connect()`` creates it if needed (writable connections
-    only). Builders and managers also accept a ``schema`` argument, so a single shared
-    connection can drive several schemas of the same catalog.
+    ``metadata`` and ``dataset_metadata`` tables. The ``schema`` argument selects
+    which one this connection activates; ``connect()`` creates it if needed
+    (writable connections only). Builders and managers also accept a ``schema``
+    argument, so a single shared connection can drive several schemas of the same
+    catalog.
 
     After calling ``connect()``, the returned ``duckdb.DuckDBPyConnection`` can be
     passed directly to ``DuckLakeTablesBuilder``, ``DatabaseUpdater``, or any other
@@ -143,9 +157,9 @@ class DuckLakeConnector:
         s3_access_key_id: str | None = None,
         s3_secret_access_key: str | None = None,
         s3_session_token: str | None = None,
-        log_filename: str | os.PathLike[str] | None = os.path.join(
-            FILE_PATH.parents[2], "logs/ducklake_connector.log"
-        ),
+        ducklake_options: dict[str, str | int] | Literal["recommended"] | None = None,
+        data_inlining_row_limit: int | None = None,
+        log_filename: str | os.PathLike[str] | None = None,
     ) -> None:
         """
         Initialize the DuckLakeConnector.
@@ -234,6 +248,19 @@ class DuckLakeConnector:
                 secret when ``None``, which is correct for long-lived IAM
                 credentials but will fail against temporary credentials that
                 require it. Defaults to None.
+            ducklake_options (dict[str, str | int] | Literal['recommended'] | None):
+                DuckLake options applied after ``ATTACH`` via
+                ``CALL <alias>.set_option(name, value)``.
+                Pass ``'recommended'`` to apply :data:`RECOMMENDED_DUCKLAKE_OPTIONS`
+                (``zstd`` compression, Parquet v2, ``'100MB'`` target file size,
+                122 880-row row groups), or a custom dict of option name to value.
+                Never applied on a read-only connection. Defaults to None (engine
+                defaults).
+            data_inlining_row_limit (Optional[int]): ``DATA_INLINING_ROW_LIMIT``
+                ATTACH option controlling data inlining (small writes kept in the
+                catalog instead of a Parquet file until flushed). ``0`` disables
+                inlining entirely — useful for tests that inspect files directly.
+                Defaults to None (engine default: inlining enabled).
             log_filename (Optional[os.PathLike]): Path to the log file.
 
         Examples:
@@ -262,6 +289,11 @@ class DuckLakeConnector:
         self.snapshot_time = snapshot_time
         self.catalog_alias = catalog_alias
         self.schema = schema
+
+        # Options DuckLake appliquées après ATTACH (set_option) et limite d'inlining
+        # appliquée comme option d'ATTACH (DATA_INLINING_ROW_LIMIT).
+        self.ducklake_options = ducklake_options
+        self.data_inlining_row_limit = data_inlining_row_limit
 
         # Détection d'un usage de S3 : sur data_path (fichiers Parquet) et/ou
         # sur catalog_path (catalogue DuckLake lui-même, backend DUCKDB
@@ -318,12 +350,9 @@ class DuckLakeConnector:
         # Conservé à part pour ne jamais être journalisé (il contient le mot de passe).
         self._secret_sql: str | None = None
 
-        # Initialisation du logger
-        if log_filename is None:
-            log_filename = os.path.join(
-                FILE_PATH.parents[2], "logs/ducklake_connector.log"
-            )
-        self.logger = _init_logger(filename=log_filename)
+        # Initialisation du logger nommé.
+        # Chemin par défaut centralisé dans utils.logger : <cwd>/logs/<name>.log.
+        self.logger = _init_logger(filename=log_filename, name=_LOGGER_NAME)
 
     # ---------------------------------------------------------------------------
     # Méthodes publiques de connexion
@@ -381,6 +410,9 @@ class DuckLakeConnector:
         # Création éventuelle puis activation du schéma cible
         self._activate_schema(conn)
 
+        # Application des options DuckLake configurées (aucune si read_only)
+        self._apply_ducklake_options(conn)
+
         return conn
 
     # ---------------------------------------------------------------------------
@@ -429,27 +461,41 @@ class DuckLakeConnector:
         return ""
 
     # Attachement d'un catalogue DuckLake à une connexion DuckDB existante
-    def attach(self, conn: duckdb.DuckDBPyConnection) -> duckdb.DuckDBPyConnection:
+    def attach(
+        self,
+        conn: duckdb.DuckDBPyConnection,
+        activate_schema: bool = True,
+    ) -> duckdb.DuckDBPyConnection:
         """
         Attach the DuckLake catalog to an already-open DuckDB connection.
 
         Useful when sharing a connection across multiple catalogs. Required
         extensions are (idempotently) loaded and the credential secret is created
-        when configured, so the call also works for the PostgreSQL backend. The
-        ``USE`` statement is then executed to activate the configured schema.
+        when configured, so the call also works for the PostgreSQL backend.
 
         Args:
             conn (duckdb.DuckDBPyConnection): Existing DuckDB connection.
+            activate_schema (bool): When True (default), the target schema is
+                created if needed and activated with ``USE
+                {catalog_alias}.{schema}``. Set to False when attaching a
+                **secondary** catalog to a connection that must keep its current
+                catalog: the ``USE`` issued for the target schema would otherwise
+                steal the session's default catalog. Defaults to True.
 
         Returns:
             duckdb.DuckDBPyConnection: The same connection, now with the catalog
-            attached and the schema activated.
+            attached (and, unless ``activate_schema`` is False, the schema
+            activated).
 
         Examples:
             >>> import duckdb
             >>> conn = duckdb.connect(':memory:')
             >>> connector = DuckLakeConnector('catalog.ducklake', 'data/')
             >>> connector.attach(conn)
+            >>> # Attacher un second catalogue sans changer le catalogue courant
+            >>> other = DuckLakeConnector('other.ducklake', 'data2/',
+            ...     catalog_alias='other')
+            >>> other.attach(conn, activate_schema=False)
         """
         # Préparation de la connexion existante : chargement des extensions
         # (idempotent) puis création éventuelle du secret d'identifiants
@@ -462,8 +508,16 @@ class DuckLakeConnector:
         # Attachement du catalogue sur la connexion existante
         attach_sql = self._build_attach_sql()
         conn.execute(attach_sql)
-        # Création éventuelle puis activation du schéma cible
-        self._activate_schema(conn)
+        # Création éventuelle puis activation du schéma cible.
+        # Ignorée lorsque activate_schema est False : dans un contexte
+        # multi-catalogues, le USE d'un catalogue secondaire volerait le
+        # catalogue courant de la connexion.
+        if activate_schema:
+            self._activate_schema(conn)
+
+        # Application des options DuckLake configurées (aucune si read_only)
+        self._apply_ducklake_options(conn)
+
         self.logger.info(
             f"DuckLake catalog attached to the existing connection:"
             f"'{self.catalog_path}'"
@@ -987,6 +1041,38 @@ class DuckLakeConnector:
         params_str = ", ".join(params)
         return f"CREATE OR REPLACE SECRET {secret_name} ({params_str})"
 
+    # Application des options DuckLake configurées (set_option, post-ATTACH)
+    def _apply_ducklake_options(self, conn: duckdb.DuckDBPyConnection) -> None:
+        """
+        Apply ``ducklake_options`` to the attached catalog via ``set_option``.
+
+        No-op on a read-only connection or when ``ducklake_options`` is None. Each
+        option actually applied is logged individually.
+
+        Args:
+            conn (duckdb.DuckDBPyConnection): Connection with the catalog attached.
+        """
+        # Aucune option sur une connexion en lecture seule
+        if self.read_only or self.ducklake_options is None:
+            return
+
+        # Résolution du raccourci "recommended"
+        options = (
+            RECOMMENDED_DUCKLAKE_OPTIONS
+            if self.ducklake_options == "recommended"
+            else self.ducklake_options
+        )
+
+        # Application de chaque option, une à une
+        for name, value in options.items():
+            # Entier nu, chaîne entre guillemets sinon (échappement des apostrophes)
+            literal = (
+                value if isinstance(value, int) else f"'{_quote_literal(str(value))}'"
+            )
+            conn.execute(f"CALL {self.catalog_alias}.set_option('{name}', {literal})")
+            # Logging
+            self.logger.info(f"DuckLake option set: {name} = {value}")
+
     # Création éventuelle puis activation du schéma cible
     def _activate_schema(self, conn: duckdb.DuckDBPyConnection) -> None:
         """
@@ -1049,12 +1135,18 @@ class DuckLakeConnector:
           (PostgreSQL backend).
         - ``READ_ONLY`` is appended for read-only or time-travel connections.
         - ``SNAPSHOT_VERSION`` or ``SNAPSHOT_TIME`` is appended for time travel.
+        - ``DATA_INLINING_ROW_LIMIT`` is appended when configured (plain integer,
+          no unit/quotes).
 
         Returns:
             str: The complete ``ATTACH`` SQL statement.
         """
         # Liste des options ATTACH à construire
         options = [f"DATA_PATH '{self.data_path}'"]
+
+        # Limite d'inlining : entier nu (mesuré), pas de guillemets
+        if self.data_inlining_row_limit is not None:
+            options.append(f"DATA_INLINING_ROW_LIMIT {self.data_inlining_row_limit}")
 
         # Référence au secret d'identifiants du catalogue (backend PostgreSQL)
         if self.meta_secret is not None:

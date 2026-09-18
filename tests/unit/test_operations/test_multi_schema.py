@@ -83,13 +83,12 @@ def test_delete_isolated_between_schemas(
     # Suppression d'une ligne dans 'shapley' uniquement
     deleter = DatabaseDeleter(
         connection=conn,
-        categorical_threshold=4,
         enable_validation=False,
         auto_cleanup=False,
         schema="shapley",
     )
     deleted = deleter.delete_rows(filters=[("id", "=", 1)], use_transaction=False)
-    assert deleted >= 1
+    assert deleted.rows_deleted >= 1
 
     # 'shapley' a diminué, 'predictions' est inchangé
     pred_after_row = conn.execute(
@@ -118,7 +117,6 @@ def test_audit_targets_correct_schema(
     """
     auditor = DatabaseAuditor(
         connection=multi_schema_connection,
-        categorical_threshold=4,
         schema=schema_name,
     )
     report = auditor.validate_database(ValidationLevel.STANDARD)
@@ -126,3 +124,34 @@ def test_audit_targets_correct_schema(
     assert report.get_critical_issues_count() == 0
     # La fact_table du schéma ciblé est bien reconnue
     assert "fact_table" in report.tables_validated
+
+
+# Test que l'alias du catalogue circule au même titre que le schéma
+@pytest.mark.parametrize("schema_name", ["predictions", "shapley"])
+def test_catalog_alias_travels_with_schema(
+    multi_schema_connection: duckdb.DuckDBPyConnection,
+    schema_name: str,
+) -> None:
+    """Test that ``catalog_alias`` is carried alongside ``schema`` on every manager.
+
+    Args:
+        multi_schema_connection: Connection with 'predictions' and 'shapley' schemas.
+        schema_name: Name of the schema the managers target.
+    """
+    updater = DatabaseUpdater(
+        connection=multi_schema_connection,
+        categorical_threshold=4,
+        enable_validation=True,
+        schema=schema_name,
+        catalog_alias="db",
+    )
+    # Le schéma et l'alias voyagent ensemble jusqu'aux sous-gestionnaires
+    assert updater.data_mgr is not None
+    assert updater.auditor is not None
+    for mgr in (
+        updater,
+        updater.data_mgr,
+        updater.auditor,
+    ):
+        assert mgr.schema == schema_name
+        assert mgr.catalog_alias == "db"

@@ -9,13 +9,13 @@ import duckdb
 import narwhals as nw
 from narwhals.typing import IntoDataFrame
 
-from ...utils.sql import _build_where_clause
+from ..utils.sql import _build_where_clause, quote_ident
 
 # Import des utilitaires
-from ...utils.types import map_python_to_sql_type
+from ..utils.types import map_python_to_sql_type
 
 # Import du gestionnaire de base
-from .base import BaseSchemaManager
+from ._base import BaseSchemaManager
 
 # Emplacement du fichier
 FILE_PATH = Path(os.path.abspath(__file__))
@@ -28,7 +28,8 @@ class DataManager(BaseSchemaManager):
     Manages fact table operations including inserts, updates, upserts, and deletes.
 
     Handles data type management, column operations, and maintains consistency
-    with dimension tables. Provides batch processing capabilities for large datasets.
+    with the metadata table. Provides batch processing capabilities for large
+    datasets.
 
     Attributes:
         batch_size (int): Size of batches for processing large datasets
@@ -42,6 +43,7 @@ class DataManager(BaseSchemaManager):
         log_filename: str | os.PathLike[str] | None = None,
         batch_size: int = 10000,
         schema: str = "main",
+        catalog_alias: str = "db",
     ):
         """
         Initialize the data manager.
@@ -55,6 +57,8 @@ class DataManager(BaseSchemaManager):
             batch_size: Size of batches for processing large datasets.
             schema: DuckLake schema holding the fact table to operate on. Defaults
                 to ``'main'``.
+            catalog_alias: Alias of the attached DuckLake catalog, carried
+                alongside ``schema``. Defaults to ``'db'``.
 
         Example:
             >>> conn = DuckLakeConnector('catalog.ducklake', 'data/').connect()
@@ -67,6 +71,7 @@ class DataManager(BaseSchemaManager):
             categorical_threshold=categorical_threshold,
             log_filename=log_filename,
             schema=schema,
+            catalog_alias=catalog_alias,
         )
 
         # Configuration pour le traitement par lots
@@ -229,7 +234,7 @@ class DataManager(BaseSchemaManager):
             return False
 
         try:
-            # Enregistrement d'une vue temporaire (polars natif pour DuckDB)
+            # Enregistrement d'une vue temporaire (objet natif du backend pour DuckDB)
             self.conn.register("temp_fact_creation", nw.to_native(df_nw))
 
             # Création de la table des faits
@@ -449,15 +454,16 @@ class DataManager(BaseSchemaManager):
 
             # Ajout de la colonne avec valeur par défaut
             fact_table = self._qualified("fact_table")
+            quoted_column = quote_ident(column_name)
             if default_value is not None:
                 alter_query = (
-                    f"ALTER TABLE {fact_table} ADD COLUMN {column_name}"
+                    f"ALTER TABLE {fact_table} ADD COLUMN {quoted_column}"
                     f" {sql_type} DEFAULT ?"
                 )
                 self.conn.execute(alter_query, [default_value])
             else:
                 alter_query = (
-                    f"ALTER TABLE {fact_table} ADD COLUMN {column_name}"
+                    f"ALTER TABLE {fact_table} ADD COLUMN {quoted_column}"
                     f" {sql_type} DEFAULT NULL"
                 )
                 self.conn.execute(alter_query)
@@ -503,7 +509,8 @@ class DataManager(BaseSchemaManager):
             try:
                 # Suppression de la colonne
                 alter_query = (
-                    f"ALTER TABLE {self._qualified('fact_table')} DROP COLUMN {column}"
+                    f"ALTER TABLE {self._qualified('fact_table')} DROP COLUMN"
+                    f" {quote_ident(column)}"
                 )
                 self.conn.execute(alter_query)
 
@@ -543,8 +550,8 @@ class DataManager(BaseSchemaManager):
 
             # Mise à jour du type
             alter_query = (
-                f"ALTER TABLE {self._qualified('fact_table')} ALTER {column_name}"
-                f" SET DATA TYPE {new_type}"
+                f"ALTER TABLE {self._qualified('fact_table')} ALTER"
+                f" {quote_ident(column_name)} SET DATA TYPE {new_type}"
             )
             self.conn.execute(alter_query)
 
@@ -567,6 +574,35 @@ class DataManager(BaseSchemaManager):
             # Logging
             self.logger.error(f"Failed to update column type for {column_name}: {e}")
             return False
+
+    # Méthode auxiliaire de construction de la clause ORDER BY d'un lot d'écriture
+    def _cluster_by_order_clause(self, batch_columns: list[str]) -> str:
+        """
+        Build the ``ORDER BY`` clause sorting a write batch by ``cluster_by``.
+
+        Reads ``cluster_by`` from ``dataset_metadata`` and keeps only the columns
+        actually present in this batch (a partial-column batch, e.g. from
+        ``add_columns``, may not carry every cluster_by column), preserving the
+        declared ``cluster_by`` order.
+
+        Args:
+            batch_columns: Columns present in the DataFrame being written.
+
+        Returns:
+            The ``ORDER BY ...`` SQL clause, or ``""`` when no cluster_by column is
+            present in this batch.
+        """
+        # Colonnes de tri persistées (ou None si aucune n'est définie)
+        cluster_by = self._get_cluster_by_columns()
+        if not cluster_by:
+            return ""
+        # Restriction aux colonnes réellement présentes dans ce lot, en préservant
+        # l'ordre déclaré de cluster_by
+        batch_columns_set = set(batch_columns)
+        applicable = [c for c in cluster_by if c in batch_columns_set]
+        if not applicable:
+            return ""
+        return f"ORDER BY {', '.join(quote_ident(c) for c in applicable)}"
 
     # Méthodes privées pour le traitement par lots
     # Méthode auxiliaire d'insertion par batch
@@ -609,14 +645,21 @@ class DataManager(BaseSchemaManager):
             # Préparation des colonnes manquantes
             self._ensure_columns_exist(df)
 
-            # Enregistrement d'une vue temporaire (polars natif pour DuckDB)
+            # Enregistrement d'une vue temporaire (objet natif du backend pour DuckDB)
             self.conn.register("temp_insert", nw.to_native(df))
 
-            # Insertion des données
-            column_list = ", ".join(df.columns)
+            # Insertion des données.
+            # Liste de colonnes issue des données : identifiants entre guillemets.
+            column_list = ", ".join(quote_ident(c) for c in df.columns)
+            # Tri du lot selon cluster_by (dataset_metadata) avant écriture, condition
+            # du pruning par fichier. Seules les colonnes de
+            # cluster_by réellement présentes dans ce lot sont conservées, dans l'ordre
+            # de cluster_by.
+            order_clause = self._cluster_by_order_clause(df.columns)
             insert_query = f"""
                 INSERT INTO {self._qualified("fact_table")} ({column_list})
                 SELECT {column_list} FROM temp_insert
+                {order_clause}
             """
             self.conn.execute(insert_query)
 
@@ -671,14 +714,18 @@ class DataManager(BaseSchemaManager):
             # Préparation des colonnes manquantes
             self._ensure_columns_exist(df)
 
-            # Enregistrement d'une vue temporaire (polars natif pour DuckDB)
+            # Enregistrement d'une vue temporaire (objet natif du backend pour DuckDB)
             self.conn.register("temp_upsert", nw.to_native(df))
 
             # Nom qualifié de la table des faits
             fact_table = self._qualified("fact_table")
 
-            # Construction des conditions de jointure
-            merge_condition = " AND ".join([f"f.{key} = t.{key}" for key in merge_keys])
+            # Construction des conditions de jointure.
+            # Chaque clé apparaît deux fois (f.<clé> et t.<clé>) : mise entre
+            # guillemets des deux occurrences.
+            merge_condition = " AND ".join(
+                f"f.{quote_ident(key)} = t.{quote_ident(key)}" for key in merge_keys
+            )
 
             # Comptage des mises à jour
             update_count_query = f"""
@@ -702,10 +749,11 @@ class DataManager(BaseSchemaManager):
 
                 if update_columns:
                     # Noms non-qualifiés côté gauche du SET : DuckDB rejette les
-                    # qualificateurs
-                    # de table (f.col) dans la clause SET d'un UPDATE ... FROM.
+                    # qualificateurs de table (f.col) dans la clause SET d'un
+                    # UPDATE ... FROM.
                     set_clause = ", ".join(
-                        [f"{col} = t.{col}" for col in update_columns]
+                        f"{quote_ident(col)} = t.{quote_ident(col)}"
+                        for col in update_columns
                     )
                     update_query = f"""
                         UPDATE {fact_table} f
@@ -719,7 +767,10 @@ class DataManager(BaseSchemaManager):
             _ic_row = self.conn.execute(f"SELECT COUNT(*) FROM {fact_table}").fetchone()
             initial_count = _ic_row[0] if _ic_row is not None else 0
 
-            column_list = ", ".join(df.columns)
+            column_list = ", ".join(quote_ident(c) for c in df.columns)
+            # Tri des seules lignes nouvellement insérées selon cluster_by : la
+            # branche UPDATE ... FROM ci-dessus n'a pas de notion d'ordre de lignes.
+            order_clause = self._cluster_by_order_clause(df.columns)
             insert_query = f"""
                 INSERT INTO {fact_table} ({column_list})
                 SELECT {column_list} FROM temp_upsert t
@@ -727,6 +778,7 @@ class DataManager(BaseSchemaManager):
                     SELECT 1 FROM {fact_table} f
                     WHERE {merge_condition}
                 )
+                {order_clause}
             """
             self.conn.execute(insert_query)
 

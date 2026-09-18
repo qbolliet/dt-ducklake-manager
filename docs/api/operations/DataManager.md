@@ -1,0 +1,1 @@
+::: dt_ducklake_manager.operations._data.DataManager

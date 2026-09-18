@@ -4,21 +4,17 @@ import os
 import time
 from dataclasses import dataclass, field
 from enum import Enum
-from pathlib import Path
 from typing import Any
 
 # DuckDB
 import duckdb
 import narwhals as nw
-import polars as pl
 from narwhals.typing import IntoDataFrame
 
 # Import des utilitaires
 from ..utils.logger import _init_logger
-from ..utils.sql import qualify_table
-
-# Emplacement du fichier
-FILE_PATH = Path(os.path.abspath(__file__))
+from ..utils.sql import SchemaScoped, quote_ident, resolve_catalog
+from ..utils.types import METADATA_COLUMNS
 
 
 # Classe des niveaux de validation sur la base de données
@@ -36,10 +32,8 @@ class IssueType(Enum):
 
     SCHEMA_INCONSISTENCY = "schema_inconsistency"
     DATA_INTEGRITY = "data_integrity"
-    ORPHANED_REFERENCE = "orphaned_reference"
     TYPE_MISMATCH = "type_mismatch"
     MISSING_METADATA = "missing_metadata"
-    INVALID_DIMENSION = "invalid_dimension"
     PERFORMANCE_ISSUE = "performance_issue"
     CONSTRAINT_VIOLATION = "constraint_violation"
 
@@ -163,11 +157,11 @@ class ValidationReport:
         if schema_issues:
             self.recommendations.append("Review the consistency of the database schema")
 
-        # Identification des références orphelines
-        orphaned_issues = self.get_issues_by_type(IssueType.ORPHANED_REFERENCE)
-        if orphaned_issues:
+        # Identification des méta-données manquantes
+        metadata_issues = self.get_issues_by_type(IssueType.MISSING_METADATA)
+        if metadata_issues:
             self.recommendations.append(
-                "Clean up orphan references in dimension tables"
+                "Complete the metadata and dataset_metadata tables"
             )
 
         # Identification des problèmes de performance
@@ -180,17 +174,18 @@ class ValidationReport:
 
 
 # Classe d'audit de la base de données
-class DatabaseAuditor:
+class DatabaseAuditor(SchemaScoped):
     """
     Provides comprehensive database validation and state checking capabilities.
 
-    Validates schema consistency, data integrity, referential integrity between
-    fact and dimension tables, and identifies potential performance issues.
+    Validates schema consistency, data integrity, agreement between the metadata
+    table and the fact table, and identifies potential performance issues.
 
     Attributes:
         conn (duckdb.DuckDBPyConnection): Database connection
-        categorical_threshold (int): Threshold for categorical determination
         schema (str): DuckLake schema audited by this instance
+        catalog_alias (str): Alias of the attached DuckLake catalog, carried
+            alongside ``schema``.
         logger: Logger instance for audit tracking
     """
 
@@ -198,9 +193,9 @@ class DatabaseAuditor:
     def __init__(
         self,
         connection: duckdb.DuckDBPyConnection | None = None,
-        categorical_threshold: int | None = 50,
         log_filename: str | os.PathLike[str] | None = None,
         schema: str = "main",
+        catalog_alias: str = "db",
     ):
         """
         Initialize the database auditor.
@@ -209,10 +204,12 @@ class DatabaseAuditor:
             connection: DuckDB connection attached to a DuckLake catalog, obtained
                 via ``DuckLakeConnector.connect()``. If None, an in-memory connection
                 is created (for unit tests only).
-            categorical_threshold: Threshold for determining categorical variables.
             log_filename: Path to log file.
             schema: DuckLake schema to audit. A catalog can host several schemas;
                 each is audited independently. Defaults to ``'main'``.
+            catalog_alias: Alias of the attached DuckLake catalog, matching the one
+                passed to ``DuckLakeConnector``. Carried alongside ``schema``.
+                Defaults to ``'db'``.
 
         Example:
             >>> conn = DuckLakeConnector('catalog.ducklake', 'data/').connect()
@@ -224,32 +221,21 @@ class DatabaseAuditor:
         # Initialisation de la connexion DuckLake.
         self.conn = connection if connection is not None else duckdb.connect(":memory:")
 
-        # Seuil pour déterminer si une variable est catégorielle
-        self.categorical_threshold = categorical_threshold
-
         # Schéma DuckLake audité : toutes les requêtes qualifient les tables par ce
         # schéma pour cibler le bon jeu de résultats dans le catalogue.
         self.schema = schema
 
-        # Initialisation du logger pour traçabilité des audits
-        if log_filename is None:
-            log_filename = os.path.join(
-                FILE_PATH.parents[2], "logs/database_auditor.log"
-            )
-        self.logger = _init_logger(filename=log_filename)
+        # Alias du catalogue DuckLake attaché : conservé au même titre que le schéma.
+        self.catalog_alias = catalog_alias
 
-    # Méthode de qualification d'un nom de table par le schéma audité
-    def _qualified(self, table: str) -> str:
-        """Return a table name qualified by the audited schema.
+        # Alias de catalogue effectif : utilisé pour la qualification uniquement s'il
+        # correspond à une base réellement attachée (None pour les connexions
+        # in-memory des tests).
+        self._catalog = resolve_catalog(self.conn, self.catalog_alias)
 
-        Args:
-            table: Bare table name (e.g. ``'fact_table'``).
-
-        Returns:
-            The ``'<schema>.<table>'`` identifier.
-        """
-        # Délégation à l'utilitaire central de qualification
-        return qualify_table(table, self.schema)
+        # Initialisation du logger nommé pour traçabilité des audits.
+        # Chemin par défaut centralisé dans utils.logger : <cwd>/logs/<name>.log.
+        self.logger = _init_logger(filename=log_filename, name="database_auditor")
 
     # Méthodes principales de validation
     # Méthode de validation de la base de données
@@ -285,23 +271,21 @@ class DatabaseAuditor:
             self._validate_schema_existence(report)
             # Validation de la consistence des méta-données
             self._validate_metadata_consistency(report)
+            # Validation des méta-données du jeu de résultats
+            self._validate_dataset_metadata(report)
 
             # Validation standard
             if validation_level in [
                 ValidationLevel.STANDARD,
                 ValidationLevel.COMPREHENSIVE,
             ]:
-                # Validation des tables de dimension
-                self._validate_fact_dimension_consistency(report)
+                # Validation de l'accord entre metadata et fact_table
+                self._validate_metadata_fact_consistency(report)
                 # Validation de la consistance des types des données
                 self._validate_data_types_consistency(report)
-                # Validation des références orphelines
-                self._validate_orphaned_references(report)
 
             # Validation complète
             if validation_level == ValidationLevel.COMPREHENSIVE:
-                # Validation des seuils de variables catégorielles
-                self._validate_categorical_thresholds(report)
                 # Vérification de la configuration de partitionnement Ducklake
                 self._validate_partition_configuration(report)
                 # Validation de la qualité des données
@@ -478,13 +462,7 @@ class DatabaseAuditor:
                 return
 
             # Vérification des colonnes requises dans metadata
-            required_columns = [
-                "name",
-                "label",
-                "python_type",
-                "sql_type",
-                "is_categorical",
-            ]
+            required_columns = list(METADATA_COLUMNS)
             missing_columns = [
                 col for col in required_columns if col not in metadata_df.columns
             ]
@@ -501,7 +479,7 @@ class DatabaseAuditor:
                 report.add_issue(issue)
 
             # Vérification des valeurs nulles dans les colonnes critiques
-            for col in ["name", "python_type", "sql_type"]:
+            for col in ["name", "label", "sql_type"]:
                 if col in metadata_df.columns:
                     null_count = metadata_df[col].is_null().sum()
                     if null_count > 0:
@@ -520,7 +498,7 @@ class DatabaseAuditor:
             # Vérification des doublons dans les noms de colonnes (il s'agit d ela clé
             # primaire de la base de données)
             if "name" in metadata_df.columns:
-                duplicate_names = metadata_df.filter(pl.col("name").is_duplicated())[
+                duplicate_names = metadata_df.filter(nw.col("name").is_duplicated())[
                     "name"
                 ].to_list()
                 if duplicate_names:
@@ -547,101 +525,113 @@ class DatabaseAuditor:
             )
             report.add_issue(issue)
 
-    # Méthode de validation de la cohérence entre la table de faits et les tables de
-    # dimension
-    def _validate_fact_dimension_consistency(self, report: ValidationReport) -> None:
-        """Validate consistency between fact table and dimension tables."""
+    # Méthode de validation de la présence des méta-données du jeu de résultats
+    def _validate_dataset_metadata(self, report: ValidationReport) -> None:
+        """Validate the presence and cardinality of the ``dataset_metadata`` table.
+
+        The table describes the result set itself and must hold exactly one row per
+        schema.
+
+        Args:
+            report: Validation report collecting the issues found.
+
+        Examples:
+            >>> auditor._validate_dataset_metadata(report)
+        """
         try:
-            if not self._table_exists("fact_table"):
-                return  # Déjà signalé dans _validate_schema_existence
+            # Vérification de l'existence de la table
+            if not self._table_exists("dataset_metadata"):
+                issue = ValidationIssue(
+                    issue_type=IssueType.MISSING_METADATA,
+                    severity=IssueSeverity.HIGH,
+                    table_name="dataset_metadata",
+                    description="Dataset metadata table is missing",
+                    suggested_fix="Rebuild the schema so that dataset_metadata is"
+                    " created, or create it manually",
+                )
+                report.add_issue(issue)
+                return
 
-            # Récupération des métadonnées
-            metadata_df = self._get_metadata()
+            report.tables_validated.add("dataset_metadata")
 
-            if len(metadata_df) == 0:
-                return  # Déjà signalé dans _validate_metadata_consistency
+            # Vérification de la cardinalité : une seule ligne par schéma
+            row = self.conn.execute(
+                f"SELECT COUNT(*) FROM {self._qualified('dataset_metadata')}"
+            ).fetchone()
+            row_count = row[0] if row is not None else 0
 
-            # Récupération des colonnes de la fact table
-            fact_columns = set(self._get_fact_table_columns())
-
-            # Vérification des colonnes catégorielles
-            categorical_columns = metadata_df.filter(pl.col("is_categorical"))[
-                "name"
-            ].to_list()
-
-            # Parcours des colonnes catégorielles
-            for col_name in categorical_columns:
-                # Nom de la table de dimension
-                dim_table_name = f"dim_{col_name}"
-
-                # Vérification de l'existence de la table de dimension
-                if not self._table_exists(dim_table_name):
-                    issue = ValidationIssue(
-                        issue_type=IssueType.INVALID_DIMENSION,
-                        severity=IssueSeverity.HIGH,
-                        table_name=dim_table_name,
-                        column_name=col_name,
-                        description=f"Dimension table '{dim_table_name}' missing for"
-                        f" categorical column '{col_name}'",
-                        suggested_fix=f"Create dimension table for '{col_name}' or"
-                        f" update metadata",
-                    )
-                    report.add_issue(issue)
-                    continue
-
-                report.tables_validated.add(dim_table_name)
-
-                # Vérification de la structure de la table de dimension
-                dim_columns = set(self._get_table_columns(dim_table_name))
-                required_dim_columns = {"value", "label"}
-
-                missing_dim_columns = required_dim_columns - dim_columns
-                if missing_dim_columns:
-                    issue = ValidationIssue(
-                        issue_type=IssueType.SCHEMA_INCONSISTENCY,
-                        severity=IssueSeverity.HIGH,
-                        table_name=dim_table_name,
-                        description=f"Missing required columns in dimension table:"
-                        f"{missing_dim_columns}",
-                        suggested_fix=f"Add missing columns to {dim_table_name}",
-                    )
-                    report.add_issue(issue)
-
-                # Vérification de la cohérence référentielle si la colonne existe dans
-                # fact_table
-                if col_name in fact_columns:
-                    self._validate_referential_integrity(
-                        report, col_name, dim_table_name
-                    )
-
-            # Vérification des colonnes dans fact_table qui ne sont pas dans metadata
-            metadata_columns = set(metadata_df["name"].to_list())
-            missing_metadata = fact_columns - metadata_columns
-
-            if missing_metadata:
+            if row_count != 1:
                 issue = ValidationIssue(
                     issue_type=IssueType.MISSING_METADATA,
                     severity=IssueSeverity.MEDIUM,
-                    table_name="fact_table",
-                    description=f"Columns in fact_table missing from metadata:"
-                    f"{list(missing_metadata)}",
-                    suggested_fix="Add missing columns to metadata table",
+                    table_name="dataset_metadata",
+                    description=f"Dataset metadata table holds {row_count} rows,"
+                    f" exactly one is expected",
+                    suggested_fix="Keep a single descriptive row per schema",
+                    affected_rows=row_count,
                 )
                 report.add_issue(issue)
 
-            # Vérification des colonnes dans metadata qui ne sont pas dans fact_table
-            # (métadonnées orphelines)
-            orphaned_metadata = metadata_columns - fact_columns
+        except Exception as e:
+            # Création d'un problème dans le rapport associé à l'erreur
+            issue = ValidationIssue(
+                issue_type=IssueType.MISSING_METADATA,
+                severity=IssueSeverity.MEDIUM,
+                table_name="dataset_metadata",
+                description=f"Error validating dataset metadata: {str(e)}",
+                suggested_fix="Check the dataset_metadata table structure",
+            )
+            report.add_issue(issue)
 
-            if orphaned_metadata:
+    # Méthode de validation de l'accord entre la table des méta-données et celle
+    # des faits
+    def _validate_metadata_fact_consistency(self, report: ValidationReport) -> None:
+        """Validate that ``metadata`` and ``fact_table`` describe the same columns.
+
+        The metadata table is the contract between the database and the interface:
+        it must hold exactly one row per fact table column, no more and no less.
+
+        Args:
+            report: Validation report collecting the issues found.
+
+        Examples:
+            >>> auditor._validate_metadata_fact_consistency(report)
+        """
+        try:
+            # Validation impossible sans les deux tables
+            if not self._table_exists("fact_table") or not self._table_exists(
+                "metadata"
+            ):
+                return
+
+            # Ensembles de colonnes des deux côtés
+            metadata_columns = set(self._get_metadata()["name"].to_list())
+            fact_columns = set(self._get_fact_table_columns())
+
+            # Colonnes décrites dans metadata mais absentes de la table des faits
+            for col_name in sorted(metadata_columns - fact_columns):
+                issue = ValidationIssue(
+                    issue_type=IssueType.SCHEMA_INCONSISTENCY,
+                    severity=IssueSeverity.HIGH,
+                    table_name="metadata",
+                    column_name=col_name,
+                    description=f"Column '{col_name}' is described in metadata but"
+                    f" missing from fact_table",
+                    suggested_fix=f"Drop the metadata row for '{col_name}' or add the"
+                    f" column to fact_table",
+                )
+                report.add_issue(issue)
+
+            # Colonnes présentes dans la table des faits mais non décrites
+            for col_name in sorted(fact_columns - metadata_columns):
                 issue = ValidationIssue(
                     issue_type=IssueType.MISSING_METADATA,
-                    severity=IssueSeverity.MEDIUM,
-                    table_name="metadata",
-                    description=f"Columns in metadata not found in fact_table:"
-                    f"{list(orphaned_metadata)}",
-                    suggested_fix="Remove orphaned metadata entries or add missing"
-                    " columns to fact_table",
+                    severity=IssueSeverity.HIGH,
+                    table_name="fact_table",
+                    column_name=col_name,
+                    description=f"Column '{col_name}' exists in fact_table but has no"
+                    f" metadata row",
+                    suggested_fix=f"Add a metadata row describing '{col_name}'",
                 )
                 report.add_issue(issue)
 
@@ -651,81 +641,9 @@ class DatabaseAuditor:
                 issue_type=IssueType.SCHEMA_INCONSISTENCY,
                 severity=IssueSeverity.HIGH,
                 table_name="fact_table",
-                description=f"Error validating fact-dimension consistency: {str(e)}",
-                suggested_fix="Check fact table and dimension tables structure",
-            )
-            report.add_issue(issue)
-
-    # Méthode de validation de l'intégrité référentielle entre la table des faits et la
-    # table de dimension
-    def _validate_referential_integrity(
-        self, report: ValidationReport, col_name: str, dim_table_name: str
-    ) -> None:
-        """Validate referential integrity between fact table and dimension."""
-        try:
-            # Noms qualifiés par le schéma (dim_table_name est reçu sous forme nue)
-            fact_table = self._qualified("fact_table")
-            dim_table = self._qualified(dim_table_name)
-
-            # Vérification des valeurs orphelines dans fact_table (ie qui ne sont pas
-            # référencées dans la table de dimension)
-            orphaned_query = f"""
-                SELECT COUNT(DISTINCT f.{col_name}) as orphaned_count
-                FROM {fact_table} f
-                LEFT JOIN {dim_table} d ON f.{col_name} = d.value
-                WHERE f.{col_name} IS NOT NULL AND d.value IS NULL
-            """
-
-            result = self.conn.execute(orphaned_query).fetchone()
-            orphaned_count = result[0] if result else 0
-
-            if orphaned_count > 0:
-                issue = ValidationIssue(
-                    issue_type=IssueType.ORPHANED_REFERENCE,
-                    severity=IssueSeverity.MEDIUM,
-                    table_name="fact_table",
-                    column_name=col_name,
-                    description=f"Found {orphaned_count} orphaned references in"
-                    f" fact_table.{col_name}",
-                    suggested_fix=f"Update dimension table {dim_table_name} or clean"
-                    f" orphaned references",
-                    affected_rows=orphaned_count,
-                )
-                report.add_issue(issue)
-
-            # Vérification des valeurs inutilisées dans dimension
-            unused_query = f"""
-                SELECT COUNT(*) as unused_count
-                FROM {dim_table} d
-                LEFT JOIN {fact_table} f ON d.value = f.{col_name}
-                WHERE f.{col_name} IS NULL
-            """
-
-            result = self.conn.execute(unused_query).fetchone()
-            unused_count = result[0] if result else 0
-
-            if unused_count > 0:
-                issue = ValidationIssue(
-                    issue_type=IssueType.ORPHANED_REFERENCE,
-                    severity=IssueSeverity.LOW,
-                    table_name=dim_table_name,
-                    description=f"Found {unused_count} unused dimension values in"
-                    f" {dim_table_name}",
-                    suggested_fix=f"Clean unused values from {dim_table_name}",
-                    affected_rows=unused_count,
-                )
-                report.add_issue(issue)
-
-        except Exception as e:
-            # Création d'un problème dans le rapport associé à l'erreur
-            issue = ValidationIssue(
-                issue_type=IssueType.DATA_INTEGRITY,
-                severity=IssueSeverity.MEDIUM,
-                table_name=dim_table_name,
-                column_name=col_name,
-                description=f"Error validating referential integrity for {col_name}:"
-                f"{str(e)}",
-                suggested_fix="Check column and table structure",
+                description=f"Error validating metadata/fact_table consistency:"
+                f" {str(e)}",
+                suggested_fix="Check metadata and fact_table structure",
             )
             report.add_issue(issue)
 
@@ -755,8 +673,8 @@ class DatabaseAuditor:
                         break
 
                 if actual_sql_type is None:
-                    # Colonne manquante dans fact_table (déjà signalé dans
-                    # _validate_fact_dimension_consistency)
+                    # Colonne manquante dans fact_table (déjà signalée dans
+                    # _validate_metadata_fact_consistency)
                     continue
 
                 # Comparaison des types (normalisation pour éviter les faux positifs)
@@ -785,176 +703,6 @@ class DatabaseAuditor:
                 table_name="fact_table",
                 description=f"Error validating data types consistency: {str(e)}",
                 suggested_fix="Check metadata and fact_table structure",
-            )
-            report.add_issue(issue)
-
-    # Méthode de validation des variables catégorielles par rapport au seuil et à leur
-    # nombre de modalités
-    def _validate_categorical_thresholds(self, report: ValidationReport) -> None:
-        """Validate categorical thresholds."""
-        try:
-            # Extraction de méta-données
-            metadata_df = self._get_metadata()
-
-            # Vérification des colonnes marquées comme catégorielles
-            categorical_columns = metadata_df.filter(pl.col("is_categorical"))[
-                "name"
-            ].to_list()
-
-            # Parcours des colonnes
-            for col_name in categorical_columns:
-                if not self._column_exists_in_fact_table(col_name):
-                    # Colonne manquante dans fact_table (déjà signalée dans
-                    # _validate_fact_dimension_consistency)
-                    continue
-
-                # Comptage des valeurs uniques
-                unique_count_query = (
-                    f"SELECT COUNT(DISTINCT {col_name}) FROM"
-                    f" {self._qualified('fact_table')} WHERE {col_name} IS NOT NULL"
-                )
-                result = self.conn.execute(unique_count_query).fetchone()
-                unique_count = result[0] if result else 0
-
-                # Si le nombre de modalités est supérieur au seuil, renvoie un problème
-                if (
-                    self.categorical_threshold is not None
-                    and unique_count > self.categorical_threshold
-                ):
-                    issue = ValidationIssue(
-                        issue_type=IssueType.INVALID_DIMENSION,
-                        severity=IssueSeverity.MEDIUM,
-                        table_name="fact_table",
-                        column_name=col_name,
-                        description=(
-                            f"Column '{col_name}' marked as categorical but has"
-                            f" {unique_count} unique values (threshold:"
-                            f" {self.categorical_threshold})"
-                        ),
-                        suggested_fix=(
-                            f"Consider converting '{col_name}' to"
-                            f" non-categorical or increase threshold"
-                        ),
-                        additional_info={
-                            "unique_count": unique_count,
-                            "threshold": self.categorical_threshold,
-                        },
-                    )
-                    report.add_issue(issue)
-
-            # Vérification des colonnes non-catégorielles de type String qui pourraient
-            # être catégorielles
-            non_categorical_columns = metadata_df.filter(
-                (~pl.col("is_categorical")) & (pl.col("python_type") == "String")
-            )["name"].to_list()
-
-            # Parcours des colonnes
-            for col_name in non_categorical_columns:
-                if not self._column_exists_in_fact_table(col_name):
-                    continue
-
-                # Comptage des valeurs uniques
-                unique_count_query = (
-                    f"SELECT COUNT(DISTINCT {col_name}) FROM"
-                    f" {self._qualified('fact_table')} WHERE {col_name} IS NOT NULL"
-                )
-                result = self.conn.execute(unique_count_query).fetchone()
-                unique_count = result[0] if result else 0
-
-                if (
-                    self.categorical_threshold is not None
-                    and unique_count <= self.categorical_threshold
-                ):
-                    issue = ValidationIssue(
-                        issue_type=IssueType.PERFORMANCE_ISSUE,
-                        severity=IssueSeverity.LOW,
-                        table_name="fact_table",
-                        column_name=col_name,
-                        description=(
-                            f"Column '{col_name}' could be categorical (only"
-                            f" {unique_count} unique values)"
-                        ),
-                        suggested_fix=(
-                            f"Consider converting '{col_name}' to"
-                            f" categorical for better performance"
-                        ),
-                        additional_info={
-                            "unique_count": unique_count,
-                            "threshold": self.categorical_threshold,
-                        },
-                    )
-                    report.add_issue(issue)
-
-        except Exception as e:
-            # Création d'un problème dans le rapport associé à l'erreur
-            issue = ValidationIssue(
-                issue_type=IssueType.PERFORMANCE_ISSUE,
-                severity=IssueSeverity.LOW,
-                table_name="metadata",
-                description=f"Error validating categorical thresholds: {str(e)}",
-                suggested_fix="Check categorical column configuration",
-            )
-            report.add_issue(issue)
-
-    # Méthode de détection des références orphelines
-    def _validate_orphaned_references(self, report: ValidationReport) -> None:
-        """Validate and detect orphaned references."""
-        try:
-            # Recherche des tables de dimension orphelines
-            # Extraction des tables de dimension existantes
-            existing_tables = self._get_existing_tables()
-            dimension_tables = [
-                table for table in existing_tables if table.startswith("dim_")
-            ]
-            # Extraction des métadonnées
-            metadata_df = self._get_metadata()
-            expected_dimensions = set(
-                f"dim_{name}"
-                for name in metadata_df.filter(pl.col("is_categorical"))[
-                    "name"
-                ].to_list()
-            )
-
-            # Tables de dimension sans métadonnées correspondantes
-            orphaned_dimension_tables = set(dimension_tables) - expected_dimensions
-
-            for table_name in orphaned_dimension_tables:
-                issue = ValidationIssue(
-                    issue_type=IssueType.ORPHANED_REFERENCE,
-                    severity=IssueSeverity.MEDIUM,
-                    table_name=table_name,
-                    description=f"Orphaned dimension table '{table_name}' found",
-                    suggested_fix=f"Remove '{table_name}' or add corresponding"
-                    f" metadata entry",
-                )
-                report.add_issue(issue)
-
-            # Vérification des entrées orphelines dans les dimensions existantes
-            for metadata_row in metadata_df.iter_rows(named=True):
-                if metadata_row["is_categorical"]:
-                    # Nom de la table de dimension
-                    col_name = metadata_row["name"]
-                    dim_table_name = f"dim_{col_name}"
-                    # On vérifie les entrées si la table de dimension existe et que la
-                    # colonne existe dans la table des faits
-                    # (On vérifie plus haut que toutes les variables catégroeilles dans
-                    # les métadonnées ont une table de dimension et que chaque colonne
-                    # des métadonnées existe dans la table des faits)
-                    if self._table_exists(
-                        dim_table_name
-                    ) and self._column_exists_in_fact_table(col_name):
-                        self._validate_referential_integrity(
-                            report, col_name, dim_table_name
-                        )
-
-        except Exception as e:
-            # Création d'un problème dans le rapport associé à l'erreur
-            issue = ValidationIssue(
-                issue_type=IssueType.ORPHANED_REFERENCE,
-                severity=IssueSeverity.MEDIUM,
-                table_name="SYSTEM",
-                description=f"Error validating orphaned references: {str(e)}",
-                suggested_fix="Check dimension tables and metadata consistency",
             )
             report.add_issue(issue)
 
@@ -1157,7 +905,7 @@ class DatabaseAuditor:
                 # colonne
                 null_count_query = (
                     f"SELECT COUNT(*) FROM {self._qualified('fact_table')} "
-                    f"WHERE {col_name} IS NULL"
+                    f"WHERE {quote_ident(col_name)} IS NULL"
                 )
                 # Exécution de la requête
                 _rn = self.conn.execute(null_count_query).fetchone()
@@ -1204,52 +952,58 @@ class DatabaseAuditor:
             )
             report.add_issue(issue)
 
-    # Méthode de vérification de l'unicité des clés primaires dans les tables de
-    # dimension
+    # Méthode de vérification de l'unicité de la clé primaire de la table des faits
     def _validate_constraint_violations(self, report: ValidationReport) -> None:
-        """Validate constraint violations."""
+        """Validate the applicative uniqueness of the fact table primary key.
+
+        DuckLake supports no DDL constraint, so primary-key uniqueness is enforced
+        applicatively at build and upsert time. This check verifies it actually
+        holds on the stored data.
+
+        Args:
+            report: Validation report collecting the issues found.
+
+        Examples:
+            >>> auditor._validate_constraint_violations(report)
+        """
         try:
-            # Vérification des contraintes de clé primaire dans les tables de dimension
-            # Identification des tables de dimension
-            existing_tables = self._get_existing_tables()
-            dimension_tables = [
-                table for table in existing_tables if table.startswith("dim_")
-            ]
+            # Validation impossible sans table des faits ni clé primaire déclarée
+            if not self._table_exists("fact_table"):
+                return
+            primary_keys = self._get_primary_key_columns()
+            if not primary_keys:
+                return
 
-            # Parcours des tables de dimension
-            for dim_table in dimension_tables:
-                # Vérification des doublons dans la colonne 'value' (clé primaire)
-                duplicates_query = f"""
-                    SELECT value, COUNT(*) as count
-                    FROM {self._qualified(dim_table)}
-                    GROUP BY value
+            # Comptage des combinaisons de clés apparaissant plus d'une fois
+            key_columns = ", ".join(quote_ident(col) for col in primary_keys)
+            duplicates_query = f"""
+                SELECT COUNT(*) FROM (
+                    SELECT {key_columns}
+                    FROM {self._qualified("fact_table")}
+                    GROUP BY {key_columns}
                     HAVING COUNT(*) > 1
-                """
+                )
+            """
+            row = self.conn.execute(duplicates_query).fetchone()
+            duplicate_count = row[0] if row is not None else 0
 
-                duplicates_result = self.conn.execute(duplicates_query).fetchall()
-
-                # Ajout d'un message au rapport si des duplicats sont présents
-                if duplicates_result:
-                    duplicate_count = len(duplicates_result)
-                    issue = ValidationIssue(
-                        issue_type=IssueType.CONSTRAINT_VIOLATION,
-                        severity=IssueSeverity.HIGH,
-                        table_name=dim_table,
-                        column_name="value",
-                        description=(
-                            f"Applicative uniqueness violation: {duplicate_count}"
-                            f" duplicate values found in {dim_table}.value (no DDL"
-                            f" constraint enforced in Ducklake)"
-                        ),
-                        suggested_fix=f"Remove duplicate values from {dim_table}",
-                        affected_rows=duplicate_count,
-                        additional_info={
-                            "duplicate_values": [
-                                row[0] for row in duplicates_result[:5]
-                            ]
-                        },  # Première 5 valeurs
-                    )
-                    report.add_issue(issue)
+            # Ajout d'un message au rapport si des duplicats sont présents
+            if duplicate_count > 0:
+                issue = ValidationIssue(
+                    issue_type=IssueType.CONSTRAINT_VIOLATION,
+                    severity=IssueSeverity.HIGH,
+                    table_name="fact_table",
+                    column_name=", ".join(primary_keys),
+                    description=(
+                        f"Applicative uniqueness violation: {duplicate_count}"
+                        f" duplicated primary key combinations found in fact_table"
+                        f" (no DDL constraint enforced in Ducklake)"
+                    ),
+                    suggested_fix="Deduplicate the fact table on its primary keys",
+                    affected_rows=duplicate_count,
+                    additional_info={"primary_keys": primary_keys},
+                )
+                report.add_issue(issue)
 
         except Exception as e:
             # Création d'un problème dans le rapport associé à l'erreur
@@ -1453,29 +1207,23 @@ class DatabaseAuditor:
             return []
 
     # Méthode auxiliaire d'extraction des métadonnées
-    def _get_metadata(self) -> pl.DataFrame:
-        """Get metadata table content."""
+    def _get_metadata(self) -> nw.DataFrame[Any]:
+        """Get metadata table content.
+
+        Returns:
+            nw.DataFrame: The metadata rows (pyarrow backend), or an empty frame
+            when the table cannot be read.
+        """
         try:
-            result = pl.from_arrow(
+            metadata: nw.DataFrame[Any] = nw.from_native(
                 self.conn.execute(
                     f"SELECT * FROM {self._qualified('metadata')}"
-                ).to_arrow_table()
+                ).to_arrow_table(),
+                eager_only=True,
             )
-            # pl.from_arrow() peut retourner DataFrame ou Series selon la forme
-            # de l'entrée Arrow. On s'assure de retourner un DataFrame.
-            assert isinstance(result, pl.DataFrame)
-            return result
+            return metadata
         except Exception:
-            return pl.DataFrame()
-
-    # méthode auxiliaire de vérification de l'existence d'une table
-    def _table_exists(self, table_name: str) -> bool:
-        """Check if a (bare-named) table exists in the audited schema."""
-        try:
-            self.conn.execute(f"SELECT 1 FROM {self._qualified(table_name)} LIMIT 1")
-            return True
-        except Exception:
-            return False
+            return nw.from_dict({}, backend="pyarrow")
 
     # Méthode auxiliaire de vérification de l'existence d'une colonne dans la table des
     # faits
@@ -1553,8 +1301,8 @@ class DatabaseAuditor:
                 "timestamp": time.time(),
                 "tables_count": 0,
                 "fact_table_rows": 0,
-                "dimension_tables_count": 0,
                 "metadata_entries": 0,
+                "has_dataset_metadata": False,
                 "critical_issues": 0,
             }
 
@@ -1569,10 +1317,8 @@ class DatabaseAuditor:
                 ).fetchone()
                 health_info["fact_table_rows"] = result[0] if result else 0
 
-            # Comptage des tables de dimension
-            health_info["dimension_tables_count"] = len(
-                [t for t in tables if t.startswith("dim_")]
-            )
+            # Présence des méta-données du jeu de résultats
+            health_info["has_dataset_metadata"] = "dataset_metadata" in tables
 
             # Comptage des entrées de métadonnées
             if "metadata" in tables:

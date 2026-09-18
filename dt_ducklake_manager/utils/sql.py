@@ -1,42 +1,221 @@
 # Importation des modules
 import logging
-from typing import Any, Literal, cast
+from typing import TYPE_CHECKING, Any, Literal, cast
 
 import narwhals as nw
 from narwhals.typing import IntoDataFrame
 
+if TYPE_CHECKING:
+    import duckdb
 
-# Fonction de qualification d'un nom de table par son schéma
-def qualify_table(table: str, schema: str = "main") -> str:
+
+# Fonction de mise entre guillemets d'un identifiant SQL
+def quote_ident(name: str) -> str:
     """
-    Build a schema-qualified SQL table identifier.
+    Quote a SQL identifier following the SQL standard.
+
+    Wraps ``name`` in double quotes and doubles any embedded double quote, so that
+    an identifier derived from data (table name, column name) can be interpolated
+    into a query without breaking it or allowing injection through the identifier.
+
+    Args:
+        name (str): Raw identifier (e.g. a column or table name).
+
+    Returns:
+        str: The double-quoted identifier.
+
+    Examples:
+        >>> quote_ident("fact_table")
+        '"fact_table"'
+        >>> quote_ident('weird"name')
+        '"weird""name"'
+    """
+    # Doublage des guillemets internes puis encadrement (norme SQL)
+    return '"' + str(name).replace('"', '""') + '"'
+
+
+# Fonction de résolution de l'alias de catalogue effectif d'une connexion
+def resolve_catalog(
+    conn: "duckdb.DuckDBPyConnection | None", catalog_alias: str | None
+) -> str | None:
+    """
+    Return ``catalog_alias`` only when a database of that name is actually attached.
+
+    Schema-aware managers always carry a ``catalog_alias`` (default ``'db'``), but
+    in-memory test connections never attach such a catalog. Qualifying a table by a
+    non-existent catalog would break every query, so the alias is used only when
+    :func:`resolve_catalog` confirms it is attached; otherwise ``None`` is returned
+    and callers fall back to schema-only qualification.
+
+    Args:
+        conn (duckdb.DuckDBPyConnection | None): Connection to inspect.
+        catalog_alias (str | None): Candidate catalog alias.
+
+    Returns:
+        str | None: ``catalog_alias`` when attached, else ``None``.
+
+    Examples:
+        >>> import duckdb
+        >>> resolve_catalog(duckdb.connect(":memory:"), "db") is None
+        True
+    """
+    # Absence d'alias ou de connexion : rien à qualifier par le catalogue
+    if catalog_alias is None or conn is None:
+        return None
+    try:
+        # Recherche de l'alias parmi les bases attachées à la connexion
+        row = conn.execute(
+            "SELECT 1 FROM duckdb_databases() WHERE database_name = ?",
+            [catalog_alias],
+        ).fetchone()
+    except Exception:
+        return None
+    return catalog_alias if row is not None else None
+
+
+# Fonction de qualification d'un nom de table par son schéma (et son catalogue)
+def qualify_table(table: str, schema: str = "main", catalog: str | None = None) -> str:
+    """
+    Build a schema- (and optionally catalog-) qualified SQL table identifier.
 
     A single DuckLake catalog may hold several schemas, each carrying its own
-    ``fact_table``, ``metadata`` and ``dim_*`` tables. Since every result set uses
-    the same table names, references must be schema-qualified to target the right
-    one. The attached catalog is the connection's default catalog (set by the
-    ``USE {alias}.{schema}`` issued by :class:`DuckLakeConnector`), so a
-    schema-qualified name resolves within it without naming the catalog alias.
+    ``fact_table``, ``metadata`` and ``dataset_metadata`` tables, so references
+    must be schema-qualified. Without catalog qualification a query resolves against the
+    connection's **current** catalog (the last ``USE``), which would silently
+    write to the wrong database as soon as a second catalog is attached. When
+    ``catalog`` is provided, the identifier is fully qualified by it; when it is
+    ``None`` (in-memory test connections, which have no attached catalog), only
+    the schema prefix is used. Every part is quoted via :func:`quote_ident`.
 
     Args:
         table (str): Bare table name (e.g. ``'fact_table'``, ``'metadata'``,
-            ``'dim_country'``).
+            ``'dataset_metadata'``).
         schema (str): Target DuckLake schema. Defaults to ``'main'``.
+        catalog (str | None): Attached catalog alias. When ``None`` (default), the
+            identifier is only schema-qualified.
 
     Returns:
-        str: The ``'<schema>.<table>'`` identifier.
+        str: The ``"catalog"."schema"."table"`` identifier when ``catalog`` is
+        given, otherwise ``"schema"."table"``.
 
     Examples:
         >>> qualify_table("fact_table")
-        'main.fact_table'
+        '"main"."fact_table"'
         >>> qualify_table("fact_table", "predictions")
-        'predictions.fact_table'
-        >>> qualify_table("dim_country", "shapley")
-        'shapley.dim_country'
+        '"predictions"."fact_table"'
+        >>> qualify_table("fact_table", "predictions", "db")
+        '"db"."predictions"."fact_table"'
     """
-    # Qualification simple par préfixe de schéma : le catalogue est le catalogue par
-    # défaut de la connexion, donc inutile d'ajouter l'alias du catalogue.
-    return f"{schema}.{table}"
+    # Qualification par le catalogue lorsqu'un alias est fourni : indispensable pour
+    # ne pas dépendre du catalogue courant de la connexion (dernier USE).
+    if catalog is not None:
+        return f"{quote_ident(catalog)}.{quote_ident(schema)}.{quote_ident(table)}"
+    # Sinon, qualification par le seul schéma (connexions in-memory sans alias).
+    return f"{quote_ident(schema)}.{quote_ident(table)}"
+
+
+# Mixin des classes rattachées à un schéma (et un catalogue) DuckLake
+class SchemaScoped:
+    """Mixin giving schema-aware classes their shared table helpers.
+
+    Hosts the single definition of the helpers every schema-aware class needs
+    (managers, builder, auditor, recovery manager): qualifying a bare table name,
+    checking a table exists and counting its rows. The host class must set
+    ``conn``, ``schema`` and ``_catalog`` (the effective alias returned by
+    :func:`resolve_catalog`) before calling them.
+
+    Attributes:
+        conn (duckdb.DuckDBPyConnection): Connection used by the helpers.
+        schema (str): Target DuckLake schema.
+        _catalog (str | None): Attached catalog alias, ``None`` when no catalog of
+            that name is attached (in-memory test connections).
+
+    Examples:
+        >>> import duckdb
+        >>> class Reader(SchemaScoped):
+        ...     def __init__(self, conn):
+        ...         self.conn, self.schema, self._catalog = conn, "main", None
+        >>> Reader(duckdb.connect())._qualified("fact_table")
+        '"main"."fact_table"'
+    """
+
+    conn: "duckdb.DuckDBPyConnection"
+    schema: str
+    _catalog: str | None
+
+    # Méthode de qualification d'un nom de table par le schéma (et le catalogue)
+    def _qualified(self, table: str) -> str:
+        """Return ``table`` qualified by this instance's schema and catalog.
+
+        Args:
+            table: Bare table name (e.g. ``'fact_table'``, ``'metadata'``).
+
+        Returns:
+            str: The quoted identifier, catalog-qualified only when an alias is
+            actually attached.
+
+        Examples:
+            >>> manager._qualified("fact_table")
+            '"main"."fact_table"'
+        """
+        return qualify_table(table, self.schema, self._catalog)
+
+    # Méthode de vérification de l'existence d'une table dans le schéma
+    def _table_exists(self, table_name: str) -> bool:
+        """Check whether a bare-named table exists in this instance's schema.
+
+        Filtering on the schema (and on the catalog when one is attached) matters:
+        the same ``fact_table`` may exist in a neighbouring schema or catalog and
+        would otherwise give a false positive.
+
+        Args:
+            table_name: Bare table name.
+
+        Returns:
+            bool: True if the table exists, False otherwise (including when the
+            lookup itself fails).
+
+        Examples:
+            >>> manager._table_exists("fact_table")
+            True
+        """
+        # Filtre optionnel sur le catalogue effectif
+        catalog_filter = " AND table_catalog = ?" if self._catalog is not None else ""
+        params: list[str] = [table_name, self.schema]
+        if self._catalog is not None:
+            params.append(self._catalog)
+        try:
+            row = self.conn.execute(
+                "SELECT COUNT(*) FROM information_schema.tables"
+                f" WHERE table_name = ? AND table_schema = ?{catalog_filter}",
+                params,
+            ).fetchone()
+        except Exception:
+            return False
+        return row is not None and row[0] > 0
+
+    # Méthode de comptage des lignes d'une table du schéma
+    def _count_rows(self, table: str) -> int:
+        """Count the rows of a bare-named table of this instance's schema.
+
+        Args:
+            table: Bare table name (e.g. ``'fact_table'``).
+
+        Returns:
+            int: Row count, or ``0`` if the table cannot be read (e.g. not created
+            yet).
+
+        Examples:
+            >>> manager._count_rows("fact_table")
+            3
+        """
+        try:
+            row = self.conn.execute(
+                f"SELECT COUNT(*) FROM {self._qualified(table)}"
+            ).fetchone()
+        except Exception:
+            return 0
+        return int(row[0]) if row is not None else 0
 
 
 # Fonction de suppression des duplicats d'un jeu de données
@@ -110,10 +289,16 @@ def build_database_duplicate_removal_query(
     """
     Build SQL query for removing duplicates from a database table.
 
+    The column identifiers, which appear several times in the generated query
+    (``WHERE``, ``SELECT``, ``GROUP BY`` / ``PARTITION BY``), are quoted via
+    :func:`quote_ident` so every occurrence stays consistent. ``table_name`` is
+    used verbatim as a table reference: the caller is expected to pass an already
+    schema-/catalog-qualified name (e.g. from a manager's ``_qualified``).
+
     Args:
         columns_to_check (list): List of column names to check for duplicates
         keep (Literal['any', 'none', 'first', 'last']): Strategy for keeping duplicates
-        table_name (str): Name of the table to deduplicate
+        table_name (str): Table reference to deduplicate (used as-is).
 
     Returns:
         str: SQL DELETE query for removing duplicates
@@ -126,17 +311,22 @@ def build_database_duplicate_removal_query(
     if not columns_to_check:
         return ""
 
+    # Référence de table utilisée telle quelle (qualification à la charge de l'appelant)
+    table_ref = table_name
+    # Mise entre guillemets des colonnes issues des données (occurrences multiples)
+    quoted_columns = [quote_ident(col) for col in columns_to_check]
+
     # Construction de la chaîne des colonnes
-    columns_str = ", ".join(columns_to_check)
+    columns_str = ", ".join(quoted_columns)
 
     if keep == "none":
         # Suppression de TOUTES les occurrences des clés en doublon.
         # On identifie les groupes ayant plus d'une ligne par leur valeur de colonnes.
         return f"""
-        DELETE FROM {table_name}
+        DELETE FROM {table_ref}
         WHERE ({columns_str}) IN (
             SELECT {columns_str}
-            FROM {table_name}
+            FROM {table_ref}
             GROUP BY {columns_str}
             HAVING COUNT(*) > 1
         )
@@ -149,14 +339,14 @@ def build_database_duplicate_removal_query(
         # 'any' est traité comme 'first' (conservation d'une occurrence arbitraire).
         order_clause = "ASC" if keep in ("first", "any") else "DESC"
         return f"""
-        DELETE FROM {table_name}
+        DELETE FROM {table_ref}
         WHERE rowid NOT IN (
             SELECT rowid FROM (
                 SELECT rowid, ROW_NUMBER() OVER (
                     PARTITION BY {columns_str}
                     ORDER BY rowid {order_clause}
                 ) as rn
-                FROM {table_name}
+                FROM {table_ref}
             ) WHERE rn = 1
         )
         """

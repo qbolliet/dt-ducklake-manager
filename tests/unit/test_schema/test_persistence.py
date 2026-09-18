@@ -1,6 +1,9 @@
 # Importation des modules
 # Modules de base
+import json
+import os
 import warnings
+from pathlib import Path
 
 # DuckDB
 import duckdb
@@ -78,6 +81,15 @@ def test_ducklake_builder_initialization(sample_df: pl.DataFrame) -> None:
         builder2 = DuckLakeTablesBuilder(sample_df, connection=conn)
         assert builder2.conn is conn
 
+        # Alias du catalogue : défaut 'db' et valeur explicite conservée au même
+        # titre que le schéma
+        assert DuckLakeTablesBuilder(sample_df).catalog_alias == "db"
+        builder3 = DuckLakeTablesBuilder(
+            sample_df, schema="predictions", catalog_alias="my_lake"
+        )
+        assert builder3.catalog_alias == "my_lake"
+        assert builder3.schema == "predictions"
+
 
 # ---------------------------------------------------------------------------
 # Tests de create_duckdb_metadata_table()
@@ -98,39 +110,66 @@ def test_create_duckdb_metadata_table(ducklake_builder: DuckLakeTablesBuilder) -
     result = ducklake_builder.conn.execute("SELECT * FROM test_metadata").pl()
     assert "name" in result.columns
     assert "label" in result.columns
-    assert "python_type" in result.columns
+    assert "is_categorical_forced" not in result.columns
     assert "sql_type" in result.columns
     assert "is_categorical" in result.columns
 
 
 # ---------------------------------------------------------------------------
-# Tests de create_duckdb_dimension_tables()
+# Tests de create_duckdb_dataset_metadata_table()
 # ---------------------------------------------------------------------------
 
 
-# Test de la création des tables de dimension dans DuckDB
-def test_create_duckdb_dimension_tables(
+# Test de la création de la table des méta-données du jeu de résultats
+def test_create_duckdb_dataset_metadata_table(
     ducklake_builder: DuckLakeTablesBuilder,
 ) -> None:
-    """Test the build of the dimension tables in DuckDB.
+    """Test the build of the single-row dataset_metadata table.
 
     Args:
         ducklake_builder: DuckLakeTablesBuilder fixture.
     """
-    # Création des tables de dimensions
-    ducklake_builder.create_duckdb_dimension_tables(table_prefix="test_dim_")
+    # Création de la table descriptive du jeu de résultats
+    ducklake_builder.create_duckdb_dataset_metadata_table()
 
-    # Vérification que les tables attendues existent
-    tables = ducklake_builder.conn.execute("SHOW TABLES").fetchall()
-    table_names = [t[0] for t in tables]
-    assert "test_dim_category" in table_names
-    assert "test_dim_status" in table_names
+    result = ducklake_builder.conn.execute("SELECT * FROM dataset_metadata").pl()
 
-    # Vérification de la structure des tables de dimension
-    for table in ["category", "status"]:
-        result = ducklake_builder.conn.execute(f"SELECT * FROM test_dim_{table}").pl()
-        assert "value" in result.columns
-        assert "label" in result.columns
+    # Une seule ligne par schéma
+    assert result.shape[0] == 1
+    # Champs systématiquement renseignés
+    assert result["schema_version"][0] == 1
+    assert result["updated_at"][0] is not None
+    # cluster_by reste NULL à ce stade
+    assert result["cluster_by"][0] is None
+    # Champs descriptifs non fournis par le builder de test
+    assert result["label"][0] is None
+
+
+# Test de la propagation des champs descriptifs du jeu de résultats
+def test_dataset_metadata_carries_builder_arguments(
+    sample_df: pl.DataFrame,
+) -> None:
+    """Test that the optional dataset arguments reach dataset_metadata.
+
+    Args:
+        sample_df: Sample polars DataFrame.
+    """
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        builder = DuckLakeTablesBuilder(
+            sample_df,
+            categorical_threshold=4,
+            primary_keys=["id"],
+            dataset_label="Prédictions",
+            dataset_description="Sorties du modèle",
+            dataset_source="pipeline-ml",
+        )
+    builder.create_duckdb_dataset_metadata_table()
+
+    result = builder.conn.execute("SELECT * FROM dataset_metadata").pl()
+    assert result["label"][0] == "Prédictions"
+    assert result["description"][0] == "Sorties du modèle"
+    assert result["source"][0] == "pipeline-ml"
 
 
 # ---------------------------------------------------------------------------
@@ -151,26 +190,18 @@ def test_create_duckdb_fact_table(
     """
     # Création des tables nécessaires en amont
     ducklake_builder.create_duckdb_metadata_table()
-    ducklake_builder.create_duckdb_dimension_tables()
     # Création de la table des faits
     ducklake_builder.create_duckdb_fact_table(table_name="test_fact")
 
-    # Vérification que la table des faits existe et a les bonnes dimensions
+    # Vérification que la table des faits existe et a la bonne forme
     result = ducklake_builder.conn.execute("SELECT * FROM test_fact").pl()
     assert result.shape[0] == len(sample_df)
     assert "category" in result.columns
     assert "status" in result.columns
 
-    # Vérification que les valeurs de la fact table
-    # sont des indices entiers de la dim table
-    dim_category = ducklake_builder.conn.execute("SELECT * FROM dim_category").pl()
-    dim_status = ducklake_builder.conn.execute("SELECT * FROM dim_status").pl()
-    assert set(result["category"].to_list()) <= set(
-        dim_category["value"].cast(pl.Int64).to_list()
-    )
-    assert set(result["status"].to_list()) <= set(
-        dim_status["value"].cast(pl.Int64).to_list()
-    )
+    # Vérification que les colonnes catégorielles portent les libellés d'origine
+    assert result["category"].to_list() == sample_df["category"].to_list()
+    assert result["status"].to_list() == sample_df["status"].to_list()
 
 
 # ---------------------------------------------------------------------------
@@ -180,7 +211,7 @@ def test_create_duckdb_fact_table(
 
 # Test de la construction de l'ensemble du schéma
 def test_build_schema(ducklake_builder: DuckLakeTablesBuilder) -> None:
-    """Test the build of the complete schema (metadata, dimensions, fact table).
+    """Test the build of the complete schema (metadata, fact, dataset_metadata).
 
     Args:
         ducklake_builder: DuckLakeTablesBuilder fixture.
@@ -189,16 +220,16 @@ def test_build_schema(ducklake_builder: DuckLakeTablesBuilder) -> None:
     ducklake_builder.build_schema(
         metadata_table="test_metadata",
         fact_table="test_fact",
-        dim_table_prefix="test_dim_",
+        dataset_metadata_table="test_dataset_metadata",
     )
 
-    # Vérification que toutes les tables attendues ont été créées
+    # Vérification que les trois tables attendues ont été créées, et elles seules
     tables = ducklake_builder.conn.execute("SHOW TABLES").fetchall()
     table_names = [t[0] for t in tables]
     assert "test_metadata" in table_names
     assert "test_fact" in table_names
-    assert "test_dim_category" in table_names
-    assert "test_dim_status" in table_names
+    assert "test_dataset_metadata" in table_names
+    assert not [name for name in table_names if name.startswith("dim_")]
 
 
 # Test de l'affichage du schéma construit
@@ -388,9 +419,11 @@ def test_duplicate_check_uses_primary_keys(sample_df: pl.DataFrame) -> None:
 # ---------------------------------------------------------------------------
 
 
-# Test que categorical_threshold=None ne crée aucune table de dimension
-def test_categorical_threshold_none_no_dim_tables(sample_df: pl.DataFrame) -> None:
-    """Test that no dimension tables are created when categorical_threshold=None.
+# Test que categorical_threshold=None n'altère pas les tables construites
+def test_categorical_threshold_none_builds_three_tables(
+    sample_df: pl.DataFrame,
+) -> None:
+    """Test that the schema still holds exactly three tables without a threshold.
 
     Args:
         sample_df: Sample polars DataFrame.
@@ -402,11 +435,9 @@ def test_categorical_threshold_none_no_dim_tables(sample_df: pl.DataFrame) -> No
     builder.build_schema()
 
     # Récupération des tables créées
-    tables = [row[0] for row in builder.conn.execute("SHOW TABLES").fetchall()]
+    tables = {row[0] for row in builder.conn.execute("SHOW TABLES").fetchall()}
 
-    # Aucune table de dimension (préfixe 'dim_') ne doit exister
-    dim_tables = [t for t in tables if t.startswith("dim_")]
-    assert len(dim_tables) == 0
+    assert tables == {"fact_table", "metadata", "dataset_metadata"}
 
 
 # ---------------------------------------------------------------------------
@@ -481,7 +512,6 @@ def test_create_duckdb_fact_table_with_partition_by(sample_df: pl.DataFrame) -> 
             )
 
         builder.create_duckdb_metadata_table()
-        builder.create_duckdb_dimension_tables()
         # Vérification que partition_by est accepté sans erreur
         builder.create_duckdb_fact_table(partition_by=["category"])
 
@@ -524,7 +554,7 @@ def test_build_schema_with_partition_by(sample_df: pl.DataFrame) -> None:
         tables = [row[0] for row in conn.execute("SHOW TABLES").fetchall()]
         assert "metadata" in tables
         assert "fact_table" in tables
-        assert "dim_category" in tables
+        assert "dataset_metadata" in tables
 
 
 # ---------------------------------------------------------------------------
@@ -590,7 +620,7 @@ def test_two_schemas_coexist_in_one_catalog(
     for schema_name in ("predictions", "shapley"):
         assert "fact_table" in tables_by_schema[schema_name]
         assert "metadata" in tables_by_schema[schema_name]
-        assert "dim_category" in tables_by_schema[schema_name]
+        assert "dataset_metadata" in tables_by_schema[schema_name]
 
     # Les comptages sont propres à chaque schéma (3 vs 2 lignes)
     pred_row = multi_schema_connection.execute(
@@ -605,3 +635,376 @@ def test_two_schemas_coexist_in_one_catalog(
     shap_rows = shap_row[0]
     assert pred_rows == 3
     assert shap_rows == 2
+
+
+# ---------------------------------------------------------------------------
+# Tests des champs d'UI de la table metadata (column_metadata)
+# ---------------------------------------------------------------------------
+
+
+# Test que le DDL de metadata porte les colonnes d'UI, toutes VARCHAR nullable
+def test_metadata_ddl_carries_ui_columns(
+    ducklake_builder: DuckLakeTablesBuilder,
+) -> None:
+    """Test that the metadata table DDL includes the nullable UI columns.
+
+    Args:
+        ducklake_builder: DuckLakeTablesBuilder fixture.
+    """
+    ducklake_builder.create_duckdb_metadata_table(table_name="test_metadata")
+
+    described = ducklake_builder.conn.execute("DESCRIBE test_metadata").fetchall()
+    columns = {row[0]: (row[1], row[2]) for row in described}
+
+    for field in (
+        "unit",
+        "display_format",
+        "family",
+        "description",
+        "default_aggregation",
+    ):
+        assert field in columns
+        # Type VARCHAR et colonne nullable
+        assert columns[field][0] == "VARCHAR"
+        assert columns[field][1] == "YES"
+
+
+# Test que build_schema écrit les valeurs de column_metadata dans la table
+def test_build_schema_writes_column_metadata(sample_df: pl.DataFrame) -> None:
+    """Test that build_schema persists the column_metadata values into metadata.
+
+    Args:
+        sample_df: Sample polars DataFrame.
+    """
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        builder = DuckLakeTablesBuilder(sample_df, categorical_threshold=4)
+
+    builder.build_schema(
+        column_metadata={
+            "value": {
+                "unit": "%",
+                "display_format": ".0%",
+                "family": "scores",
+                "description": "prediction score",
+                "default_aggregation": "median",
+            }
+        }
+    )
+
+    row = builder.conn.execute(
+        "SELECT unit, display_format, family, description, default_aggregation"
+        " FROM metadata WHERE name = 'value'"
+    ).fetchone()
+    assert row == ("%", ".0%", "scores", "prediction score", "MEDIAN")
+
+    # Une colonne non renseignée conserve des champs d'UI nuls
+    other = builder.conn.execute(
+        "SELECT unit, default_aggregation FROM metadata WHERE name = 'category'"
+    ).fetchone()
+    assert other == (None, None)
+
+
+# Test que build_schema propage l'erreur de validation de default_aggregation
+def test_build_schema_invalid_default_aggregation_raises(
+    sample_df: pl.DataFrame,
+) -> None:
+    """Test that an invalid default_aggregation aborts build_schema with ValueError.
+
+    Args:
+        sample_df: Sample polars DataFrame.
+    """
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        builder = DuckLakeTablesBuilder(sample_df, categorical_threshold=4)
+
+    with pytest.raises(ValueError, match="Invalid default_aggregation"):
+        builder.build_schema(
+            column_metadata={"value": {"default_aggregation": "SOMME"}}
+        )
+
+
+# ---------------------------------------------------------------------------
+# Tests de la hiérarchie de colonnes (parent_name, §2.5)
+# ---------------------------------------------------------------------------
+
+
+# Test que le DDL de metadata porte la colonne parent_name, VARCHAR nullable
+def test_metadata_ddl_carries_parent_name(
+    ducklake_builder: DuckLakeTablesBuilder,
+) -> None:
+    """Test that the metadata table DDL includes the nullable parent_name column.
+
+    Args:
+        ducklake_builder: DuckLakeTablesBuilder fixture.
+    """
+    ducklake_builder.create_duckdb_metadata_table(table_name="test_metadata")
+
+    described = ducklake_builder.conn.execute("DESCRIBE test_metadata").fetchall()
+    columns = {row[0]: (row[1], row[2]) for row in described}
+
+    assert "parent_name" in columns
+    assert columns["parent_name"][0] == "VARCHAR"
+    assert columns["parent_name"][1] == "YES"
+
+
+# Test que build_schema écrit la hiérarchie déclarée via le paramètre hierarchies
+def test_build_schema_writes_hierarchies(sample_df: pl.DataFrame) -> None:
+    """Test that hierarchies passed to the constructor reach the metadata table.
+
+    Args:
+        sample_df: Sample polars DataFrame.
+    """
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        builder = DuckLakeTablesBuilder(
+            sample_df,
+            categorical_threshold=4,
+            primary_keys=["id"],
+            hierarchies={"category": "status"},
+        )
+
+    builder.build_schema()
+
+    row = builder.conn.execute(
+        "SELECT parent_name FROM metadata WHERE name = 'category'"
+    ).fetchone()
+    assert row[0] == "status"
+
+
+# Test que build_schema propage une erreur de cycle dans la hiérarchie
+def test_build_schema_hierarchy_cycle_raises(sample_df: pl.DataFrame) -> None:
+    """Test that a cyclic hierarchy aborts build_schema with ValueError.
+
+    Args:
+        sample_df: Sample polars DataFrame.
+    """
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        builder = DuckLakeTablesBuilder(
+            sample_df,
+            categorical_threshold=4,
+            primary_keys=["id"],
+            hierarchies={"category": "status", "status": "category"},
+        )
+
+    with pytest.raises(ValueError, match="Cycle detected"):
+        builder.build_schema()
+
+
+# ---------------------------------------------------------------------------
+# Tests de cluster_by (§5.3)
+# ---------------------------------------------------------------------------
+
+
+# Test que cluster_by par défaut reprend les clés primaires dans leur ordre
+def test_build_schema_cluster_by_defaults_to_primary_keys(
+    sample_df: pl.DataFrame,
+) -> None:
+    """Test that cluster_by defaults to the primary keys in declared order.
+
+    Args:
+        sample_df: Sample polars DataFrame.
+    """
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        builder = DuckLakeTablesBuilder(
+            sample_df, categorical_threshold=4, primary_keys=["id"]
+        )
+    builder.build_schema()
+
+    row = builder.conn.execute("SELECT cluster_by FROM dataset_metadata").fetchone()
+    assert json.loads(row[0]) == ["id"]
+
+
+# Test qu'aucune clé primaire ne produit un cluster_by NULL par défaut
+def test_build_schema_cluster_by_none_without_primary_keys(
+    sample_df: pl.DataFrame,
+) -> None:
+    """Test that cluster_by stays NULL by default when there is no primary key.
+
+    Args:
+        sample_df: Sample polars DataFrame.
+    """
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        builder = DuckLakeTablesBuilder(sample_df, categorical_threshold=4)
+    builder.build_schema()
+
+    row = builder.conn.execute("SELECT cluster_by FROM dataset_metadata").fetchone()
+    assert row[0] is None
+
+
+# Test qu'une valeur explicite de cluster_by est persistée telle quelle
+def test_build_schema_cluster_by_explicit_value(sample_df: pl.DataFrame) -> None:
+    """Test that an explicit cluster_by is persisted as the given JSON list.
+
+    Args:
+        sample_df: Sample polars DataFrame.
+    """
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        builder = DuckLakeTablesBuilder(
+            sample_df, categorical_threshold=4, primary_keys=["id"]
+        )
+    builder.build_schema(cluster_by=["category", "id"])
+
+    row = builder.conn.execute("SELECT cluster_by FROM dataset_metadata").fetchone()
+    assert json.loads(row[0]) == ["category", "id"]
+
+
+# Test qu'une colonne de cluster_by inconnue lève une ValueError
+def test_build_schema_cluster_by_unknown_column_raises(
+    sample_df: pl.DataFrame,
+) -> None:
+    """Test that an unknown cluster_by column aborts build_schema with ValueError.
+
+    Args:
+        sample_df: Sample polars DataFrame.
+    """
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        builder = DuckLakeTablesBuilder(
+            sample_df, categorical_threshold=4, primary_keys=["id"]
+        )
+
+    with pytest.raises(ValueError, match="cluster_by columns"):
+        builder.build_schema(cluster_by=["not_a_column"])
+
+
+# Test que la table des faits est effectivement triée selon cluster_by
+def test_build_schema_fact_table_sorted_by_cluster_by(
+    sample_df: pl.DataFrame,
+) -> None:
+    """Test that the fact table rows are physically written in cluster_by order.
+
+    Args:
+        sample_df: Sample polars DataFrame.
+    """
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        builder = DuckLakeTablesBuilder(
+            sample_df, categorical_threshold=4, primary_keys=["id"]
+        )
+    # Tri décroissant improbable par défaut (id croissant) : category d'abord
+    builder.build_schema(cluster_by=["category"])
+
+    categories = [
+        row[0]
+        for row in builder.conn.execute("SELECT category FROM fact_table").fetchall()
+    ]
+    assert categories == sorted(categories)
+
+
+# Test que create_duckdb_dataset_metadata_table appelée directement avec cluster_by
+# persiste la liste JSON fournie
+def test_create_duckdb_dataset_metadata_table_with_cluster_by(
+    ducklake_builder: DuckLakeTablesBuilder,
+) -> None:
+    """Test that an explicit cluster_by reaches dataset_metadata as a JSON list.
+
+    Args:
+        ducklake_builder: DuckLakeTablesBuilder fixture.
+    """
+    ducklake_builder.create_duckdb_dataset_metadata_table(cluster_by=["id", "date"])
+
+    result = ducklake_builder.conn.execute(
+        "SELECT cluster_by FROM dataset_metadata"
+    ).fetchone()
+    assert json.loads(result[0]) == ["id", "date"]
+
+
+# Test que le tri physique produit des fichiers Parquet dont les plages ne se
+# recouvrent pas (élagage par fichier, §5.3)
+@pytest.mark.skipif(
+    not _ducklake_available(),
+    reason="Extension ducklake non disponible dans cet environnement",
+)
+def test_build_schema_cluster_by_produces_non_overlapping_files(
+    tmp_path: Path,
+) -> None:
+    """Test that cluster_by-sorted data yields files with non-overlapping ranges.
+
+    Attaches a real on-disk DuckLake catalog with inlining disabled and a very
+    small target file size, so a moderately sized DataFrame lands in several
+    Parquet files. Reads them back via ``read_parquet`` and checks that the
+    per-file min/max ranges of the cluster column do not overlap — the physical
+    condition for DuckLake's file-pruning to work (annexe A of the specification).
+
+    With the engine's default parallelism, DuckDB spreads a sorted INSERT across
+    files non-monotonically (measured, annexe A — the same effect documented for
+    ``recluster``); ``SET threads = 1`` around the write is the same technique the
+    specification itself uses to observe the physical effect deterministically. It
+    is applied only in this test, not in production code (single-threaded writes
+    are prompt 9's ``recluster`` concern, not this one).
+
+    Args:
+        tmp_path: pytest temporary directory.
+    """
+    from dt_ducklake_manager.connection import DuckLakeConnector
+
+    catalog = str(tmp_path / "test.ducklake")
+    data_dir = str(tmp_path / "data")
+    os.makedirs(data_dir)
+
+    conn = DuckLakeConnector(
+        catalog,
+        data_dir,
+        data_inlining_row_limit=0,
+        ducklake_options={"target_file_size": "1MB"},
+    ).connect()
+
+    # Grand nombre de lignes pour dépasser largement la petite taille de fichier
+    # cible en un seul INSERT
+    n = 500_000
+    df = pl.DataFrame(
+        {
+            "id": list(range(n)),
+            "value": [float(i) for i in range(n)],
+        }
+    )
+
+    conn.execute("SET threads = 1")
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        builder = DuckLakeTablesBuilder(
+            df,
+            categorical_threshold=4,
+            primary_keys=["id"],
+            connection=conn,
+            catalog_alias="db",
+        )
+    builder.build_schema(cluster_by=["id"])
+
+    # Fichiers réellement associés à fact_table (et non à metadata/dataset_metadata,
+    # qui partagent le même data_path) : ducklake_list_files est la source fiable,
+    # un glob sur data_path mélangerait les schémas des différentes tables.
+    files = [
+        row[0]
+        for row in conn.execute(
+            "SELECT data_file FROM ducklake_list_files('db', 'fact_table',"
+            " schema := 'main')"
+        ).fetchall()
+    ]
+    assert len(files) > 1, "expected build_schema to produce several Parquet files"
+
+    # Un fichier résiduel vide est possible (mesuré, annexe A) : exclu du contrôle
+    # de recouvrement, qui ne porte que sur des plages réelles.
+    ranges = sorted(
+        row
+        for row in (
+            conn.execute(
+                f"SELECT min(id) AS lo, max(id) AS hi FROM read_parquet('{f}')"
+            ).fetchone()
+            for f in files
+        )
+        if row is not None and row[0] is not None
+    )
+
+    # Les plages [lo, hi] ne doivent pas se chevaucher une fois triées par lo
+    for (lo, hi), (next_lo, _next_hi) in zip(ranges, ranges[1:]):
+        assert hi <= next_lo, (
+            f"overlapping file ranges: ({lo}, {hi}) vs starting at {next_lo}"
+        )
+
+    conn.close()

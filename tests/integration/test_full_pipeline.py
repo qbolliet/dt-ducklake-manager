@@ -26,7 +26,7 @@ def test_full_schema_build_from_local_data(sample_df: pl.DataFrame) -> None:
     """Test the full schema build pipeline from a local DataFrame.
 
     Verifies that DuckLakeTablesBuilder creates all three layers of the schema
-    (metadata, dimension tables, fact table) from a sample polars DataFrame.
+    (fact_table, metadata, dataset_metadata) from a sample polars DataFrame.
 
     Args:
         sample_df: Sample polars DataFrame with categorical and numeric columns.
@@ -39,14 +39,28 @@ def test_full_schema_build_from_local_data(sample_df: pl.DataFrame) -> None:
         )
     builder.build_schema()
 
-    # Vérification de l'existence des tables attendues
+    # Vérification que le schéma contient exactement les trois tables attendues
     tables = [row[0] for row in builder.conn.execute("SHOW TABLES").fetchall()]
-    assert "metadata" in tables
-    assert "fact_table" in tables
-    # Vérification de la présence des tables de dimension pour les colonnes
-    # catégorielles
-    assert "dim_category" in tables
-    assert "dim_status" in tables
+    assert set(tables) == {"fact_table", "metadata", "dataset_metadata"}
+
+    # Vérification que les colonnes catégorielles portent bien les libellés d'origine
+    categories = [
+        row[0]
+        for row in builder.conn.execute(
+            "SELECT DISTINCT category FROM fact_table ORDER BY category"
+        ).fetchall()
+    ]
+    assert categories == ["A", "B", "C"]
+
+    # Vérification de la ligne unique de dataset_metadata.
+    # cluster_by défaut aux clés primaires en l'absence de valeur explicite (§5.3).
+    dataset_row = builder.conn.execute(
+        "SELECT schema_version, updated_at, cluster_by FROM dataset_metadata"
+    ).fetchall()
+    assert len(dataset_row) == 1
+    assert dataset_row[0][0] == 1
+    assert dataset_row[0][1] is not None
+    assert dataset_row[0][2] == '["id"]'
 
     # Vérification que la fact table contient le bon nombre de lignes
     row_count_row = builder.conn.execute("SELECT COUNT(*) FROM fact_table").fetchone()
@@ -170,12 +184,11 @@ def test_build_then_delete_rows(
     # Suppression de la ligne avec id=1
     deleter = DatabaseDeleter(
         connection=built_ducklake_schema,
-        categorical_threshold=4,
         enable_validation=False,  # Désactivé pour simplifier le test d'intégration
         auto_cleanup=False,
     )
     deleted = deleter.delete_rows(filters=[("id", "=", 1)], use_transaction=False)
-    assert deleted >= 1
+    assert deleted.rows_deleted >= 1
 
     # Vérification que la ligne est bien absente
     after_delete_row = built_ducklake_schema.execute(
@@ -212,7 +225,7 @@ def test_build_then_audit(built_ducklake_schema: duckdb.DuckDBPyConnection) -> N
         schema.
     """
     # Audit de la base fraîchement construite
-    auditor = DatabaseAuditor(connection=built_ducklake_schema, categorical_threshold=4)
+    auditor = DatabaseAuditor(connection=built_ducklake_schema)
     report = auditor.validate_database(ValidationLevel.STANDARD)
 
     # Vérification que le rapport est bien retourné
@@ -288,12 +301,11 @@ def test_full_pipeline_build_update_delete_audit(sample_df: pl.DataFrame) -> Non
     # Étape 3 : Suppression d'une ligne
     deleter = DatabaseDeleter(
         connection=conn,
-        categorical_threshold=4,
         enable_validation=False,
         auto_cleanup=False,
     )
     deleted = deleter.delete_rows(filters=[("id", "=", 200)], use_transaction=False)
-    assert deleted >= 1
+    assert deleted.rows_deleted >= 1
 
     # Vérification que id=200 est bien supprimé
     count_200_row = conn.execute(
@@ -304,7 +316,7 @@ def test_full_pipeline_build_update_delete_audit(sample_df: pl.DataFrame) -> Non
     assert count_200 == 0
 
     # Étape 4 : Audit de la base après les opérations
-    auditor = DatabaseAuditor(connection=conn, categorical_threshold=4)
+    auditor = DatabaseAuditor(connection=conn)
     report = auditor.validate_database(ValidationLevel.BASIC)
     assert report.get_critical_issues_count() == 0
 
@@ -373,12 +385,16 @@ def test_multi_schema_pipeline_in_single_catalog() -> None:
     # Étape 3 : suppression dans 'shapley' uniquement
     deleter = DatabaseDeleter(
         connection=conn,
-        categorical_threshold=4,
         enable_validation=False,
         auto_cleanup=False,
         schema="shapley",
     )
-    assert deleter.delete_rows(filters=[("id", "=", 1)], use_transaction=False) >= 1
+    assert (
+        deleter.delete_rows(
+            filters=[("id", "=", 1)], use_transaction=False
+        ).rows_deleted
+        >= 1
+    )
     shap_row3 = conn.execute("SELECT COUNT(*) FROM shapley.fact_table").fetchone()
     assert shap_row3 is not None and shap_row3[0] == 1
     # 'predictions' reste inchangé
@@ -387,7 +403,7 @@ def test_multi_schema_pipeline_in_single_catalog() -> None:
 
     # Étape 4 : audit indépendant de chaque schéma
     for schema_name in ("predictions", "shapley"):
-        report = DatabaseAuditor(
-            connection=conn, categorical_threshold=4, schema=schema_name
-        ).validate_database(ValidationLevel.BASIC)
+        report = DatabaseAuditor(connection=conn, schema=schema_name).validate_database(
+            ValidationLevel.BASIC
+        )
         assert report.get_critical_issues_count() == 0

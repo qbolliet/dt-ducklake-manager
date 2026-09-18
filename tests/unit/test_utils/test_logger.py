@@ -2,6 +2,7 @@
 # Modules de base
 import logging
 import os
+from pathlib import Path
 
 # Module à tester
 from dt_ducklake_manager.utils.logger import _init_logger
@@ -77,3 +78,59 @@ def test_init_logger_file_handler_configuration() -> None:
     file_handler.close()
     logger.handlers = []  # Suppression des handlers relatifs à la création du fichier
     os.remove(test_log_file)
+
+
+# Test que des appels répétés n'accumulent pas de handlers en double
+def test_init_logger_is_idempotent_for_handlers() -> None:
+    """Test that repeated calls with the same name do not stack duplicate handlers.
+
+    Previously a FileHandler was added to the root logger on every call, so each
+    instantiated manager duplicated every log line.
+    """
+    logger_name = "test_idempotent_logger"
+    test_log_file = "test_idempotent.log"
+
+    # Nettoyage préalable d'un éventuel état résiduel
+    logging.getLogger(logger_name).handlers = []
+
+    logger = _init_logger(test_log_file, name=logger_name)
+    handler_count = len(logger.handlers)
+
+    # Appels supplémentaires : aucun handler équivalent ne doit être ajouté
+    for _ in range(3):
+        again = _init_logger(test_log_file, name=logger_name)
+        assert again is logger
+        assert len(again.handlers) == handler_count
+
+    # Nettoyage
+    for handler in logger.handlers:
+        handler.close()
+    logger.handlers = []
+    if os.path.exists(test_log_file):
+        os.remove(test_log_file)
+
+
+# Test que le chemin de log par défaut est ancré sur le répertoire de travail
+def test_init_logger_default_path_under_cwd(tmp_path: Path) -> None:
+    """Test that the default log file lands under ``<cwd>/logs`` and never in the
+    package installation directory.
+
+    Args:
+        tmp_path: pytest temporary directory used as the working directory.
+    """
+    logger_name = "test_default_path_logger"
+    logging.getLogger(logger_name).handlers = []
+
+    previous_cwd = os.getcwd()
+    os.chdir(tmp_path)
+    try:
+        logger = _init_logger(name=logger_name)
+        # Émission d'un message pour matérialiser le fichier
+        logger.info("materialise the log file")
+        expected = tmp_path / "logs" / f"{logger_name}.log"
+        assert expected.exists()
+    finally:
+        for handler in logger.handlers:
+            handler.close()
+        logger.handlers = []
+        os.chdir(previous_cwd)

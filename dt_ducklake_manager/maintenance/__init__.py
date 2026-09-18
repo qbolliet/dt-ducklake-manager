@@ -1,6 +1,6 @@
 # Importation des éléments d'intérêt du module
 from .auditor import DatabaseAuditor, ValidationIssue, ValidationLevel, ValidationReport
-from .compaction import DuckLakeMaintenance
+from .compaction import DuckLakeMaintenance, MaintenancePolicy, StorageReport
 from .recovery import (
     DatabaseRecoveryManager,
     RecoveryOperation,
@@ -19,4 +19,6 @@ __all__ = [
     "RecoveryOperation",
     "RecoveryResult",
     "DuckLakeMaintenance",
+    "MaintenancePolicy",
+    "StorageReport",
 ]

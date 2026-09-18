@@ -64,7 +64,8 @@ def multi_schema_connection() -> duckdb.DuckDBPyConnection:
     """Provide an in-memory connection holding two schemas in one catalog.
 
     Builds a ``predictions`` schema and a ``shapley`` schema, each with its own
-    ``fact_table``, ``metadata`` and ``dim_*`` tables, on a single shared connection.
+    ``fact_table``, ``metadata`` and ``dataset_metadata`` tables, on a single shared
+    connection.
     Mirrors the multi-schema layout (one catalog, several schemas) without needing a
     real DuckLake catalog file.
 

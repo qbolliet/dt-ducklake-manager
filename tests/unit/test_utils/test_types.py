@@ -8,7 +8,11 @@ import pytest
 from narwhals.dtypes import DType
 
 # Module du package à tester
-from dt_ducklake_manager.utils.types import map_python_to_sql_type
+from dt_ducklake_manager.utils.types import (
+    ALLOWED_DEFAULT_AGGREGATIONS,
+    map_python_to_sql_type,
+    normalize_default_aggregation,
+)
 
 # ---------------------------------------------------------------------------
 # Tests des types textuels
@@ -42,19 +46,28 @@ def test_categorical_and_enum_map_to_varchar() -> None:
 # ---------------------------------------------------------------------------
 
 
-# Test de l'association des entiers signés 8 à 64 bits vers INTEGER
-@pytest.mark.parametrize("dtype", [nw.Int8(), nw.Int16(), nw.Int32(), nw.Int64()])
-def test_signed_int_maps_to_integer(dtype: DType) -> None:
-    """Test that signed integer types (8 to 64 bits) map to INTEGER.
+# Test de l'association des entiers signés vers leurs types SQL de largeur préservée
+@pytest.mark.parametrize(
+    "dtype,expected",
+    [
+        (nw.Int8(), "TINYINT"),
+        (nw.Int16(), "SMALLINT"),
+        (nw.Int32(), "INTEGER"),
+        (nw.Int64(), "BIGINT"),
+    ],
+)
+def test_signed_int_maps_to_width_preserving_type(dtype: DType, expected: str) -> None:
+    """Test that signed integer types map to their width-preserving SQL types.
 
     Args:
         dtype: Narwhals signed integer type.
+        expected: Expected SQL type string.
 
     Examples:
         >>> map_python_to_sql_type(nw.Int32())
         'INTEGER'
     """
-    assert map_python_to_sql_type(dtype) == "INTEGER"
+    assert map_python_to_sql_type(dtype) == expected
 
 
 # Test de l'association de l'entier signé 128 bits vers HUGEINT
@@ -113,19 +126,26 @@ def test_uint128_maps_to_uhugeint() -> None:
 # ---------------------------------------------------------------------------
 
 
-# Test de l'association des types flottants vers DOUBLE
-@pytest.mark.parametrize("dtype", [nw.Float32(), nw.Float64()])
-def test_float_maps_to_double(dtype: DType) -> None:
-    """Test that Float32 and Float64 map to DOUBLE.
+# Test de l'association des types flottants vers leurs types SQL de largeur préservée
+@pytest.mark.parametrize(
+    "dtype,expected",
+    [
+        (nw.Float32(), "FLOAT"),
+        (nw.Float64(), "DOUBLE"),
+    ],
+)
+def test_float_maps_to_width_preserving_type(dtype: DType, expected: str) -> None:
+    """Test that Float32 maps to FLOAT and Float64 maps to DOUBLE.
 
     Args:
         dtype: Narwhals float type.
+        expected: Expected SQL type string.
 
     Examples:
         >>> map_python_to_sql_type(nw.Float64())
         'DOUBLE'
     """
-    assert map_python_to_sql_type(dtype) == "DOUBLE"
+    assert map_python_to_sql_type(dtype) == expected
 
 
 # Test de l'association du type décimal vers DECIMAL
@@ -241,13 +261,13 @@ def test_map_via_polars_integer_schema() -> None:
     """Test type mapping via a real polars schema for integer columns.
 
     Examples:
-        >>> df = pl.DataFrame({'col': [1, 2, 3]})
+        >>> df = pl.DataFrame({'col': [1, 2, 3]})  # polars infère Int64
         >>> map_python_to_sql_type(nw.from_native(df, eager_only=True).schema['col'])
-        'INTEGER'
+        'BIGINT'
     """
     df = pl.DataFrame({"col": [1, 2, 3]})
     nw_df = nw.from_native(df, eager_only=True)
-    assert map_python_to_sql_type(nw_df.schema["col"]) == "INTEGER"
+    assert map_python_to_sql_type(nw_df.schema["col"]) == "BIGINT"
 
 
 # Test de l'inférence de type à partir d'un schéma polars pour les chaînes
@@ -276,3 +296,45 @@ def test_map_via_polars_float_schema() -> None:
     df = pl.DataFrame({"col": [1.0, 2.0]})
     nw_df = nw.from_native(df, eager_only=True)
     assert map_python_to_sql_type(nw_df.schema["col"]) == "DOUBLE"
+
+
+# ---------------------------------------------------------------------------
+# Tests de normalize_default_aggregation()
+# ---------------------------------------------------------------------------
+
+
+# Test de la normalisation en majuscules d'une agrégation valide
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("sum", "SUM"),
+        ("Avg", "AVG"),
+        ("MEDIAN", "MEDIAN"),
+        ("mode", "MODE"),
+        ("count", "COUNT"),
+        ("min", "MIN"),
+        ("max", "MAX"),
+    ],
+)
+def test_normalize_default_aggregation_valid(raw: str, expected: str) -> None:
+    """Test that a valid aggregation is upper-cased and returned.
+
+    Args:
+        raw: Case-insensitive aggregation label supplied by the producer.
+        expected: Canonical upper-cased label.
+    """
+    assert normalize_default_aggregation(raw) == expected
+    assert expected in ALLOWED_DEFAULT_AGGREGATIONS
+
+
+# Test que None traverse la fonction sans validation (champ nullable)
+def test_normalize_default_aggregation_none_passes_through() -> None:
+    """Test that None is accepted unchanged since the field is nullable."""
+    assert normalize_default_aggregation(None) is None
+
+
+# Test qu'une agrégation inconnue lève une ValueError explicite
+def test_normalize_default_aggregation_invalid_raises() -> None:
+    """Test that an unsupported aggregation raises a descriptive ValueError."""
+    with pytest.raises(ValueError, match="Invalid default_aggregation 'TOTAL'"):
+        normalize_default_aggregation("TOTAL")

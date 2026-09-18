@@ -108,7 +108,7 @@ name = "cffi"
 version = "2.0.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "pycparser" },
+    { name = "pycparser", marker = "implementation_name != 'PyPy'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/eb/56/b1ba7935a17738ae8453301356628e8147c79dbb825bcbc73dc7401f9846/cffi-2.0.0.tar.gz", hash = "sha256:44d1b5909021139fe36001ae048dbdde8214afa20200eda0f64c068cac5d5529", size = 523588, upload-time = "2025-09-08T23:24:04.541Z" }
 wheels = [
@@ -281,12 +281,11 @@ wheels = [
 
 [[package]]
 name = "dt-ducklake-manager"
-version = "0.2.0"
+version = "0.3.0"
 source = { editable = "." }
 dependencies = [
     { name = "duckdb" },
     { name = "narwhals" },
-    { name = "polars" },
     { name = "psycopg2" },
     { name = "pyarrow" },
 ]
@@ -296,6 +295,7 @@ dev = [
     { name = "ipykernel" },
     { name = "mypy" },
     { name = "pandas" },
+    { name = "polars" },
     { name = "pre-commit" },
     { name = "pytest" },
     { name = "ruff" },
@@ -311,7 +311,6 @@ docs = [
 requires-dist = [
     { name = "duckdb", specifier = ">=1.5.3,<2" },
     { name = "narwhals", specifier = ">=2.21.2,<3" },
-    { name = "polars", specifier = ">=1.39.3,<2" },
     { name = "psycopg2", specifier = ">=2.9.12" },
     { name = "pyarrow", specifier = ">=23.0.1" },
 ]
@@ -321,6 +320,7 @@ dev = [
     { name = "ipykernel", specifier = ">=7.2.0" },
     { name = "mypy", specifier = ">=2.1.0" },
     { name = "pandas", specifier = ">=3.0.3" },
+    { name = "polars", specifier = ">=1.39.3,<2" },
     { name = "pre-commit", specifier = ">=4.6.0" },
     { name = "pytest", specifier = ">=8.3.4" },
     { name = "ruff", specifier = ">=0.15.14" },
@@ -990,7 +990,7 @@ name = "pexpect"
 version = "4.9.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "ptyprocess" },
+    { name = "ptyprocess", marker = "sys_platform != 'emscripten' and sys_platform != 'win32'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/42/92/cc564bf6381ff43ce1f4d06852fc19a2f11d180f23dc32d9588bee2f149d/pexpect-4.9.0.tar.gz", hash = "sha256:ee7d41123f3c9911050ea2c2dac107568dc43b2d3b0c7557a33212c398ead30f", size = 166450, upload-time = "2023-11-25T09:07:26.339Z" }
 wheels = [

@@ -1,17 +1,36 @@
 # Importation des modules
 # Modules de base
-# Module de tests
+import os
+import warnings
 from typing import Any
 
+import duckdb
+import polars as pl
+
+# Module de tests
 import pytest
 
 # Modules du package à tester
+from dt_ducklake_manager.connection import DuckLakeConnector
 from dt_ducklake_manager.maintenance import (
     DatabaseRecoveryManager,
     RecoveryOperation,
     RecoveryStrategy,
 )
 from dt_ducklake_manager.maintenance.recovery import RecoveryResult
+from dt_ducklake_manager.schema import DuckLakeTablesBuilder
+
+
+def _ducklake_available() -> bool:
+    """Vérifie si l'extension DuckLake est disponible dans l'environnement de test."""
+    try:
+        conn = duckdb.connect(":memory:")
+        conn.execute("INSTALL ducklake; LOAD ducklake;")
+        conn.close()
+        return True
+    except Exception:
+        return False
+
 
 # ===========================================================================
 # Tests des dataclasses
@@ -38,23 +57,26 @@ def test_recovery_operation_initialization() -> None:
 def test_recovery_operation_custom_parameters() -> None:
     """Test RecoveryOperation with custom parameters.
 
+    ``target_recovery_point`` carries a DuckLake ``snapshot_id``, the only kind of
+    restore point left since application backups were dropped (§1.5).
+
     Examples:
         >>> op = RecoveryOperation(
         ...     strategy=RecoveryStrategy.USE_SNAPSHOT_HISTORY,
-        ...     target_recovery_point='rp_001',
+        ...     target_recovery_point='17',
         ...     auto_validate=False,
         ... )
         >>> op.target_recovery_point
-        'rp_001'
+        '17'
     """
     op = RecoveryOperation(
         strategy=RecoveryStrategy.USE_SNAPSHOT_HISTORY,
-        target_recovery_point="rp_001",
+        target_recovery_point="17",
         parameters={"snapshot_version": 5},
         auto_validate=False,
         description="Test recovery",
     )
-    assert op.target_recovery_point == "rp_001"
+    assert op.target_recovery_point == "17"
     assert op.parameters == {"snapshot_version": 5}
     assert op.auto_validate is False
 
@@ -87,26 +109,52 @@ def test_recovery_result_initialization() -> None:
 
 # Initialisation d'un gestionnaire de récupération pour les tests
 @pytest.fixture
-def recovery_manager(
-    built_ducklake_schema: Any, tmp_path: Any
-) -> DatabaseRecoveryManager:
+def recovery_manager(built_ducklake_schema: Any) -> DatabaseRecoveryManager:
     """Create a DatabaseRecoveryManager for testing.
 
     Args:
         built_ducklake_schema: Fixture providing a DuckDB connection with a built
         schema.
-        tmp_path: pytest temporary directory for backup storage.
 
     Returns:
         DatabaseRecoveryManager: initialized with the test connection.
     """
     return DatabaseRecoveryManager(
         connection=built_ducklake_schema,
-        backup_dir=str(tmp_path / "backups"),
-        categorical_threshold=4,
-        max_backup_age_days=30,
-        auto_backup_on_changes=False,
     )
+
+
+# Initialisation d'un gestionnaire branché sur un catalogue DuckLake réel
+@pytest.fixture
+def ducklake_recovery_manager(tmp_path: Any) -> DatabaseRecoveryManager:
+    """Create a DatabaseRecoveryManager on a real, on-disk DuckLake catalog.
+
+    The in-memory connection used elsewhere attaches no catalog, so the
+    ``ducklake_snapshots()`` table function is unavailable there. An extra write
+    is performed so the history holds several snapshots.
+
+    Args:
+        tmp_path: pytest temporary directory.
+
+    Returns:
+        DatabaseRecoveryManager: bound to a catalog with a non-trivial history.
+    """
+    catalog = str(tmp_path / "test.ducklake")
+    data_dir = str(tmp_path / "data")
+    os.makedirs(data_dir)
+    conn = DuckLakeConnector(catalog, data_dir).connect()
+
+    df = pl.DataFrame({"id": [1, 2, 3], "category": ["A", "B", "A"]})
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        DuckLakeTablesBuilder(
+            df, categorical_threshold=4, primary_keys=["id"], connection=conn
+        ).build_schema()
+
+    # Écriture supplémentaire : l'historique compte alors plusieurs snapshots
+    conn.execute("INSERT INTO fact_table (id, category) VALUES (4, 'C')")
+
+    return DatabaseRecoveryManager(connection=conn)
 
 
 # Test de l'initialisation du gestionnaire de récupération
@@ -117,79 +165,114 @@ def test_recovery_manager_initialization(recovery_manager: Any) -> None:
         recovery_manager: DatabaseRecoveryManager fixture.
     """
     assert recovery_manager is not None
-    assert recovery_manager.max_backup_age_days == 30
+    assert recovery_manager.schema == "main"
+    assert recovery_manager.catalog_alias == "db"
+    assert recovery_manager.auditor is not None
 
 
-# Test de la création d'un point de récupération
-def test_create_recovery_point(recovery_manager: Any) -> None:
-    """Test that create_recovery_point returns a non-None recovery ID.
+# Test que le gestionnaire n'expose plus de sauvegarde applicative
+def test_recovery_manager_has_no_application_backup(recovery_manager: Any) -> None:
+    """Test that no application-level backup machinery survives (§1.5).
 
-    Args:
-        recovery_manager: DatabaseRecoveryManager fixture.
-    """
-    recovery_id = recovery_manager.create_recovery_point(
-        description="Test recovery point",
-    )
-    # Vérification que l'identifiant est bien retourné
-    assert recovery_id is not None
-    assert isinstance(recovery_id, str)
-    assert len(recovery_id) > 0
-
-
-# Test que la liste des points de récupération est non vide après création
-def test_list_recovery_points_after_creation(recovery_manager: Any) -> None:
-    """Test that list_recovery_points returns a non-empty list after creation.
+    Recovery relies on DuckLake time travel only: no recovery point is created,
+    listed or deleted, and no backup directory is held.
 
     Args:
         recovery_manager: DatabaseRecoveryManager fixture.
     """
-    # Création d'un point de récupération
-    recovery_manager.create_recovery_point(
-        description="Test point",
-    )
-
-    # Vérification que le point est bien listé
-    points = recovery_manager.list_recovery_points()
-    assert isinstance(points, list)
-    assert len(points) >= 1
+    for attribute in (
+        "create_recovery_point",
+        "list_recovery_points",
+        "delete_recovery_point",
+        "backup_dir",
+    ):
+        assert not hasattr(recovery_manager, attribute)
 
 
-# Test de la suppression d'un point de récupération
-def test_delete_recovery_point(recovery_manager: Any) -> None:
-    """Test that delete_recovery_point returns True and removes the point.
-
-    Args:
-        recovery_manager: DatabaseRecoveryManager fixture.
-    """
-    # Création d'un point de récupération à supprimer
-    recovery_id = recovery_manager.create_recovery_point(
-        description="Point à supprimer",
-    )
-    assert recovery_id is not None
-
-    # Suppression du point
-    success = recovery_manager.delete_recovery_point(recovery_id)
-    assert success is True
-
-    # Vérification que le point n'est plus listé
-    points = recovery_manager.list_recovery_points()
-    point_ids = [p.recovery_id for p in points]
-    assert recovery_id not in point_ids
+# ===========================================================================
+# Tests du time travel DuckLake : LE mécanisme de récupération (§1.5)
+# ===========================================================================
 
 
-# Test de la création d'un point de récupération de type SCHEMA_BACKUP
-def test_create_schema_backup(recovery_manager: Any) -> None:
-    """Test that a METADATA_BACKUP recovery point can be created and listed by type.
+# Test que list_ducklake_snapshots retourne l'historique d'un catalogue réel
+@pytest.mark.skipif(
+    not _ducklake_available(),
+    reason="Extension ducklake non disponible dans cet environnement",
+)
+def test_list_ducklake_snapshots_returns_history(
+    ducklake_recovery_manager: Any,
+) -> None:
+    """Test that list_ducklake_snapshots returns the catalog's snapshot history.
 
     Args:
-        recovery_manager: DatabaseRecoveryManager fixture.
+        ducklake_recovery_manager: manager bound to a real DuckLake catalog.
     """
-    recovery_id = recovery_manager.create_recovery_point(
-        description="Schema backup test",
-    )
-    assert recovery_id is not None
+    snapshots = ducklake_recovery_manager.list_ducklake_snapshots()
 
-    # Vérification que le point est bien listé
-    points = recovery_manager.list_recovery_points()
-    assert len(points) >= 1
-    assert any(p.recovery_id == recovery_id for p in points)
+    # Historique non vide, trié par identifiant décroissant
+    assert snapshots is not None
+    assert len(snapshots) >= 2
+    assert "snapshot_id" in snapshots.columns
+    ids = snapshots["snapshot_id"].to_list()
+    assert ids == sorted(ids, reverse=True)
+
+
+# Test que list_ducklake_snapshots retourne None hors catalogue DuckLake
+def test_list_ducklake_snapshots_without_catalog(recovery_manager: Any) -> None:
+    """Test that list_ducklake_snapshots returns None on a plain connection.
+
+    Args:
+        recovery_manager: DatabaseRecoveryManager fixture (in-memory connection,
+            no attached DuckLake catalog).
+    """
+    assert recovery_manager.list_ducklake_snapshots() is None
+
+
+# Test que USE_SNAPSHOT_HISTORY inventorie les snapshots et guide la restauration
+@pytest.mark.skipif(
+    not _ducklake_available(),
+    reason="Extension ducklake non disponible dans cet environnement",
+)
+def test_use_snapshot_history_returns_restore_instructions(
+    ducklake_recovery_manager: Any,
+) -> None:
+    """Test that USE_SNAPSHOT_HISTORY inventories snapshots and guides restoration.
+
+    Args:
+        ducklake_recovery_manager: manager bound to a real DuckLake catalog.
+    """
+    operation = RecoveryOperation(
+        strategy=RecoveryStrategy.USE_SNAPSHOT_HISTORY,
+        auto_validate=False,
+        description="Inventaire des snapshots",
+    )
+    result = ducklake_recovery_manager.recover_database(operation)
+
+    # Inventaire retourné, accompagné de la procédure de restauration
+    assert result.success is True
+    assert any("snapshot" in line for line in result.operations_performed)
+    assert any("snapshot_version=" in line for line in result.recommendations)
+
+
+# Test qu'un snapshot cible inexistant est signalé sans faire échouer l'inventaire
+@pytest.mark.skipif(
+    not _ducklake_available(),
+    reason="Extension ducklake non disponible dans cet environnement",
+)
+def test_use_snapshot_history_unknown_target_is_flagged(
+    ducklake_recovery_manager: Any,
+) -> None:
+    """Test that an unknown target snapshot is reported rather than silently used.
+
+    Args:
+        ducklake_recovery_manager: manager bound to a real DuckLake catalog.
+    """
+    operation = RecoveryOperation(
+        strategy=RecoveryStrategy.USE_SNAPSHOT_HISTORY,
+        target_recovery_point="999999",
+        auto_validate=False,
+    )
+    result = ducklake_recovery_manager.recover_database(operation)
+
+    assert result.success is True
+    assert any("introuvable" in line for line in result.operations_performed)

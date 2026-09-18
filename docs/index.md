@@ -12,11 +12,16 @@ This package provides a complete lifecycle for a DuckLake database:
 - **Audit & validate** database integrity at configurable levels
 - **Maintain** physical storage (file compaction, snapshot expiry)
 
-The schema is structured around three layers:
+The schema is structured around exactly three tables per result set, with **no
+dimension table anywhere**:
 
-- the `metadata` table references general information (label, type, categorical status, etc.) about each column ;
-- the `dimension` tables associate each modality of a low-cardinality categorical variable to an `id` used in the `fact` table ;
-- the `fact` table reflects the information in the original dataset.
+- the `fact_table` holds the observations; categorical columns store their **original labels** directly (Parquet dictionary-encoding absorbs the storage cost), so there is no synthetic code ;
+- the `metadata` table describes each column of the fact table — one row per column — and is the contract between the database and the interface (label, SQL type, primary-key and categorical flags, column hierarchy via `parent_name`, and the UI fields `unit`, `display_format`, `family`, `description`, `default_aggregation`) ;
+- the `dataset_metadata` table describes the result set itself (title, description, source, last update, schema version, and `cluster_by`, the physical sort key).
+
+See [Schema and data model](schema.md) for the full description, and [Storage
+lifecycle and maintenance](maintenance.md) for how the physical storage is
+kept efficient over time.
 
 ![Scheme for table storage](assets/schema_bdd.png)
 
@@ -43,35 +48,68 @@ import pandas as pd
 from dt_ducklake_manager.connection import DuckLakeConnector
 from dt_ducklake_manager.schema import DuckLakeTablesBuilder
 from dt_ducklake_manager.operations import DatabaseUpdater, DatabaseDeleter
-from dt_ducklake_manager.maintenance import DatabaseAuditor, DuckLakeMaintenance, ValidationLevel
+from dt_ducklake_manager.maintenance import (
+    DatabaseAuditor,
+    DuckLakeMaintenance,
+    MaintenancePolicy,
+    ValidationLevel,
+)
 
-# 1. Build the schema from an initial dataset
+# 0. Open a connection attached to the DuckLake catalog
+connection = DuckLakeConnector(
+    catalog_path="outputs/catalog.ducklake",
+    data_path="outputs/data/",
+).connect()
+
+# 1. Build the schema from an initial dataset, with a column hierarchy
+# (commune -> region) and UI metadata
 df = pd.DataFrame({
-    "id": [1, 2, 3],
-    "city": ["Paris", "Berlin", "Madrid"],
+    "date": ["2026-01-01", "2026-01-01", "2026-01-02"],
+    "region": ["Île-de-France", "Bretagne", "Île-de-France"],
+    "commune": ["Paris", "Rennes", "Boulogne"],
     "score": [0.9, 0.7, 0.5],
 })
-connector = DuckLakeConnector(catalog_path="outputs/database.db")
-builder = DuckLakeTablesBuilder(connector=connector, df=df, categorical_threshold=200)
-builder.build_schema()
+builder = DuckLakeTablesBuilder(
+    df,
+    categorical_threshold=200,
+    primary_keys=["date", "region", "commune"],
+    hierarchies={"commune": "region"},
+    connection=connection,
+    dataset_label="City scores",
+)
+builder.build_schema(
+    column_metadata={"score": {"unit": "%", "default_aggregation": "AVG"}},
+    cluster_by=["date", "region"],
+    run_id="build-2026-01-01",
+)
 
-# 2. Update the database with new observations (upsert)
-df_new = pd.DataFrame({"id": [2, 4], "city": ["Lyon", "Rome"], "score": [0.8, 0.6]})
-updater = DatabaseUpdater(connector=connector)
-updater.update_database(df=df_new)
+# 2. Update the database with new observations (upsert), adding a new
+# column on the fly
+df_new = pd.DataFrame({
+    "date": ["2026-01-02"], "region": ["Bretagne"], "commune": ["Rennes"],
+    "score": [0.8], "rank": [1],
+})
+updater = DatabaseUpdater(connection=connection)
+updater.update_database(
+    update_df=df_new,
+    allow_new_columns=True,
+    column_metadata={"rank": {"label": "Rank", "default_aggregation": "MIN"}},
+    run_id="update-2026-01-02",
+)
 
 # 3. Delete rows matching a condition
-deleter = DatabaseDeleter(connector=connector)
-deleter.delete_rows(conditions=[("score", "<", 0.6)])
+deleter = DatabaseDeleter(connection=connection)
+deleter.delete_rows(filters=[("score", "<", 0.6)])
 
 # 4. Audit database integrity
-auditor = DatabaseAuditor(connector=connector)
-report = auditor.validate_database(level=ValidationLevel.STANDARD)
-print(report)
+auditor = DatabaseAuditor(connection=connection)
+report = auditor.validate_database(ValidationLevel.STANDARD)
+print(report.recommendations)
 
-# 5. Run full maintenance (compaction, snapshot expiry)
-maintenance = DuckLakeMaintenance(connector=connector)
-maintenance.full_maintenance()
+# 5. Run maintenance driven by measured storage indicators (never
+# destructive unless explicitly opted into)
+maintenance = DuckLakeMaintenance(connection)
+maintenance.maintain(MaintenancePolicy(retention_days=30))
 ```
 
 More detailed examples and parametrization walkthroughs are available in the `notebooks/` folder.
