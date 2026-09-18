@@ -4,6 +4,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.1](https://github.com/qbolliet/dt-ducklake-manager/compare/v0.3.0...v0.3.1) (2026-09-18)
+
+
+### Bug Fixes
+
+* duplicate remove logic of null columns ([6dc8c07](https://github.com/qbolliet/dt-ducklake-manager/commit/6dc8c07c62618ed85fa69cb11cc8c2989b84c7dc))
+* example notebooks ([b03b042](https://github.com/qbolliet/dt-ducklake-manager/commit/b03b04265b69438ee30865ad7596b1106aa5ec90))
+* homogenous number types between sql and python ([1ba2b9d](https://github.com/qbolliet/dt-ducklake-manager/commit/1ba2b9dca1e77a611164a1e0b01df3931a9d7b3f))
+* maintenance logic ([ad0faed](https://github.com/qbolliet/dt-ducklake-manager/commit/ad0faed571cb53d03728d874fbb4dc38b4308886))
+* optimization parametrisation ([331b134](https://github.com/qbolliet/dt-ducklake-manager/commit/331b134bb3cec3c242eb9746906b58ad5c9c695c))
+* quote columns + schema validation + logger path ([821a87d](https://github.com/qbolliet/dt-ducklake-manager/commit/821a87df52c00f90d2d1d9eaa49e51661f919336))
+* type checking + metadata and categorical status updates ([0a1c252](https://github.com/qbolliet/dt-ducklake-manager/commit/0a1c25226719bc4424f6e89e42764a4723dcc4bb))
+
+
+### Documentation
+
+* readme Release-As: 0.4.0 ([54e2d55](https://github.com/qbolliet/dt-ducklake-manager/commit/54e2d5533de441ec84a5e129f88ec377964256e8))
+
 ## [0.3.0](https://github.com/qbolliet/dt-ducklake-manager/compare/v0.2.0...v0.3.0) (2026-08-28)
 
 
