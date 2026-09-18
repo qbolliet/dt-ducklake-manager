@@ -15,9 +15,7 @@ This package provides a complete lifecycle for a DuckLake database:
 - **Maintain** physical storage (file compaction, snapshot expiry)
 
 The schema is built around exactly three tables per result set, with **no
-dimension table anywhere**: a **fact table** holding the observations
-(categorical columns store their original labels directly — no synthetic
-code), a **metadata table** describing every column — one row per column, the
+dimension table anywhere**: a **fact table** holding the observations, a **metadata table** describing every column — one row per column, the
 contract between the database and the interface (label, SQL type,
 primary-key and categorical flags, column hierarchy, UI fields), and a
 **dataset metadata table** describing the result set itself (title,
