@@ -17,8 +17,9 @@ from ..utils.logger import _init_logger
 # Nom du logger de ce module (fichier par défaut : <cwd>/logs/ducklake_connector.log)
 _LOGGER_NAME = "ducklake_connector"
 
-# Options DuckLake recommandées : compression zstd, format Parquet v2, taille cible de fichier (unité obligatoire), taille de
-# row group alignée sur des lots de quelques dizaines de milliers de lignes.
+# Options DuckLake recommandées : compression zstd, format Parquet v2, taille
+# cible de fichier (unité obligatoire), taille de row group alignée sur des lots
+# de quelques dizaines de milliers de lignes.
 # `data_inlining_row_limit` est volontairement exclu : c'est un argument dédié du
 # connecteur (option d'ATTACH), pas une option de post-attachement.
 RECOMMENDED_DUCKLAKE_OPTIONS: dict[str, str | int] = {
@@ -1045,8 +1046,8 @@ class DuckLakeConnector:
         """
         Apply ``ducklake_options`` to the attached catalog via ``set_option``.
 
-        No-op on a read-only connection or when ``ducklake_options`` is None. Each option
-        actually applied is logged individually.
+        No-op on a read-only connection or when ``ducklake_options`` is None. Each
+        option actually applied is logged individually.
 
         Args:
             conn (duckdb.DuckDBPyConnection): Connection with the catalog attached.

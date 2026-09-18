@@ -55,7 +55,8 @@ def test_schema_builder_initialization(schema_builder: Any, sample_df: Any) -> N
     assert isinstance(schema_builder.df, nw.DataFrame)
     # Vérification de l'équivalence de contenu (comparaison via les backends natifs)
     expected = nw.from_native(sample_df, eager_only=True)
-    assert schema_builder.df.to_native().equals(expected.to_native())  # type: ignore[attr-defined]
+    native: Any = schema_builder.df.to_native()
+    assert native.equals(expected.to_native())
 
 
 # ---------------------------------------------------------------------------

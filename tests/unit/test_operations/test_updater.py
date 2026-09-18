@@ -1015,7 +1015,7 @@ def test_update_rolls_back_on_fact_table_failure(
     before = _snapshot_state(updater.conn)
 
     # Échec simulé de l'étape de mise à jour de la table des faits
-    updater._update_fact_table_direct = lambda df, report: False  # type: ignore[method-assign]
+    setattr(updater, "_update_fact_table_direct", lambda df, report: False)
 
     assert updater.update_database(update_df, keep="first") is False
 
@@ -1039,7 +1039,7 @@ def test_update_rolls_back_on_exception(
     def _boom(df: Any, report: Any) -> bool:
         raise RuntimeError("disque plein")
 
-    updater._update_fact_table_direct = _boom  # type: ignore[method-assign]
+    setattr(updater, "_update_fact_table_direct", _boom)
 
     assert updater.update_database(update_df, keep="first") is False
     assert _snapshot_state(updater.conn) == before
@@ -1064,7 +1064,7 @@ def test_update_rolls_back_on_last_step_failure(
         raise RuntimeError("échec de la validation")
 
     assert updater.auditor is not None
-    updater.auditor.validate_database = _boom  # type: ignore[method-assign]
+    setattr(updater.auditor, "validate_database", _boom)
 
     assert updater.update_database(update_df, keep="first") is False
     assert _snapshot_state(updater.conn) == before
@@ -1091,9 +1091,7 @@ def test_update_rolls_back_on_critical_validation_issues(
             return []
 
     assert updater.auditor is not None
-    updater.auditor.validate_database = (  # type: ignore[method-assign]
-        lambda level=None: _CriticalReport()
-    )
+    setattr(updater.auditor, "validate_database", lambda level=None: _CriticalReport())
 
     assert updater.update_database(update_df, keep="first") is False
     assert _snapshot_state(updater.conn) == before
@@ -1122,7 +1120,7 @@ def test_update_without_transaction_keeps_partial_state(
         "SELECT COUNT(*) FROM fact_table"
     ).fetchone()[0]
 
-    updater._update_fact_table_direct = lambda d, report: False  # type: ignore[method-assign]
+    setattr(updater, "_update_fact_table_direct", lambda d, report: False)
 
     assert (
         updater.update_database(update_df, keep="first", use_transaction=False) is False

@@ -60,6 +60,8 @@ ignore_missing_imports = true
 [[tool.mypy.overrides]]
 module = "tests.*"
 disallow_untyped_decorators = false
+# fetchone()[0] sur un COUNT(*) ou une ligne fraîchement insérée : jamais None
+disable_error_code = ["index"]
 
 [tool.taskipy.tasks]
 test = "pytest -m \"not integration\""

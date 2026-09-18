@@ -146,6 +146,8 @@ def test_catalog_alias_travels_with_schema(
         catalog_alias="db",
     )
     # Le schéma et l'alias voyagent ensemble jusqu'aux sous-gestionnaires
+    assert updater.data_mgr is not None
+    assert updater.auditor is not None
     for mgr in (
         updater,
         updater.data_mgr,

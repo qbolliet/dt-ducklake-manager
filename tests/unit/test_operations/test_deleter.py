@@ -525,7 +525,7 @@ def test_delete_rows_rolls_back_on_exception(deleter: DatabaseDeleter) -> None:
         raise RuntimeError("échec après suppression")
 
     assert deleter.auditor is not None
-    deleter.auditor.validate_database = _boom  # type: ignore[method-assign]
+    setattr(deleter.auditor, "validate_database", _boom)
 
     report = deleter.delete_rows(filters=[("id", "=", 1)])
     assert report.warnings
@@ -584,9 +584,7 @@ def test_delete_rows_rolls_back_on_critical_validation_issues(
             return []
 
     assert deleter.auditor is not None
-    deleter.auditor.validate_database = (  # type: ignore[method-assign]
-        lambda level=None: _CriticalReport()
-    )
+    setattr(deleter.auditor, "validate_database", lambda level=None: _CriticalReport())
 
     report = deleter.delete_rows(filters=[("id", "=", 1)])
     assert report.warnings
@@ -683,9 +681,7 @@ def test_delete_columns_rolls_back_on_critical_validation_issues(
             return []
 
     assert deleter.auditor is not None
-    deleter.auditor.validate_database = (  # type: ignore[method-assign]
-        lambda level=None: _CriticalReport()
-    )
+    setattr(deleter.auditor, "validate_database", lambda level=None: _CriticalReport())
 
     result = deleter.delete_columns(["status", "high_cardinality"])
 
@@ -710,7 +706,7 @@ def test_delete_columns_rolls_back_on_exception(deleter: DatabaseDeleter) -> Non
     def _boom(level: Any = None) -> Any:
         raise RuntimeError("auditeur indisponible")
 
-    deleter.auditor.validate_database = _boom  # type: ignore[method-assign]
+    setattr(deleter.auditor, "validate_database", _boom)
 
     result = deleter.delete_columns(["status"])
 

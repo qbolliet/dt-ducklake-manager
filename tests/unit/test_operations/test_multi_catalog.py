@@ -93,7 +93,7 @@ def _fact_count(conn: duckdb.DuckDBPyConnection, catalog: str) -> int:
     query = f'SELECT COUNT(*) FROM "{catalog}"."main"."fact_table"'
     row = conn.execute(query).fetchone()
     assert row is not None
-    return row[0]
+    return int(row[0])
 
 
 # Test qu'une mise à jour ciblant lake_a n'écrit jamais dans lake_b
