@@ -1,0 +1,202 @@
+<mxfile host="app.diagrams.net" agent="claude-code" version="25.0.1" scale="1" border="0">
+  <diagram name="Page-1" id="ieqoYeivfO4d9V0dV1x4">
+    <mxGraphModel dx="1050" dy="538" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="900" pageHeight="1100" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+
+        <!-- Section 1: one schema's three tables -->
+        <mxCell id="s1title" value="Schema of one result set (e.g. main, predictions, shapley)" style="text;html=1;fontSize=20;fontStyle=1;align=left;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry x="40" y="20" width="700" height="30" as="geometry" />
+        </mxCell>
+
+        <!-- fact_table -->
+        <mxCell id="fact_title" value="fact_table" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#6c8ebf;strokeColor=#3a5c85;fontColor=#ffffff;fontStyle=1;fontSize=14;align=center;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry x="40" y="90" width="550" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="fh_date" value="date" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontStyle=1;fontSize=12;align=center;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry x="40" y="120" width="110" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="fh_region" value="region" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontStyle=1;fontSize=12;align=center;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry x="150" y="120" width="110" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="fh_product" value="product" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontStyle=1;fontSize=12;align=center;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry x="260" y="120" width="110" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="fh_category" value="category" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontStyle=1;fontSize=12;align=center;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry x="370" y="120" width="110" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="fh_value" value="value" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontStyle=1;fontSize=12;align=center;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry x="480" y="120" width="110" height="30" as="geometry" />
+        </mxCell>
+
+        <mxCell id="fr1_date" value="2026-01-01" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#6c8ebf;fontSize=11;align=center;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry x="40" y="150" width="110" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="fr1_region" value="&#206;le-de-France" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#6c8ebf;fontSize=11;align=center;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry x="150" y="150" width="110" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="fr1_product" value="Widget A" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#6c8ebf;fontSize=11;align=center;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry x="260" y="150" width="110" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="fr1_category" value="premium" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#6c8ebf;fontSize=11;align=center;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry x="370" y="150" width="110" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="fr1_value" value="1240.5" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#6c8ebf;fontSize=11;align=center;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry x="480" y="150" width="110" height="30" as="geometry" />
+        </mxCell>
+
+        <mxCell id="fr2_date" value="2026-01-02" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#6c8ebf;fontSize=11;align=center;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry x="40" y="180" width="110" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="fr2_region" value="Bretagne" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#6c8ebf;fontSize=11;align=center;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry x="150" y="180" width="110" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="fr2_product" value="Widget B" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#6c8ebf;fontSize=11;align=center;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry x="260" y="180" width="110" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="fr2_category" value="standard" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#6c8ebf;fontSize=11;align=center;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry x="370" y="180" width="110" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="fr2_value" value="980.0" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#6c8ebf;fontSize=11;align=center;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry x="480" y="180" width="110" height="30" as="geometry" />
+        </mxCell>
+
+        <mxCell id="fr3_date" value="..." style="rounded=0;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#6c8ebf;fontSize=11;fontColor=#999999;align=center;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry x="40" y="210" width="110" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="fr3_region" value="..." style="rounded=0;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#6c8ebf;fontSize=11;fontColor=#999999;align=center;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry x="150" y="210" width="110" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="fr3_product" value="..." style="rounded=0;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#6c8ebf;fontSize=11;fontColor=#999999;align=center;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry x="260" y="210" width="110" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="fr3_category" value="..." style="rounded=0;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#6c8ebf;fontSize=11;fontColor=#999999;align=center;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry x="370" y="210" width="110" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="fr3_value" value="..." style="rounded=0;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#6c8ebf;fontSize=11;fontColor=#999999;align=center;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry x="480" y="210" width="110" height="30" as="geometry" />
+        </mxCell>
+
+        <mxCell id="fact_caption" value="Categorical columns store the original labels directly &#8212; no dim_* table, no synthetic id. Deduplicated on the primary keys and written ORDER BY cluster_by." style="text;html=1;fontSize=11;fontStyle=2;align=left;verticalAlign=top;" vertex="1" parent="1">
+          <mxGeometry x="40" y="248" width="550" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="fact_note2" value="No dim_* table anywhere in the schema: Parquet dictionary-encoding already absorbs the storage cost of repeated labels." style="text;html=1;fontSize=12;fontStyle=2;fontColor=#b85450;align=left;verticalAlign=top;" vertex="1" parent="1">
+          <mxGeometry x="40" y="300" width="550" height="40" as="geometry" />
+        </mxCell>
+
+        <!-- metadata -->
+        <mxCell id="meta_title" value="metadata" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#82b366;strokeColor=#5a8a44;fontColor=#ffffff;fontStyle=1;fontSize=14;align=center;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry x="650" y="90" width="240" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="meta_name" value="name" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#f0f8ec;strokeColor=#82b366;fontSize=11;fontStyle=5;align=left;verticalAlign=middle;spacingLeft=8;" vertex="1" parent="1">
+          <mxGeometry x="650" y="120" width="240" height="26" as="geometry" />
+        </mxCell>
+        <mxCell id="meta_label" value="label" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#82b366;fontSize=11;align=left;verticalAlign=middle;spacingLeft=8;" vertex="1" parent="1">
+          <mxGeometry x="650" y="146" width="240" height="26" as="geometry" />
+        </mxCell>
+        <mxCell id="meta_sql_type" value="sql_type" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#82b366;fontSize=11;align=left;verticalAlign=middle;spacingLeft=8;" vertex="1" parent="1">
+          <mxGeometry x="650" y="172" width="240" height="26" as="geometry" />
+        </mxCell>
+        <mxCell id="meta_is_pk" value="is_primary_key" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#82b366;fontSize=11;align=left;verticalAlign=middle;spacingLeft=8;" vertex="1" parent="1">
+          <mxGeometry x="650" y="198" width="240" height="26" as="geometry" />
+        </mxCell>
+        <mxCell id="meta_is_cat" value="is_categorical  (UI only, inferred once)" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#82b366;fontSize=11;align=left;verticalAlign=middle;spacingLeft=8;" vertex="1" parent="1">
+          <mxGeometry x="650" y="224" width="240" height="26" as="geometry" />
+        </mxCell>
+        <mxCell id="meta_parent" value="parent_name  (column hierarchy)" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#82b366;fontSize=11;align=left;verticalAlign=middle;spacingLeft=8;" vertex="1" parent="1">
+          <mxGeometry x="650" y="250" width="240" height="26" as="geometry" />
+        </mxCell>
+        <mxCell id="meta_unit" value="unit" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#82b366;fontSize=11;align=left;verticalAlign=middle;spacingLeft=8;" vertex="1" parent="1">
+          <mxGeometry x="650" y="276" width="240" height="26" as="geometry" />
+        </mxCell>
+        <mxCell id="meta_format" value="display_format" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#82b366;fontSize=11;align=left;verticalAlign=middle;spacingLeft=8;" vertex="1" parent="1">
+          <mxGeometry x="650" y="302" width="240" height="26" as="geometry" />
+        </mxCell>
+        <mxCell id="meta_family" value="family" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#82b366;fontSize=11;align=left;verticalAlign=middle;spacingLeft=8;" vertex="1" parent="1">
+          <mxGeometry x="650" y="328" width="240" height="26" as="geometry" />
+        </mxCell>
+        <mxCell id="meta_desc" value="description" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#82b366;fontSize=11;align=left;verticalAlign=middle;spacingLeft=8;" vertex="1" parent="1">
+          <mxGeometry x="650" y="354" width="240" height="26" as="geometry" />
+        </mxCell>
+        <mxCell id="meta_agg" value="default_aggregation" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#82b366;fontSize=11;align=left;verticalAlign=middle;spacingLeft=8;" vertex="1" parent="1">
+          <mxGeometry x="650" y="380" width="240" height="26" as="geometry" />
+        </mxCell>
+        <mxCell id="meta_caption" value="One row per fact_table column &#8212; the contract between the database and the UI. Never recomputed by an update; corrected via update_column_metadata()." style="text;html=1;fontSize=11;fontStyle=2;align=left;verticalAlign=top;" vertex="1" parent="1">
+          <mxGeometry x="650" y="410" width="240" height="55" as="geometry" />
+        </mxCell>
+
+        <!-- metadata.name -> fact_table columns -->
+        <mxCell id="edge1" value="1 row per column of &#8594;" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;dashed=1;endArrow=block;fontSize=11;fontStyle=2;align=center;exitX=0;exitY=0.5;exitDx=0;exitDy=0;entryX=1;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="meta_name" target="fact_title">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- dataset_metadata -->
+        <mxCell id="dsm_title" value="dataset_metadata" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#d79b00;strokeColor=#a06a00;fontColor=#ffffff;fontStyle=1;fontSize=14;align=center;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry x="650" y="490" width="240" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="dsm_label" value="label" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#d79b00;fontSize=11;align=left;verticalAlign=middle;spacingLeft=8;" vertex="1" parent="1">
+          <mxGeometry x="650" y="520" width="240" height="26" as="geometry" />
+        </mxCell>
+        <mxCell id="dsm_desc" value="description" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#d79b00;fontSize=11;align=left;verticalAlign=middle;spacingLeft=8;" vertex="1" parent="1">
+          <mxGeometry x="650" y="546" width="240" height="26" as="geometry" />
+        </mxCell>
+        <mxCell id="dsm_source" value="source" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#d79b00;fontSize=11;align=left;verticalAlign=middle;spacingLeft=8;" vertex="1" parent="1">
+          <mxGeometry x="650" y="572" width="240" height="26" as="geometry" />
+        </mxCell>
+        <mxCell id="dsm_updated" value="updated_at" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#d79b00;fontSize=11;align=left;verticalAlign=middle;spacingLeft=8;" vertex="1" parent="1">
+          <mxGeometry x="650" y="598" width="240" height="26" as="geometry" />
+        </mxCell>
+        <mxCell id="dsm_version" value="schema_version" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#d79b00;fontSize=11;align=left;verticalAlign=middle;spacingLeft=8;" vertex="1" parent="1">
+          <mxGeometry x="650" y="624" width="240" height="26" as="geometry" />
+        </mxCell>
+        <mxCell id="dsm_cluster" value="cluster_by  (JSON list, sort key)" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#d79b00;fontSize=11;align=left;verticalAlign=middle;spacingLeft=8;" vertex="1" parent="1">
+          <mxGeometry x="650" y="650" width="240" height="26" as="geometry" />
+        </mxCell>
+        <mxCell id="dsm_caption" value="One row per schema &#8212; describes the result set itself. Touched (updated_at) by every successful write." style="text;html=1;fontSize=11;fontStyle=2;align=left;verticalAlign=top;" vertex="1" parent="1">
+          <mxGeometry x="650" y="680" width="240" height="40" as="geometry" />
+        </mxCell>
+
+        <!-- Section 2: catalog with several schemas -->
+        <mxCell id="s2title" value="One catalog can hold several result-set schemas" style="text;html=1;fontSize=20;fontStyle=1;align=left;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry x="40" y="760" width="700" height="30" as="geometry" />
+        </mxCell>
+
+        <mxCell id="catalog_box" value="Catalog (e.g. results.ducklake)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontStyle=1;fontSize=16;verticalAlign=top;align=left;spacingLeft=12;spacingTop=8;" vertex="1" parent="1">
+          <mxGeometry x="40" y="800" width="850" height="260" as="geometry" />
+        </mxCell>
+        <mxCell id="schema_pred" value="schema: predictions" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#666666;fontStyle=1;fontSize=14;verticalAlign=top;align=left;spacingLeft=10;spacingTop=6;" vertex="1" parent="1">
+          <mxGeometry x="80" y="850" width="360" height="180" as="geometry" />
+        </mxCell>
+        <mxCell id="schema_shap" value="schema: shapley" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#666666;fontStyle=1;fontSize=14;verticalAlign=top;align=left;spacingLeft=10;spacingTop=6;" vertex="1" parent="1">
+          <mxGeometry x="480" y="850" width="360" height="180" as="geometry" />
+        </mxCell>
+
+        <mxCell id="pred_fact" value="fact_table" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=12;align=center;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry x="100" y="890" width="320" height="36" as="geometry" />
+        </mxCell>
+        <mxCell id="pred_meta" value="metadata" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=12;align=center;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry x="100" y="934" width="320" height="36" as="geometry" />
+        </mxCell>
+        <mxCell id="pred_dsm" value="dataset_metadata" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;fontSize=12;align=center;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry x="100" y="978" width="320" height="36" as="geometry" />
+        </mxCell>
+
+        <mxCell id="shap_fact" value="fact_table" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=12;align=center;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry x="500" y="890" width="320" height="36" as="geometry" />
+        </mxCell>
+        <mxCell id="shap_meta" value="metadata" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=12;align=center;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry x="500" y="934" width="320" height="36" as="geometry" />
+        </mxCell>
+        <mxCell id="shap_dsm" value="dataset_metadata" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;fontSize=12;align=center;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry x="500" y="978" width="320" height="36" as="geometry" />
+        </mxCell>
+
+        <mxCell id="catalog_caption" value="Each schema is a fully independent result set: its own fact_table / metadata / dataset_metadata triplet, its own primary keys and cluster_by. No dimension or label table is shared across schemas, or across catalogs." style="text;html=1;fontSize=12;fontStyle=2;align=left;verticalAlign=top;" vertex="1" parent="1">
+          <mxGeometry x="40" y="1070" width="850" height="40" as="geometry" />
+        </mxCell>
+
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

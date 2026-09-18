@@ -14,7 +14,17 @@ This package provides a complete lifecycle for a DuckLake database:
 - **Audit & validate** database integrity at configurable levels
 - **Maintain** physical storage (file compaction, snapshot expiry)
 
-The schema is built around three tables per result set: a **fact table** holding the observations (categorical columns store their original labels — there are no dimension tables), a **metadata table** describing every column (label, SQL type, categorical and primary-key flags), and a **dataset metadata table** describing the result set itself (title, description, source, last update, schema version).
+The schema is built around exactly three tables per result set, with **no
+dimension table anywhere**: a **fact table** holding the observations
+(categorical columns store their original labels directly — no synthetic
+code), a **metadata table** describing every column — one row per column, the
+contract between the database and the interface (label, SQL type,
+primary-key and categorical flags, column hierarchy, UI fields), and a
+**dataset metadata table** describing the result set itself (title,
+description, source, last update, schema version, physical sort key). See
+the [schema](https://qbolliet.github.io/dt-ducklake-manager/schema/) and
+[maintenance](https://qbolliet.github.io/dt-ducklake-manager/maintenance/)
+pages of the documentation site for the full description.
 
 Input dataframes are handled via [narwhals](https://narwhals-dev.github.io/narwhals/), making the package compatible with pandas, polars, and any other narwhals-supported backend.
 
@@ -52,25 +62,41 @@ connection = DuckLakeConnector(
     data_path="outputs/data/",
 ).connect()
 
-# 1. Build the schema from an initial dataset
+# 1. Build the schema from an initial dataset, with a column hierarchy
+# (commune -> region) and UI metadata
 df = pd.DataFrame({
-    "id": [1, 2, 3],
-    "city": ["Paris", "Berlin", "Madrid"],
+    "date": ["2026-01-01", "2026-01-01", "2026-01-02"],
+    "region": ["Île-de-France", "Bretagne", "Île-de-France"],
+    "commune": ["Paris", "Rennes", "Boulogne"],
     "score": [0.9, 0.7, 0.5],
 })
 builder = DuckLakeTablesBuilder(
     df,
     categorical_threshold=200,
-    primary_keys=["id"],
+    primary_keys=["date", "region", "commune"],
+    hierarchies={"commune": "region"},
     connection=connection,
     dataset_label="City scores",
 )
-builder.build_schema()
+builder.build_schema(
+    column_metadata={"score": {"unit": "%", "default_aggregation": "AVG"}},
+    cluster_by=["date", "region"],
+    run_id="build-2026-01-01",
+)
 
-# 2. Update the database with new observations (upsert)
-df_new = pd.DataFrame({"id": [2, 4], "city": ["Lyon", "Rome"], "score": [0.8, 0.6]})
+# 2. Update the database with new observations (upsert), adding a new
+# column on the fly
+df_new = pd.DataFrame({
+    "date": ["2026-01-02"], "region": ["Bretagne"], "commune": ["Rennes"],
+    "score": [0.8], "rank": [1],
+})
 updater = DatabaseUpdater(connection=connection)
-updater.update_database(update_df=df_new)
+updater.update_database(
+    update_df=df_new,
+    allow_new_columns=True,
+    column_metadata={"rank": {"label": "Rank", "default_aggregation": "MIN"}},
+    run_id="update-2026-01-02",
+)
 
 # 3. Delete rows matching a condition
 deleter = DatabaseDeleter(connection=connection)
@@ -81,7 +107,8 @@ auditor = DatabaseAuditor(connection=connection)
 report = auditor.validate_database(ValidationLevel.STANDARD)
 print(report.recommendations)
 
-# 5. Run full maintenance (compaction, snapshot expiry)
+# 5. Run maintenance driven by measured storage indicators (never
+# destructive unless explicitly opted into)
 maintenance = DuckLakeMaintenance(connection)
 maintenance.maintain(MaintenancePolicy(retention_days=30))
 ```
@@ -140,7 +167,9 @@ Notes:
 ## Organization
 
 - `docs/` — package documentation and database schema description
-- `logs/` — logging files produced by the builders
+- `logs/` — logging files produced by the builders and managers, written
+  under the current working directory (`Path.cwd() / "logs"`) by default —
+  never inside the installed package itself
 - `notebooks/` — illustrative notebooks covering various use cases
 - `outputs/` — program outputs
 

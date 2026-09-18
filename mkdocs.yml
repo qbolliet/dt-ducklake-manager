@@ -81,6 +81,8 @@ extra_javascript:
 - https://cdnjs.cloudflare.com/ajax/libs/mathjax/2.7.4/MathJax.js?config=TeX-AMS-MML_HTMLorMML
 nav:
 - Package description: index.md
+- Schema and data model: schema.md
+- Storage lifecycle and maintenance: maintenance.md
 - Architecture & trade-offs: architecture.md
 - API Documentation:
   - connection:
@@ -94,6 +96,8 @@ nav:
     - ValidationReport: api/maintenance/ValidationReport.md
     - DatabaseAuditor: api/maintenance/DatabaseAuditor.md
     - DuckLakeMaintenance: api/maintenance/DuckLakeMaintenance.md
+    - MaintenancePolicy: api/maintenance/MaintenancePolicy.md
+    - StorageReport: api/maintenance/StorageReport.md
     - RecoveryStrategy: api/maintenance/RecoveryStrategy.md
     - RecoveryOperation: api/maintenance/RecoveryOperation.md
     - RecoveryResult: api/maintenance/RecoveryResult.md
@@ -112,3 +116,8 @@ nav:
     - remove_dataframe_duplicates: api/utils/remove_dataframe_duplicates.md
     - build_database_duplicate_removal_query: api/utils/build_database_duplicate_removal_query.md
     - map_python_to_sql_type: api/utils/map_python_to_sql_type.md
+    - quote_ident: api/utils/quote_ident.md
+    - qualify_table: api/utils/qualify_table.md
+    - SchemaScoped: api/utils/SchemaScoped.md
+    - METADATA_COLUMNS: api/utils/METADATA_COLUMNS.md
+    - get_column_hierarchies: api/utils/get_column_hierarchies.md

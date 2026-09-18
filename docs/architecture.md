@@ -1,128 +1,80 @@
 # Architecture & design trade-offs
 
-This page documents the structural decisions behind the storage model, the
-alternatives that were considered, and the trade-offs of each. It is intended as
-an architectural documentation of the current implementation and a potential reference for future evolutions.
+This page documents the structural decisions behind the storage model. It is intended as
+an architectural documentation of the current implementation.
 
 The design space is organized around **two independent axes**, often conflated:
 
-- **Logical axis — dimension sharing**: are the dimension tables *conformed*
-  (a single shared source of truth) or *redundant* (recreated per database)?
+- **Logical axis — result-set granularity**: what determines whether new data
+  becomes new columns, new rows, or a new schema altogether?
 - **Physical axis — catalog layout**: how many DuckLake catalogs and schemas
   hold the result sets?
 
-These axes are independent: one can have several fact tables with redundant
-dimensions, or a single multi-schema catalog whose dimensions are still
-redundant. Each axis is treated as its own section below, and each candidate is
-a subsection.
+These axes are independent: a project can have one catalog per result set, or
+several result sets consolidated as schemas of a single catalog, regardless of
+how each individual result set's granularity was decided. Each axis is treated
+as its own section below.
 
-> **Comparison criterion.** The options are compared on their **intrinsic
-> complexity** and operational properties (encoding coherence, snapshot
-> granularity, locking).
+For context, the storage model (see the [package description](index.md)) is
+made of exactly three tables per result set (see [Schema and data
+model](schema.md) for the full description):
 
-For context, the storage model (see the [package description](index.md)) is made
-of three layers per result set:
-
-- a `fact_table` holding the observations ;
-- `dim_<col>` tables mapping each modality of a low-cardinality categorical
-  variable to an integer `id`, where ids are assigned by order of appearance ;
+- a `fact_table` holding the observations, categorical columns carrying their
+  original labels directly ;
 - a `metadata` table describing each column (label, type, categorical status,
-  primary key).
+  primary key, hierarchy, UI fields) ;
+- a `dataset_metadata` table describing the result set itself.
 
 ---
 
-## 1. Fact table granularity and dimension sharing
+## 1. Result-set granularity
 
-Each result set produced by a model — for instance predictions on one side and
-Shapley values on the other — may share categorical variables (`country`,
-`city`, …) while differing in granularity and in the value columns it carries.
-The question is whether each result set should be a self-contained database with
-its own dimension tables, or whether several fact tables should coexist and
-share their dimension tables.
+A *result set* is defined by its **key** — the combination of columns that
+identifies one observation (e.g. `(date, region, product)`). The question this
+section answers is: given a new DataFrame, when does it become new rows of an
+existing `fact_table`, new columns of it, or an altogether different schema?
 
-### Option A — One database per result set (redundant dimensions)
+**A DataFrame sharing the fact table's exact key is the same result set.**
+New observations for existing (or new) key combinations are an
+`update_database` (upsert); new value columns keyed by the same primary keys
+are an `add_columns` (outer merge on the keys — see [Schema and data
+model](schema.md#design-choices-not-retained) for why a value carried by a
+*partial* key is never silently broadcast over a fuller one).
 
-**Status: ✅ Retained in the current implementation.**
+**A DataFrame carrying a different key is a different result set**, and goes
+into its **own schema** — never into extra columns of an unrelated fact table.
+Predictions keyed by `(date, region, product)` and Shapley values keyed by
+`(date, region, product, feature)` are two schemas, `predictions` and
+`shapley`, even though they come from the same model run and share several
+column *names*. Forcing them into one fact table would mean padding every
+prediction row with `NULL` Shapley columns (or the reverse), and would make
+the primary key of the combined table ambiguous.
 
-Each result set is a self-contained DuckLake catalog with its own `fact_table`,
-`metadata`, and `dim_*` tables. A categorical variable common to several result
-sets is stored as an independent dimension table in each database.
+**Cross-result-set analysis joins on labels, not on ids.** A
+query correlating `predictions` and `shapley` joins directly on their shared
+label columns (`region`, `product`, …), which is exactly what a categorical
+column already stores. This is simpler than the dimension-table alternative
+that was considered and dropped (see [Schema and data
+model](schema.md#design-choices-not-retained)): there is no id↔label
+resolution step, and no risk of two databases assigning different ids to the
+same label, because no id is ever assigned.
 
-**Advantages**
+### Multi-catalog reads
 
-- **Full isolation**: building, updating, or deleting one result set cannot
-  affect another.
-- **Local categorical decisions**: when a column's modality count crosses the
-  threshold, the conversion between categorical and non-categorical status is
-  self-contained within a single fact table. The divergence problem (a column
-  whose cardinality grows in one result set but not another) cannot arise,
-  because no structure is shared.
-- **Independent lifecycle and snapshots**: DuckLake time-travel is scoped to a
-  catalog, so each result set keeps its own snapshot history — well suited to
-  auditing a specific model run.
-- **Independent concurrency**: separate catalogs can be written in parallel,
-  which matters for the file-based DuckDB backend that locks the catalog at the
-  process level.
-- **Simple model**: a single fact table per catalog, and `metadata` keyed by
-  column name alone.
+A single connection can `ATTACH` several DuckLake catalogs and join across
+them freely for reads (measured). Writes are more constrained: **a single
+DuckDB transaction can only write to one attached database** (measured:
+`a single transaction can only write to a single attached database`).
+Consequently:
 
-**Disadvantages (complexity)**
-
-- **Dimension redundancy**: a shared categorical variable is stored once per
-  database. The storage cost is negligible, since dimension tables are bounded
-  by the categorical threshold.
-- **Dimension-encoding drift across databases**: integer ids are assigned
-  independently in each database (by order of appearance of the modalities), so
-  the same label can map to different ids in two databases. Cross-database joins
-  must therefore resolve labels through each database's dimension table rather
-  than join on the raw integer id. Joining directly on ids is only correct when
-  identical encoding is guaranteed.
-- **No single source of truth for labels**: a label correction has to be applied
-  in every database that carries the variable.
-
-### Option B — Multiple fact tables sharing conformed dimensions
-
-A single database holds several fact tables (one per result set) at different
-granularities, all referencing a shared set of dimension tables (*conformed
-dimensions* in the Kimball sense).
-
-**Advantages**
-
-- **Coherent encoding by construction**: a shared dimension has a single
-  id↔label mapping, so cross-fact joins on dimension ids are correct without
-  resolving labels.
-- **Single source of truth for labels** across all result sets.
-- Marginal storage gain (dimensions are small by construction).
-
-**Disadvantages (complexity)**
-
-- **Metadata must be keyed by `(fact table, column)`** instead of by column
-  alone: the same logical column can be categorical in one fact table and not in
-  another, depending on its cardinality in each.
-- **The categorical status of a shared variable can diverge** between fact tables
-  (e.g. 30 modalities in predictions, 60 in Shapley). Two reconciliation
-  policies exist, each adding complexity:
-    - *Independent encoding per fact table*: the column may be id-encoded in one
-      fact and stored raw in another. The dimension is then shared only as a
-      label space, not as an encoding, and the join-on-id benefit is lost for
-      that column.
-    - *Strict conformed dimension*: the categorical status is decided on the
-      **union** of modalities across all fact tables; a column may then exceed
-      the threshold on the union while remaining small in each individual table.
-- **Shared dimensions require reference counting**: a dimension may only be
-  dropped (on conversion to non-categorical) once no fact table still references
-  it, and orphan-entry cleanup must be computed over the union of ids referenced
-  by all fact tables rather than a single one.
-- **Cross-table coupling of conversions**: a categorical ↔ non-categorical
-  conversion triggered by one fact table must not rewrite or drop structures
-  relied upon by another.
-
-### Summary
-
-| Option | Key advantage | Main complexity cost | Retained |
-| --- | --- | --- | --- |
-| A — One database per result set | Full isolation; local categorical decisions; per-run snapshots | Redundant dimensions; id-drift across databases on cross-database joins | ✅ |
-| B — Shared conformed dimensions | Coherent encoding; single source of truth for labels | `(table, column)` metadata; divergent categorical status; reference counting of shared dimensions | |
+- cross-catalog access is for **reads only**;
+- a secondary catalog attached purely for reading should use
+  `DuckLakeConnector(..., read_only=True)` and, when the primary catalog's
+  schema must stay active, `attach(activate_schema=False)` so attaching the
+  second catalog does not steal the connection's current schema;
+- no operation in this package ever writes across two catalogs in the same
+  transaction, and application code combining several catalogs should keep the
+  same discipline.
 
 ---
 
@@ -135,9 +87,10 @@ references accordingly, so several result sets can live as separate schemas of o
 catalog. The question is whether to keep one schema per catalog or to consolidate
 several result sets as separate schemas within one catalog.
 
-This axis is **orthogonal to dimension sharing**: separate schemas do not share
-dimension tables (each schema carries its own `dim_*`), so multiple schemas
-address catalog proliferation, not dimension redundancy.
+This axis is **orthogonal to [section 1](#1-result-set-granularity)**: whether
+result sets live in separate catalogs or as separate schemas of one catalog,
+each keeps its own `fact_table` / `metadata` / `dataset_metadata` triplet —
+there is no dimension table in either layout to share or duplicate.
 
 ### Option A — One schema per catalog (`main`)
 
@@ -176,7 +129,8 @@ tables by its `schema`, and `DuckLakeConnector` creates the schema on first use.
 **Advantages**
 
 - **Single catalog** to attach and administer; cross-schema joins are
-  first-class on a single connection.
+  first-class on a single connection, and — since fact tables carry labels
+  directly — need no id-resolution step.
 - **Coherent transactions** across schemas.
 - Pairs naturally with a server-based catalog backend (PostgreSQL), which
   supports concurrent readers and writers.
@@ -188,8 +142,6 @@ tables by its `schema`, and `DuckLakeConnector` creates the schema on first use.
   catalog version for all of them.
 - **With the file-based backend, a single catalog file serializes writes** across
   all schemas (process-level lock).
-- **Does not reduce dimension redundancy**: dimension tables are not shared
-  across schemas, so the id-drift consideration of section 1 still applies.
 - **Requires schema routing** in the connection and management layer.
 
 ### Summary
@@ -241,12 +193,15 @@ ability to recover.
 
 ## Retained decisions
 
-On the **logical axis** (section 1), the implementation keeps **isolation over
-consolidation**: dimension tables are redundant per result set rather than
-conformed, so each result set keeps local categorical-status decisions, at the
-cost of resolving labels (rather than raw ids) when joining across result sets.
+On **result-set granularity** (section 1), a result set's boundary is its key:
+a DataFrame sharing the fact table's key is the same result set (new rows via
+`update_database`, new columns via `add_columns`); a DataFrame carrying a
+different key is a different result set and goes into its own schema, never
+into extra columns of an unrelated fact table.
+Multiple catalogs may be attached and read together, but a write is never
+allowed to span two of them.
 
-On the **physical axis** (section 2), both layouts are now available. `main` per
+On **schema organization** (section 2), both layouts are now available. `main` per
 catalog remains the **default**, preserving per-result-set snapshots and
 file-backend locking. Consolidating several result sets as separate schemas of a
 single catalog (Option B) is opt-in through the `schema` argument and pairs
