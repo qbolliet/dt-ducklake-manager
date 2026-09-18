@@ -8,13 +8,13 @@
       
       
       
-        <link rel="canonical" href="https://qbolliet.github.io/dt-ducklake-manager/architecture/">
+        <link rel="canonical" href="https://qbolliet.github.io/dt-ducklake-manager/schema/">
       
       
-        <link rel="prev" href="../maintenance/">
+        <link rel="prev" href="..">
       
       
-        <link rel="next" href="../api/connection/DuckLakeConnector/">
+        <link rel="next" href="../maintenance/">
       
       
         
@@ -25,7 +25,7 @@
     
     
       
-        <title>Architecture & trade-offs - Ducklake Manager</title>
+        <title>Schema and data model - Ducklake Manager</title>
       
     
     
@@ -78,7 +78,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#architecture-design-trade-offs" class="md-skip">
+        <a href="#schema-and-data-model" class="md-skip">
           Skip to content
         </a>
       
@@ -113,7 +113,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              Architecture & trade-offs
+              Schema and data model
             
           </span>
         </div>
@@ -282,10 +282,37 @@
       
   
   
+    
   
   
-    <li class="md-nav__item">
-      <a href="../schema/" class="md-nav__link">
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Schema and data model
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
         
   
   
@@ -301,6 +328,131 @@
   
 
       </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#the-three-tables" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The three tables
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="The three tables">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#fact_table" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        fact_table
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#metadata-one-row-per-fact_table-column" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        metadata — one row per fact_table column
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#dataset_metadata-one-row-per-schema" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        dataset_metadata — one row per schema
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#categorical-status" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Categorical status
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#column-hierarchies-and-the-null-convention" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Column hierarchies and the NULL convention
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#types" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Types
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#cluster_by-and-physical-sort-order" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        cluster_by and physical sort order
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#traceability-of-runs" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Traceability of runs
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
     </li>
   
 
@@ -336,37 +488,10 @@
       
   
   
-    
   
   
-  
-    <li class="md-nav__item md-nav__item--active">
-      
-      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
-      
-      
-        
-      
-      
-        <label class="md-nav__link md-nav__link--active" for="__toc">
-          
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Architecture & trade-offs
-  
-
-    
-  </span>
-  
-  
-
-          <span class="md-nav__icon md-icon"></span>
-        </label>
-      
-      <a href="./" class="md-nav__link md-nav__link--active">
+    <li class="md-nav__item">
+      <a href="../architecture/" class="md-nav__link">
         
   
   
@@ -382,126 +507,6 @@
   
 
       </a>
-      
-        
-
-<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
-  
-  
-  
-    
-  
-  
-    <label class="md-nav__title" for="__toc">
-      <span class="md-nav__icon md-icon"></span>
-      Table of contents
-    </label>
-    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
-      
-        <li class="md-nav__item">
-  <a href="#1-result-set-granularity" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        1. Result-set granularity
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="1. Result-set granularity">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#multi-catalog-reads" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Multi-catalog reads
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#2-schema-organization-within-a-catalog" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        2. Schema organization within a catalog
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="2. Schema organization within a catalog">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#option-a-one-schema-per-catalog-main" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Option A — One schema per catalog (main)
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#option-b-multiple-schemas-within-a-single-catalog" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Option B — Multiple schemas within a single catalog
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#summary" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Summary
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#3-transactions-and-recovery" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        3. Transactions and recovery
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#retained-decisions" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Retained decisions
-      
-    </span>
-  </a>
-  
-</li>
-      
-    </ul>
-  
-</nav>
-      
     </li>
   
 
@@ -1774,22 +1779,44 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#1-result-set-granularity" class="md-nav__link">
+  <a href="#the-three-tables" class="md-nav__link">
     <span class="md-ellipsis">
       
-        1. Result-set granularity
+        The three tables
       
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="1. Result-set granularity">
+    <nav class="md-nav" aria-label="The three tables">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#multi-catalog-reads" class="md-nav__link">
+  <a href="#fact_table" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Multi-catalog reads
+        fact_table
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#metadata-one-row-per-fact_table-column" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        metadata — one row per fact_table column
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#dataset_metadata-one-row-per-schema" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        dataset_metadata — one row per schema
       
     </span>
   </a>
@@ -1802,60 +1829,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#2-schema-organization-within-a-catalog" class="md-nav__link">
+  <a href="#categorical-status" class="md-nav__link">
     <span class="md-ellipsis">
       
-        2. Schema organization within a catalog
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="2. Schema organization within a catalog">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#option-a-one-schema-per-catalog-main" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Option A — One schema per catalog (main)
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#option-b-multiple-schemas-within-a-single-catalog" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Option B — Multiple schemas within a single catalog
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#summary" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Summary
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#3-transactions-and-recovery" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        3. Transactions and recovery
+        Categorical status
       
     </span>
   </a>
@@ -1863,10 +1840,43 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#retained-decisions" class="md-nav__link">
+  <a href="#column-hierarchies-and-the-null-convention" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Retained decisions
+        Column hierarchies and the NULL convention
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#types" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Types
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#cluster_by-and-physical-sort-order" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        cluster_by and physical sort order
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#traceability-of-runs" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Traceability of runs
       
     </span>
   </a>
@@ -1901,202 +1911,296 @@
   
 
 
-<h1 id="architecture-design-trade-offs">Architecture &amp; design trade-offs</h1>
-<p>This page documents the structural decisions behind the storage model. It is intended as
-an architectural documentation of the current implementation.</p>
-<p>The design space is organized around <strong>two independent axes</strong>, often conflated:</p>
+<h1 id="schema-and-data-model">Schema and data model</h1>
+<p>Each result set produced by a model lives in one DuckLake <strong>schema</strong>, made of
+exactly three tables. A catalog can hold several such schemas — see
+<a href="../architecture/">Architecture &amp; trade-offs</a> for how they relate to each other
+and to the catalog. This page describes what is inside a single schema and how
+its pieces are meant to be read.</p>
+<p><img alt="Scheme for table storage" src="../assets/schema_bdd.png" /></p>
+<h2 id="the-three-tables">The three tables</h2>
+<h3 id="fact_table"><code>fact_table</code></h3>
+<p>The observations, one column per variable, at their natural SQL width (see
+<a href="#types">Types</a> below). There is <strong>no dimension table and no synthetic code</strong>
+anywhere in the schema: a categorical column stores its label directly
+(<code>"Île-de-France"</code>, not an integer id). Parquet dictionary-encoding already
+absorbs the storage cost of the repeated labels, so nothing is gained by
+indirecting through an id.</p>
+<p>The table is:</p>
 <ul>
-<li><strong>Logical axis — result-set granularity</strong>: what determines whether new data
-  becomes new columns, new rows, or a new schema altogether?</li>
-<li><strong>Physical axis — catalog layout</strong>: how many DuckLake catalogs and schemas
-  hold the result sets?</li>
+<li>deduplicated on the primary keys at build time;</li>
+<li>written <strong>sorted</strong> by <code>dataset_metadata.cluster_by</code> (see <a href="#cluster_by-and-physical-sort-order">cluster_by</a>);</li>
+<li>optionally Hive-partitioned on very-low-cardinality columns that are
+  systematically filtered on (year, country) — never to the point of
+  producing files under ~100 MB.</li>
 </ul>
-<p>These axes are independent: a project can have one catalog per result set, or
-several result sets consolidated as schemas of a single catalog, regardless of
-how each individual result set's granularity was decided. Each axis is treated
-as its own section below.</p>
-<p>For context, the storage model (see the <a href="../">package description</a>) is
-made of exactly three tables per result set (see <a href="../schema/">Schema and data
-model</a> for the full description):</p>
-<ul>
-<li>a <code>fact_table</code> holding the observations, categorical columns carrying their
-  original labels directly ;</li>
-<li>a <code>metadata</code> table describing each column (label, type, categorical status,
-  primary key, hierarchy, UI fields) ;</li>
-<li>a <code>dataset_metadata</code> table describing the result set itself.</li>
-</ul>
-<hr />
-<h2 id="1-result-set-granularity">1. Result-set granularity</h2>
-<p>A <em>result set</em> is defined by its <strong>key</strong> — the combination of columns that
-identifies one observation (e.g. <code>(date, region, product)</code>). The question this
-section answers is: given a new DataFrame, when does it become new rows of an
-existing <code>fact_table</code>, new columns of it, or an altogether different schema?</p>
-<p><strong>A DataFrame sharing the fact table's exact key is the same result set.</strong>
-New observations for existing (or new) key combinations are an
-<code>update_database</code> (upsert); new value columns keyed by the same primary keys
-are an <code>add_columns</code> (outer merge on the keys — see <a href="../schema/#design-choices-not-retained">Schema and data
-model</a> for why a value carried by a
-<em>partial</em> key is never silently broadcast over a fuller one).</p>
-<p><strong>A DataFrame carrying a different key is a different result set</strong>, and goes
-into its <strong>own schema</strong> — never into extra columns of an unrelated fact table.
-Predictions keyed by <code>(date, region, product)</code> and Shapley values keyed by
-<code>(date, region, product, feature)</code> are two schemas, <code>predictions</code> and
-<code>shapley</code>, even though they come from the same model run and share several
-column <em>names</em>. Forcing them into one fact table would mean padding every
-prediction row with <code>NULL</code> Shapley columns (or the reverse), and would make
-the primary key of the combined table ambiguous.</p>
-<p><strong>Cross-result-set analysis joins on labels, not on ids.</strong> A
-query correlating <code>predictions</code> and <code>shapley</code> joins directly on their shared
-label columns (<code>region</code>, <code>product</code>, …), which is exactly what a categorical
-column already stores. This is simpler than the dimension-table alternative
-that was considered and dropped (see <a href="../schema/#design-choices-not-retained">Schema and data
-model</a>): there is no id↔label
-resolution step, and no risk of two databases assigning different ids to the
-same label, because no id is ever assigned.</p>
-<h3 id="multi-catalog-reads">Multi-catalog reads</h3>
-<p>A single connection can <code>ATTACH</code> several DuckLake catalogs and join across
-them freely for reads (measured). Writes are more constrained: <strong>a single
-DuckDB transaction can only write to one attached database</strong> (measured:
-<code>a single transaction can only write to a single attached database</code>).
-Consequently:</p>
-<ul>
-<li>cross-catalog access is for <strong>reads only</strong>;</li>
-<li>a secondary catalog attached purely for reading should use
-  <code>DuckLakeConnector(..., read_only=True)</code> and, when the primary catalog's
-  schema must stay active, <code>attach(activate_schema=False)</code> so attaching the
-  second catalog does not steal the connection's current schema;</li>
-<li>no operation in this package ever writes across two catalogs in the same
-  transaction, and application code combining several catalogs should keep the
-  same discipline.</li>
-</ul>
-<hr />
-<h2 id="2-schema-organization-within-a-catalog">2. Schema organization within a catalog</h2>
-<p>A DuckLake catalog can hold several schemas. Both layouts are supported (see
-<a href="../api/connection/DuckLakeConnector/"><code>DuckLakeConnector</code></a>): every schema-aware
-class accepts a <code>schema</code> argument (default <code>main</code>) and qualifies its table
-references accordingly, so several result sets can live as separate schemas of one
-catalog. The question is whether to keep one schema per catalog or to consolidate
-several result sets as separate schemas within one catalog.</p>
-<p>This axis is <strong>orthogonal to <a href="#1-result-set-granularity">section 1</a></strong>: whether
-result sets live in separate catalogs or as separate schemas of one catalog,
-each keeps its own <code>fact_table</code> / <code>metadata</code> / <code>dataset_metadata</code> triplet —
-there is no dimension table in either layout to share or duplicate.</p>
-<h3 id="option-a-one-schema-per-catalog-main">Option A — One schema per catalog (<code>main</code>)</h3>
-<p><strong>Status: ✅ Default layout.</strong></p>
-<p>Each catalog contains exactly one schema, holding one fact table and its
-companion tables.</p>
-<p><strong>Advantages</strong></p>
-<ul>
-<li><strong>Snapshot isolation</strong>: DuckLake snapshots are per catalog, so each result set
-  has an independent time-travel history — updating one result set does not
-  advance the snapshot version seen by readers of another.</li>
-<li><strong>Concurrency isolation</strong>: with the file-based DuckDB backend, the catalog file
-  is locked at the process level; separate catalogs let result sets be written
-  in parallel.</li>
-<li><strong>Simple routing</strong>: a connection targets a single schema (<code>USE db.main</code>), with
-  no schema-selection logic.</li>
-</ul>
-<p><strong>Disadvantages (complexity)</strong></p>
-<ul>
-<li><strong>Catalog proliferation</strong>: each result set is a separate catalog to attach and
-  administer.</li>
-<li><strong>Cross-result-set joins</strong> require attaching several catalogs within the same
-  connection.</li>
-</ul>
-<h3 id="option-b-multiple-schemas-within-a-single-catalog">Option B — Multiple schemas within a single catalog</h3>
-<p><strong>Status: ✅ Supported (opt-in via the <code>schema</code> argument).</strong></p>
-<p>Result sets are stored as separate schemas in one catalog (e.g.
-<code>predictions.fact_table</code>, <code>shapley.fact_table</code>), sharing one catalog backend. A
-single shared connection drives all schemas: each builder/manager qualifies its
-tables by its <code>schema</code>, and <code>DuckLakeConnector</code> creates the schema on first use.</p>
-<p><strong>Advantages</strong></p>
-<ul>
-<li><strong>Single catalog</strong> to attach and administer; cross-schema joins are
-  first-class on a single connection, and — since fact tables carry labels
-  directly — need no id-resolution step.</li>
-<li><strong>Coherent transactions</strong> across schemas.</li>
-<li>Pairs naturally with a server-based catalog backend (PostgreSQL), which
-  supports concurrent readers and writers.</li>
-</ul>
-<p><strong>Disadvantages (complexity)</strong></p>
-<ul>
-<li><strong>Snapshot granularity is the whole catalog</strong>, not the schema: time-travel to a
-  specific result set becomes ambiguous, since updating one schema advances the
-  catalog version for all of them.</li>
-<li><strong>With the file-based backend, a single catalog file serializes writes</strong> across
-  all schemas (process-level lock).</li>
-<li><strong>Requires schema routing</strong> in the connection and management layer.</li>
-</ul>
-<h3 id="summary">Summary</h3>
+<h3 id="metadata-one-row-per-fact_table-column"><code>metadata</code> — one row per <code>fact_table</code> column</h3>
 <table>
 <thead>
 <tr>
-<th>Option</th>
-<th>Key advantage</th>
-<th>Main complexity cost</th>
-<th>Status</th>
+<th>Column</th>
+<th>Type</th>
+<th>Nullable</th>
+<th>Role</th>
 </tr>
 </thead>
 <tbody>
 <tr>
-<td>A — One schema per catalog</td>
-<td>Per-result-set snapshots and locking; simple routing</td>
-<td>Catalog proliferation; multi-catalog attach for cross joins</td>
-<td>✅ default</td>
+<td><code>name</code></td>
+<td>VARCHAR</td>
+<td>no</td>
+<td>Technical column name</td>
 </tr>
 <tr>
-<td>B — Multiple schemas per catalog</td>
-<td>Single catalog; first-class cross-schema joins; fits a server backend</td>
-<td>Catalog-level snapshots; serialized writes on the file backend; schema routing</td>
-<td>✅ supported</td>
+<td><code>label</code></td>
+<td>VARCHAR</td>
+<td>no</td>
+<td>Display label (defaults to <code>name</code>)</td>
+</tr>
+<tr>
+<td><code>sql_type</code></td>
+<td>VARCHAR</td>
+<td>no</td>
+<td>DuckDB SQL type (<code>BIGINT</code>, <code>DOUBLE</code>, <code>VARCHAR</code>, …) — drives DDL and the front end's type → chart mapping</td>
+</tr>
+<tr>
+<td><code>is_primary_key</code></td>
+<td>BOOLEAN</td>
+<td>no</td>
+<td>Part of the logical key (deduplication, upsert)</td>
+</tr>
+<tr>
+<td><code>is_categorical</code></td>
+<td>BOOLEAN</td>
+<td>no</td>
+<td><strong>Pure UI metadata</strong>: the column is filtered through a select menu and can be a <code>groupBy</code>. Never drives a storage decision</td>
+</tr>
+<tr>
+<td><code>parent_name</code></td>
+<td>VARCHAR</td>
+<td>yes</td>
+<td>Parent column in a column hierarchy (see below)</td>
+</tr>
+<tr>
+<td><code>unit</code></td>
+<td>VARCHAR</td>
+<td>yes</td>
+<td>Axis / tooltip suffix (<code>"€"</code>, <code>"%"</code>, <code>"MW"</code>)</td>
+</tr>
+<tr>
+<td><code>display_format</code></td>
+<td>VARCHAR</td>
+<td>yes</td>
+<td>d3-format string (<code>",.2f"</code>, <code>".0%"</code>)</td>
+</tr>
+<tr>
+<td><code>family</code></td>
+<td>VARCHAR</td>
+<td>yes</td>
+<td>Thematic grouping of variables in menus</td>
+</tr>
+<tr>
+<td><code>description</code></td>
+<td>VARCHAR</td>
+<td>yes</td>
+<td>Contextual help text</td>
+</tr>
+<tr>
+<td><code>default_aggregation</code></td>
+<td>VARCHAR</td>
+<td>yes</td>
+<td>One of <code>SUM</code>, <code>AVG</code>, <code>MIN</code>, <code>MAX</code>, <code>COUNT</code>, <code>MEDIAN</code>, <code>MODE</code>, validated on write</td>
 </tr>
 </tbody>
 </table>
-<hr />
-<h2 id="3-transactions-and-recovery">3. Transactions and recovery</h2>
-<p><strong>Every public write operation is one DuckDB transaction.</strong>
-<code>update_database</code>, <code>add_columns</code>, <code>delete_rows</code> and <code>delete_columns</code> each open a
-single <code>BEGIN</code> / <code>COMMIT</code> block (<code>BaseSchemaManager._transaction</code>) and <code>ROLLBACK</code>
-on any exception, so a failure mid-operation leaves the schema exactly as it was
-— fact table, <code>metadata</code> rows and added columns alike, since DuckDB rolls DDL
-back along with DML. There is no application-level transaction machinery: no
-registered operations, no savepoints, no compensating <code>rollback_func</code>.</p>
-<p><code>use_transaction=False</code> keeps the same ordered steps but runs them in autocommit
-mode: faster, and a failure then leaves whatever was already written in place.</p>
-<p><strong>Post-write maintenance runs after the commit, never inside it.</strong>
-<code>merge_adjacent_files</code> and <code>rewrite_data_files</code> are called once the transaction
-has closed: they are optimizations, and a compaction failure must never undo a
-successful write.</p>
-<p><strong>Time travel is the recovery mechanism.</strong> No backup file is written, because
-DuckLake already persists the full snapshot history. To recover from a bad write
-that was itself committed:</p>
-<div class="language-python highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">recovery</span> <span class="o">=</span> <span class="n">DatabaseRecoveryManager</span><span class="p">(</span><span class="n">conn</span><span class="p">)</span>
-</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="nb">print</span><span class="p">(</span><span class="n">recovery</span><span class="o">.</span><span class="n">list_ducklake_snapshots</span><span class="p">())</span>          <span class="c1"># pick a snapshot_id</span>
-</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="n">old</span> <span class="o">=</span> <span class="n">DuckLakeConnector</span><span class="p">(</span><span class="n">catalog</span><span class="p">,</span> <span class="n">data</span><span class="p">,</span> <span class="n">snapshot_version</span><span class="o">=</span><span class="mi">17</span><span class="p">)</span><span class="o">.</span><span class="n">connect</span><span class="p">()</span>
+<p><code>metadata</code> is <strong>the contract between the database and the interface</strong>:
+everything the UI needs to drive itself (label, type, categorical status,
+hierarchy, unit, format, family, default aggregation) lives here, never
+deduced from the data at query time.</p>
+<p>There is no <code>python_type</code> column — it would be redundant with <code>sql_type</code>. Type
+conflicts arising from a later batch (e.g. an update carrying <code>Int32</code> where
+<code>BIGINT</code> is stored) are resolved on the SQL type ranking <code>BOOLEAN &lt; TINYINT &lt;
+SMALLINT &lt; INTEGER &lt; BIGINT &lt; FLOAT &lt; DOUBLE &lt; VARCHAR</code>, keeping the greater
+width: a stored <code>BIGINT</code> is never narrowed by a batch of <code>Int32</code>
+(<code>resolve_sql_type_conflict</code>).</p>
+<h3 id="dataset_metadata-one-row-per-schema"><code>dataset_metadata</code> — one row per schema</h3>
+<table>
+<thead>
+<tr>
+<th>Column</th>
+<th>Type</th>
+<th>Role</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>label</code></td>
+<td>VARCHAR</td>
+<td>Title of the result set</td>
+</tr>
+<tr>
+<td><code>description</code></td>
+<td>VARCHAR</td>
+<td>Subtitle / description</td>
+</tr>
+<tr>
+<td><code>source</code></td>
+<td>VARCHAR</td>
+<td>Provenance (model, pipeline)</td>
+</tr>
+<tr>
+<td><code>updated_at</code></td>
+<td>TIMESTAMP</td>
+<td>Last successful write (build, update, column add/drop)</td>
+</tr>
+<tr>
+<td><code>schema_version</code></td>
+<td>INTEGER</td>
+<td>Currently always <code>1</code>, reserved for a future migration</td>
+</tr>
+<tr>
+<td><code>cluster_by</code></td>
+<td>VARCHAR</td>
+<td>JSON list of the physical sort columns (see below)</td>
+</tr>
+</tbody>
+</table>
+<p><code>updated_at</code> and <code>schema_version</code> are always populated; the remaining fields
+come from optional builder arguments (<code>dataset_label</code>, <code>dataset_description</code>,
+<code>dataset_source</code>).</p>
+<h2 id="categorical-status">Categorical status</h2>
+<p><code>is_categorical</code> picks the filter widget: a select menu for a categorical
+column, a search field otherwise. The interface reads the modalities of a
+categorical column with a plain <code>SELECT DISTINCT</code> on the fact table (a cheap
+query on a dictionary-encoded column), with search and a limit. <code>label =
+value</code> always: there is no separate label to resolve.</p>
+<p>The flag is <strong>inferred exactly once</strong>, when the column is created:</p>
+<ul>
+<li>at <code>build_schema</code> time, from the number of non-null distinct values of a
+  textual column against <code>categorical_threshold</code> — overridable per column with
+  <code>categorical_overrides</code>;</li>
+<li>for a column added later, through <code>allow_new_columns=True</code> on
+  <code>update_database</code> or through <code>add_columns</code>, using the updater's own
+  <code>categorical_threshold</code>.</li>
+</ul>
+<p>It is <strong>never recomputed</strong> by a later write: an update or a deletion that
+changes the number of modalities does not touch it. This is deliberate — the
+boolean only chooses a UI widget, and a status that flips with every batch
+would make the interface unstable for no benefit. To correct it explicitly
+(for instance to switch a column's filter from a search box to a select menu),
+use:</p>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">manager</span><span class="o">.</span><span class="n">update_column_metadata</span><span class="p">(</span><span class="s2">&quot;region&quot;</span><span class="p">,</span> <span class="n">is_categorical</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
 </span></code></pre></div>
-<p>then read the tables from <code>old</code> and reinsert them into the current catalog.
-<code>RecoveryStrategy.USE_SNAPSHOT_HISTORY</code> returns that procedure step by step. The
-other strategies (<code>REPAIR_SCHEMA</code>, <code>CLEAN_ORPHANED_DATA</code>, <code>VALIDATE_AND_FIX</code>)
-repair structural inconsistencies in place and never touch the history.
-Snapshot expiry (<code>expire_snapshots</code>) is planned maintenance with an explicit
-retention — never a side effect of a write, because it is what destroys the
-ability to recover.</p>
-<hr />
-<h2 id="retained-decisions">Retained decisions</h2>
-<p>On <strong>result-set granularity</strong> (section 1), a result set's boundary is its key:
-a DataFrame sharing the fact table's key is the same result set (new rows via
-<code>update_database</code>, new columns via <code>add_columns</code>); a DataFrame carrying a
-different key is a different result set and goes into its own schema, never
-into extra columns of an unrelated fact table.
-Multiple catalogs may be attached and read together, but a write is never
-allowed to span two of them.</p>
-<p>On <strong>schema organization</strong> (section 2), both layouts are now available. <code>main</code> per
-catalog remains the <strong>default</strong>, preserving per-result-set snapshots and
-file-backend locking. Consolidating several result sets as separate schemas of a
-single catalog (Option B) is opt-in through the <code>schema</code> argument and pairs
-naturally with the PostgreSQL backend, which supports concurrent readers and
-writers; the trade-off is that DuckLake snapshots become catalog-wide rather than
-per result set.</p>
+<p>A column that belongs to a hierarchy is always categorical:
+<code>is_categorical=False</code> is refused for it, and declaring a hierarchy link
+force-sets <code>is_categorical=True</code> on both ends, with a warning, if either was
+not already categorical.</p>
+<p>The UI fields (<code>label</code>, <code>parent_name</code>, <code>unit</code>, <code>display_format</code>, <code>family</code>,
+<code>description</code>, <code>default_aggregation</code>) and <code>is_categorical</code> belong to the
+metadata producer: a data update never overwrites them. They are corrected on
+an existing column with <code>update_column_metadata(column, **fields)</code>.</p>
+<h2 id="column-hierarchies-and-the-null-convention">Column hierarchies and the <code>NULL</code> convention</h2>
+<p>A hierarchy (a group-options menu, a selection tree) is <strong>a chain of <code>fact_table</code>
+columns</strong>, declared through <code>metadata.parent_name</code>: the parent of <code>commune</code> is
+<code>departement</code>, the parent of <code>departement</code> is <code>region</code>. There is no depth
+limit. The hierarchy of <em>values</em> is already in the fact table: <code>SELECT
+DISTINCT region, departement, commune</code> gives the full tree, no auxiliary table
+required.</p>
+<p>Declare a hierarchy at build time:</p>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="n">builder</span> <span class="o">=</span> <span class="n">DuckLakeTablesBuilder</span><span class="p">(</span>
+</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>    <span class="n">df</span><span class="p">,</span> <span class="n">primary_keys</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;date&quot;</span><span class="p">,</span> <span class="s2">&quot;commune&quot;</span><span class="p">],</span>
+</span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>    <span class="n">hierarchies</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;commune&quot;</span><span class="p">:</span> <span class="s2">&quot;departement&quot;</span><span class="p">,</span> <span class="s2">&quot;departement&quot;</span><span class="p">:</span> <span class="s2">&quot;region&quot;</span><span class="p">},</span>
+</span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a>    <span class="n">connection</span><span class="o">=</span><span class="n">connection</span><span class="p">,</span>
+</span><span id="__span-1-5"><a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a><span class="p">)</span>
+</span></code></pre></div>
+<p>or per column through <code>column_metadata={"commune": {"parent_name":
+"departement"}}</code> — both sources must agree where they overlap. On an existing
+schema, add or correct a link with <code>update_column_metadata("commune",
+parent_name="departement")</code>.</p>
+<p>Invariants validated at write time: the parent column exists; the graph of
+<code>parent_name</code> pointers is a forest (no cycle, at most one parent per column,
+checked by <code>validate_hierarchy_forest</code>); every column of a hierarchy is
+categorical.</p>
+<p><strong>Convention for irregular trees</strong> (leaves at different depths): the missing
+levels are <code>NULL</code>. The tree builder stops at the first <code>NULL</code> level, and the
+API ignores <code>NULL</code> in the <code>DISTINCT</code>. The value of the level above is never
+repeated to fill a hole — that would fabricate a node that does not exist in
+the data.</p>
+<p><code>get_column_hierarchies(conn, schema)</code> is the reference implementation for API
+layers that need the reconstructed root-to-leaf chains (one list per leaf
+column) rather than the raw per-column <code>parent_name</code> pointers.</p>
+<h2 id="types">Types</h2>
+<p>DataFrame (narwhals) → SQL, widths preserved:</p>
+<table>
+<thead>
+<tr>
+<th>DataFrame (narwhals)</th>
+<th>SQL</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>Boolean</code></td>
+<td><code>BOOLEAN</code></td>
+</tr>
+<tr>
+<td><code>Int8</code> / <code>Int16</code> / <code>Int32</code> / <code>Int64</code></td>
+<td><code>TINYINT</code> / <code>SMALLINT</code> / <code>INTEGER</code> / <code>BIGINT</code></td>
+</tr>
+<tr>
+<td><code>UInt8</code> / <code>UInt16</code> / <code>UInt32</code> / <code>UInt64</code></td>
+<td><code>UTINYINT</code> / <code>USMALLINT</code> / <code>UINTEGER</code> / <code>UBIGINT</code></td>
+</tr>
+<tr>
+<td><code>Float32</code> / <code>Float64</code></td>
+<td><code>FLOAT</code> / <code>DOUBLE</code></td>
+</tr>
+<tr>
+<td><code>String</code> / <code>Categorical</code> / <code>Enum</code></td>
+<td><code>VARCHAR</code></td>
+</tr>
+<tr>
+<td><code>Date</code> / <code>Datetime</code></td>
+<td><code>DATE</code> / <code>TIMESTAMP</code></td>
+</tr>
+</tbody>
+</table>
+<p>The package never silently narrows a width: it is up to the producer to supply
+a <code>Float32</code> (or a narrower integer) when 32 bits are judged sufficient for
+values destined for charts.</p>
+<h2 id="cluster_by-and-physical-sort-order"><code>cluster_by</code> and physical sort order</h2>
+<p>DuckLake has no index: pruning relies entirely on per-file column statistics
+(<code>min</code>/<code>max</code>, exposed by <code>ducklake_file_column_stats</code>) and Parquet row-group
+statistics, both of which only help when the data is physically grouped.
+<code>cluster_by</code> (<code>dataset_metadata.cluster_by</code>, a JSON list) names the columns
+the fact table is sorted by at write time — default: the primary keys, in
+their declared order (most selective first). Build and update batches are
+written <code>ORDER BY cluster_by</code>.</p>
+<p>Successive updates degrade this ordering: each batch is sorted <em>within
+itself</em> but not merged into the table's global order, so file ranges
+progressively overlap. <code>DuckLakeMaintenance.recluster()</code> restores it by
+rewriting the whole table in sort order — see
+<a href="../maintenance/">Storage lifecycle and maintenance</a> for when and how to run
+it, and for the <code>overlap_ratio</code> indicator that tells you it's needed.</p>
+<h2 id="traceability-of-runs">Traceability of runs</h2>
+<p>Every write operation (<code>build_schema</code>, <code>update_database</code>, <code>add_columns</code>,
+<code>delete_rows</code>, <code>delete_columns</code>, <code>DuckLakeMaintenance.maintain</code>) accepts
+<code>run_id: str | None</code> and <code>commit_message: str | None</code>, recorded on the
+resulting DuckLake snapshot via <code>ducklake_set_commit_message(catalog, author
+:= run_id, message, extra_info := &lt;JSON&gt;)</code>, <strong>inside</strong> the write's
+transaction. <code>extra_info</code> carries at least <code>operation</code> and <code>schema</code>, plus any
+free-form fields passed through <code>commit_info</code> (e.g. <code>{"model_version":
+"1.3"}</code>).</p>
+<p>No technical column is ever added to the fact table to answer "which run
+produced this state?" — the question is answered by reading the snapshots:</p>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="n">conn</span><span class="o">.</span><span class="n">execute</span><span class="p">(</span><span class="s2">&quot;SELECT snapshot_id, author, commit_message, commit_extra_info FROM ducklake_snapshots(&#39;db&#39;)&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">fetchall</span><span class="p">()</span>
+</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="c1"># or, through the package:</span>
+</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="n">DatabaseRecoveryManager</span><span class="p">(</span><span class="n">conn</span><span class="p">)</span><span class="o">.</span><span class="n">list_ducklake_snapshots</span><span class="p">()</span>
+</span></code></pre></div>
+<p>On a connection with no real DuckLake catalog attached (in-memory test
+connections), <code>run_id</code>/<code>commit_message</code> are silently skipped with a DEBUG log
+line — the operation still runs and still returns a full
+<a href="../api/reporting/OperationReport/"><code>OperationReport</code></a>.</p>
 
 
 

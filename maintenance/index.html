@@ -1,0 +1,2489 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+      
+      
+        <link rel="canonical" href="https://qbolliet.github.io/dt-ducklake-manager/maintenance/">
+      
+      
+        <link rel="prev" href="../schema/">
+      
+      
+        <link rel="next" href="../architecture/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../assets/logo.svg">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.6">
+    
+    
+      
+        <title>Storage lifecycle and maintenance - Ducklake Manager</title>
+      
+    
+    
+      <link rel="stylesheet" href="../assets/stylesheets/main.484c7ddc.min.css">
+      
+        
+        <link rel="stylesheet" href="../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="../assets/_mkdocstrings.css">
+    
+    <script>__md_scope=new URL("..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#storage-lifecycle-and-maintenance" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href=".." title="Ducklake Manager" class="md-header__button md-logo" aria-label="Ducklake Manager" data-md-component="logo">
+      
+  <img src="../assets/logo.svg" alt="logo">
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            Ducklake Manager
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Storage lifecycle and maintenance
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="slate" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12s-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/qbolliet/dt-ducklake-manager" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    GitHub
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href=".." title="Ducklake Manager" class="md-nav__button md-logo" aria-label="Ducklake Manager" data-md-component="logo">
+      
+  <img src="../assets/logo.svg" alt="logo">
+
+    </a>
+    Ducklake Manager
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/qbolliet/dt-ducklake-manager" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    GitHub
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href=".." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Package description
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../schema/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Schema and data model
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Storage lifecycle and maintenance
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Storage lifecycle and maintenance
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#copy-on-write-and-delete-files" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Copy-on-write and delete files
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#data-inlining" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Data inlining
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#operations-effect-when-risk" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Operations: effect, when, risk
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-cycle-rewrite-merge-expire-cleanup" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The cycle: rewrite → merge → expire → cleanup
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#recluster-and-the-overlap-indicator" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Recluster and the overlap indicator
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#maintenancepolicy-and-maintain" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        MaintenancePolicy and maintain
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#scenarios" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Scenarios
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Scenarios">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#after-a-large-update" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        After a large update
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#after-a-massive-deletion" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        After a massive deletion
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#after-n-updates-file-range-overlap" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        After N updates (file-range overlap)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#freeing-disk-space-retention" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Freeing disk space (retention)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#after-an-interrupted-transaction" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        After an interrupted transaction
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#finding-the-run-behind-a-given-state" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Finding the run behind a given state
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#time-travel-reading-a-past-state" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Time travel (reading a past state)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#explicit-broadcast-of-a-partial-key-column" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Explicit broadcast of a partial-key column
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#reading-an-operationreport" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Reading an OperationReport
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#reading-a-storagereport" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Reading a StorageReport
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../architecture/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Architecture & trade-offs
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5" >
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    API Documentation
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    API Documentation
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    
+    
+    
+    
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5_1" >
+        
+          
+          <label class="md-nav__link" for="__nav_5_1" id="__nav_5_1_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    connection
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_5_1_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5_1">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    connection
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api/connection/DuckLakeConnector/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    DuckLakeConnector
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api/connection/CatalogType/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    CatalogType
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+    
+    
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_5_2" id="__nav_5_2_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    maintenance
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_5_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5_2">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    maintenance
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api/maintenance/ValidationLevel/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ValidationLevel
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api/maintenance/IssueType/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    IssueType
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api/maintenance/IssueSeverity/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    IssueSeverity
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api/maintenance/ValidationIssue/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ValidationIssue
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api/maintenance/ValidationReport/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ValidationReport
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api/maintenance/DatabaseAuditor/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    DatabaseAuditor
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api/maintenance/DuckLakeMaintenance/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    DuckLakeMaintenance
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api/maintenance/MaintenancePolicy/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    MaintenancePolicy
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api/maintenance/StorageReport/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    StorageReport
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api/maintenance/RecoveryStrategy/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    RecoveryStrategy
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api/maintenance/RecoveryOperation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    RecoveryOperation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api/maintenance/RecoveryResult/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    RecoveryResult
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api/maintenance/DatabaseRecoveryManager/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    DatabaseRecoveryManager
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+    
+    
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_5_3" id="__nav_5_3_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    operations
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_5_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    operations
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api/operations/DatabaseDeleter/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    DatabaseDeleter
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api/operations/DatabaseUpdater/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    DatabaseUpdater
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api/operations/BaseSchemaManager/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    BaseSchemaManager
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api/operations/DataManager/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    DataManager
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+    
+    
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_5_4" id="__nav_5_4_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    reporting
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_5_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    reporting
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api/reporting/OperationReport/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    OperationReport
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+    
+    
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5_5" >
+        
+          
+          <label class="md-nav__link" for="__nav_5_5" id="__nav_5_5_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    schema
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_5_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    schema
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api/schema/SchemaBuilder/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    SchemaBuilder
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api/schema/DuckLakeTablesBuilder/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    DuckLakeTablesBuilder
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+    
+    
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5_6" >
+        
+          
+          <label class="md-nav__link" for="__nav_5_6" id="__nav_5_6_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    utils
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_5_6_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5_6">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    utils
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api/utils/remove_dataframe_duplicates/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    remove_dataframe_duplicates
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api/utils/build_database_duplicate_removal_query/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    build_database_duplicate_removal_query
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api/utils/map_python_to_sql_type/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    map_python_to_sql_type
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api/utils/quote_ident/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    quote_ident
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api/utils/qualify_table/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    qualify_table
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api/utils/SchemaScoped/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    SchemaScoped
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api/utils/METADATA_COLUMNS/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    METADATA_COLUMNS
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api/utils/get_column_hierarchies/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    get_column_hierarchies
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#copy-on-write-and-delete-files" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Copy-on-write and delete files
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#data-inlining" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Data inlining
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#operations-effect-when-risk" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Operations: effect, when, risk
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-cycle-rewrite-merge-expire-cleanup" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The cycle: rewrite → merge → expire → cleanup
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#recluster-and-the-overlap-indicator" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Recluster and the overlap indicator
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#maintenancepolicy-and-maintain" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        MaintenancePolicy and maintain
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#scenarios" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Scenarios
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Scenarios">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#after-a-large-update" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        After a large update
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#after-a-massive-deletion" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        After a massive deletion
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#after-n-updates-file-range-overlap" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        After N updates (file-range overlap)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#freeing-disk-space-retention" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Freeing disk space (retention)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#after-an-interrupted-transaction" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        After an interrupted transaction
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#finding-the-run-behind-a-given-state" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Finding the run behind a given state
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#time-travel-reading-a-past-state" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Time travel (reading a past state)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#explicit-broadcast-of-a-partial-key-column" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Explicit broadcast of a partial-key column
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#reading-an-operationreport" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Reading an OperationReport
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#reading-a-storagereport" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Reading a StorageReport
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+                
+
+
+
+  
+
+
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<h1 id="storage-lifecycle-and-maintenance">Storage lifecycle and maintenance</h1>
+<p>DuckLake's Parquet files are immutable. Every <code>UPDATE</code>/<code>DELETE</code>/schema change
+produces new files rather than rewriting existing ones, and old files stay
+referenced by prior snapshots (time travel). Left alone, small files and
+delete tombstones accumulate and degrade read performance. This page explains
+the physical model, the operations available, when to run each one, and how
+to read what an operation actually did.</p>
+<h2 id="copy-on-write-and-delete-files">Copy-on-write and delete files</h2>
+<p><em>(measured on DuckDB 1.5.2 / <code>ducklake</code> extension, see the specification's
+annex for the exact commands.)</em></p>
+<p>An <code>UPDATE</code> of 5 000 rows on a 20 000-row file produces: a new 5 000-row data
+file (carrying <code>_ducklake_internal_row_id</code>), a <code>…-delete.parquet</code> tombstone
+file naming 5 000 positions in the <em>old</em> file, and the old file itself left
+intact — still referenced by the snapshot that preceded the update. A raw
+listing of the data directory (<code>read_parquet('**/*.parquet')</code>) at that point
+shows 30 000 rows across three files from different snapshots: <strong>this is an
+artifact of reading the directory directly</strong>, not a data problem — the
+DuckLake-aware logical view (<code>SELECT * FROM catalog.schema.table</code>) is correct
+at every instant.</p>
+<p>A <code>DELETE</code> that removes <em>every</em> row of a file behaves differently: no delete
+file is created at all, the file is simply dropped from the current snapshot
+(<code>delete_file_count = 0</code> after <code>DELETE FROM t</code> with no <code>WHERE</code> clause).</p>
+<h2 id="data-inlining">Data inlining</h2>
+<p>Data inlining is active by default: a small <code>INSERT</code> produces <strong>no</strong> Parquet
+file — the rows live in the catalog itself
+(<code>{inlined_insert=[1]}</code> in the resulting snapshot). Controlled by the <code>ATTACH</code>
+option <code>DATA_INLINING_ROW_LIMIT</code> (<code>0</code> disables it entirely — useful for tests
+that inspect files directly) or set later with
+<code>set_option('data_inlining_row_limit', n)</code>. Inlined rows are written out to
+Parquet by
+<a class="autorefs autorefs-internal" title="flush_inlined_data" href="../api/maintenance/DuckLakeMaintenance/#dt_ducklake_manager.maintenance.compaction.DuckLakeMaintenance.flush_inlined_data"><code>DuckLakeMaintenance.flush_inlined_data</code></a>,
+which reports <code>(schema, table, rows_flushed)</code> per table.</p>
+<p>Suggested policy: <code>0</code> for the initial build (so every row lands in Parquet
+immediately); a few thousand rows during incremental updates; flush as part of
+planned maintenance before any process reads the data files directly.</p>
+<h2 id="operations-effect-when-risk">Operations: effect, when, risk</h2>
+<table>
+<thead>
+<tr>
+<th>Operation</th>
+<th>Effect</th>
+<th>When</th>
+<th>Risk</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><a class="autorefs autorefs-internal" title="rewrite_data_files" href="../api/maintenance/DuckLakeMaintenance/#dt_ducklake_manager.maintenance.compaction.DuckLakeMaintenance.rewrite_data_files"><code>rewrite_data_files(delete_threshold)</code></a></td>
+<td>Rewrites files whose deleted-row share exceeds the threshold; <strong>without an explicit threshold it is a true no-op</strong>, even at 25% deletions</td>
+<td>After every update/delete (<code>delete_threshold</code> 0.1–0.3)</td>
+<td>None — old files stay readable via time travel</td>
+</tr>
+<tr>
+<td><a class="autorefs autorefs-internal" title="merge_files" href="../api/maintenance/DuckLakeMaintenance/#dt_ducklake_manager.maintenance.compaction.DuckLakeMaintenance.merge_files"><code>merge_files(min_file_size)</code></a></td>
+<td>Merges adjacent files smaller than <code>min_file_size</code></td>
+<td>Once many small batches have accumulated; after <code>recluster</code></td>
+<td>None</td>
+</tr>
+<tr>
+<td><a class="autorefs autorefs-internal" title="flush_inlined_data" href="../api/maintenance/DuckLakeMaintenance/#dt_ducklake_manager.maintenance.compaction.DuckLakeMaintenance.flush_inlined_data"><code>flush_inlined_data</code></a></td>
+<td>Writes inlined catalog rows out to Parquet</td>
+<td>Planned maintenance; before reading files directly</td>
+<td>None</td>
+</tr>
+<tr>
+<td><a class="autorefs autorefs-internal" title="recluster" href="../api/maintenance/DuckLakeMaintenance/#dt_ducklake_manager.maintenance.compaction.DuckLakeMaintenance.recluster"><code>recluster(order_by)</code></a></td>
+<td>Rewrites the whole table in <code>cluster_by</code> order</td>
+<td>When file-range overlap degrades pruning (see <a href="#recluster-and-the-overlap-indicator">Recluster and the overlap indicator</a>), typically after N updates</td>
+<td>Full rewrite; storage doubles until cleanup</td>
+</tr>
+<tr>
+<td><a class="autorefs autorefs-internal" title="repartition" href="../api/maintenance/DuckLakeMaintenance/#dt_ducklake_manager.maintenance.compaction.DuckLakeMaintenance.repartition"><code>repartition</code></a></td>
+<td>Changes the partition keys and rewrites</td>
+<td>Filter strategy change</td>
+<td>Full rewrite; same as <code>recluster</code></td>
+</tr>
+<tr>
+<td><a class="autorefs autorefs-internal" title="expire_snapshots" href="../api/maintenance/DuckLakeMaintenance/#dt_ducklake_manager.maintenance.compaction.DuckLakeMaintenance.expire_snapshots"><code>expire_snapshots(older_than_days)</code></a></td>
+<td>Makes snapshots older than the cutoff unreachable</td>
+<td><strong>Planned maintenance only</strong>, with an explicit retention</td>
+<td><strong>Destroys time travel</strong> beyond the retention</td>
+</tr>
+<tr>
+<td><a class="autorefs autorefs-internal" title="cleanup_files" href="../api/maintenance/DuckLakeMaintenance/#dt_ducklake_manager.maintenance.compaction.DuckLakeMaintenance.cleanup_files"><code>cleanup_files</code></a></td>
+<td>Deletes files no live snapshot references</td>
+<td>After <code>expire_snapshots</code> — the only step that actually frees disk space</td>
+<td>Irreversible</td>
+</tr>
+<tr>
+<td><a class="autorefs autorefs-internal" title="delete_orphaned_files" href="../api/maintenance/DuckLakeMaintenance/#dt_ducklake_manager.maintenance.compaction.DuckLakeMaintenance.delete_orphaned_files"><code>delete_orphaned_files</code></a></td>
+<td>Deletes files under <code>data_path</code> unknown to the catalog</td>
+<td>After an incident (interrupted transaction, manual file copy); always <code>dry_run</code> first</td>
+<td>Irreversible</td>
+</tr>
+</tbody>
+</table>
+<h2 id="the-cycle-rewrite-merge-expire-cleanup">The cycle: rewrite → merge → expire → cleanup</h2>
+<p><em>Rewrite</em> (rewrite/merge/flush) happens after every write and is always safe:
+old files stay reachable through time travel. <em>Expire</em> and <em>cleanup</em> only
+happen in planned maintenance, because they are what actually destroy
+recoverability and free space.</p>
+<p>The write operations (<code>DatabaseUpdater.update_database</code>,
+<code>DatabaseUpdater.add_columns</code>, <code>DatabaseDeleter.delete_rows</code>) call only the
+safe half of this cycle automatically, right after their own commit, through
+<a class="autorefs autorefs-internal" title="compact" href="../api/maintenance/DuckLakeMaintenance/#dt_ducklake_manager.maintenance.compaction.DuckLakeMaintenance.compact"><code>DuckLakeMaintenance.compact</code></a>
+(<code>merge_files</code> + <code>rewrite_data_files</code>; <code>compact_after_update=True</code> by
+default). They never call <code>expire_snapshots</code>, <code>cleanup_files</code> or
+<code>delete_orphaned_files</code> — those are only ever triggered by a deliberate,
+policy-driven call to <code>maintain</code>.</p>
+<h2 id="recluster-and-the-overlap-indicator">Recluster and the overlap indicator</h2>
+<p>DuckLake prunes files using per-file min/max statistics on <code>cluster_by</code>
+columns (<code>ducklake_file_column_stats</code>, surfaced as <code>Total Files Read</code> in
+<code>EXPLAIN ANALYZE</code>), plus Parquet row-group statistics inside each file. Both
+only help when the data is physically grouped by those columns — which
+successive updates degrade: each batch is sorted <em>within itself</em> at write
+time, but not merged into the table's global order, so file ranges
+progressively overlap.</p>
+<p><a class="autorefs autorefs-internal" title="storage_report" href="../api/maintenance/DuckLakeMaintenance/#dt_ducklake_manager.maintenance.compaction.DuckLakeMaintenance.storage_report"><code>storage_report()</code></a>
+measures <code>overlap_ratio</code> — the share of active, non-empty files whose
+<code>[min, max]</code> range on the first <code>cluster_by</code> column overlaps another file's
+range (strict inequalities: two files that merely share a boundary value do
+not count as overlapping; identical ranges do). This is the indicator that
+decides when <a class="autorefs autorefs-internal" title="recluster" href="../api/maintenance/DuckLakeMaintenance/#dt_ducklake_manager.maintenance.compaction.DuckLakeMaintenance.recluster"><code>recluster</code></a>
+is worth its cost: a full-table rewrite (<code>CREATE TEMP TABLE … AS SELECT *</code>,
+<code>DELETE FROM table</code>, <code>INSERT … ORDER BY cluster_by</code>, single transaction,
+<code>threads = 1</code> for the insert so files come out disjoint and monotone rather
+than interleaved) that temporarily doubles storage until the previous files
+are released by <code>expire_snapshots</code> + <code>cleanup_files</code>.</p>
+<h2 id="maintenancepolicy-and-maintain"><code>MaintenancePolicy</code> and <code>maintain</code></h2>
+<p><a class="autorefs autorefs-internal" title="MaintenancePolicy
+
+
+  
+      dataclass
+  " href="../api/maintenance/MaintenancePolicy/#dt_ducklake_manager.maintenance.compaction.MaintenancePolicy"><code>MaintenancePolicy</code></a>
+groups every threshold that decides which maintenance step is worth running.
+Every destructive or costly behaviour is opt-in — by default nothing expires,
+nothing is deleted, and the table is never reclustered:</p>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Default</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>delete_threshold</code></td>
+<td><code>0.1</code></td>
+<td>Passed to <code>rewrite_data_files</code></td>
+</tr>
+<tr>
+<td><code>min_file_size_bytes</code></td>
+<td><code>100_000_000</code></td>
+<td>Below this a data file counts as "small"</td>
+</tr>
+<tr>
+<td><code>max_small_files</code></td>
+<td><code>10</code></td>
+<td><code>merge_files</code> runs when more small files than this exist</td>
+</tr>
+<tr>
+<td><code>flush_inlined</code></td>
+<td><code>True</code></td>
+<td>Flush inlined rows when some exist</td>
+</tr>
+<tr>
+<td><code>max_overlap_ratio</code></td>
+<td><code>0.5</code></td>
+<td><code>recluster</code> runs when <code>overlap_ratio</code> exceeds this (and <code>recluster=True</code>)</td>
+</tr>
+<tr>
+<td><code>recluster</code></td>
+<td><code>False</code></td>
+<td>Opt-in: allow the (full-rewrite) recluster step at all</td>
+</tr>
+<tr>
+<td><code>retention_days</code></td>
+<td><code>None</code></td>
+<td>Snapshot retention for expire + cleanup; <code>None</code> never expires anything</td>
+</tr>
+<tr>
+<td><code>delete_orphaned</code></td>
+<td><code>False</code></td>
+<td>Opt-in: run <code>delete_orphaned_files</code></td>
+</tr>
+<tr>
+<td><code>dry_run</code></td>
+<td><code>False</code></td>
+<td>Log what would run without changing anything</td>
+</tr>
+</tbody>
+</table>
+<p><a class="autorefs autorefs-internal" title="maintain" href="../api/maintenance/DuckLakeMaintenance/#dt_ducklake_manager.maintenance.compaction.DuckLakeMaintenance.maintain"><code>DuckLakeMaintenance.maintain(policy)</code></a>
+reads a fresh <code>storage_report()</code>, then considers each step in order — flush →
+rewrite → merge → recluster → expire → cleanup → delete_orphaned — running it
+only when its own indicator justifies it under the policy:</p>
+<table>
+<thead>
+<tr>
+<th>Step</th>
+<th>Runs when</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>flush</td>
+<td><code>flush_inlined</code> and unflushed inlined rows exist</td>
+</tr>
+<tr>
+<td>rewrite</td>
+<td>at least one delete file exists (DuckLake applies <code>delete_threshold</code> per file)</td>
+</tr>
+<tr>
+<td>merge</td>
+<td><code>small_file_count &gt; max_small_files</code></td>
+</tr>
+<tr>
+<td>recluster</td>
+<td><code>recluster=True</code> and <code>overlap_ratio &gt; max_overlap_ratio</code></td>
+</tr>
+<tr>
+<td>expire, then cleanup</td>
+<td><code>retention_days is not None</code></td>
+</tr>
+<tr>
+<td>delete_orphaned</td>
+<td><code>delete_orphaned=True</code></td>
+</tr>
+</tbody>
+</table>
+<p>A skipped step is logged explicitly with its reason (e.g. <code>"recluster
+skipped — overlap 0.12 &lt;= max_overlap_ratio 0.5"</code>) and flagged
+<code>&lt;step&gt;_skipped</code> in the resulting <code>OperationReport.maintenance</code>. Under
+<code>dry_run=True</code>, the modifying steps (flush, rewrite, merge, recluster) are
+only logged as "would run"; expire/cleanup/delete_orphaned are called with
+their own <code>dry_run=True</code>, which only lists candidates. Every step is
+non-fatal: a failure is logged and added to <code>report.warnings</code>, and the
+remaining steps still run.</p>
+<p>There is no <code>full_maintenance</code> shortcut — planned maintenance is always an
+explicit policy:</p>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">maintenance</span><span class="o">.</span><span class="n">maintain</span><span class="p">(</span><span class="n">MaintenancePolicy</span><span class="p">(</span><span class="n">retention_days</span><span class="o">=</span><span class="mi">30</span><span class="p">))</span>
+</span></code></pre></div>
+<h2 id="scenarios">Scenarios</h2>
+<h3 id="after-a-large-update">After a large update</h3>
+<p>The write itself already ran <code>compact()</code> (merge + rewrite) right after its
+commit. Nothing more is required immediately; <code>storage_report()</code> tells you
+whether it is worth going further:</p>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="n">report</span> <span class="o">=</span> <span class="n">maintenance</span><span class="o">.</span><span class="n">storage_report</span><span class="p">()</span>
+</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="nb">print</span><span class="p">(</span><span class="n">report</span><span class="o">.</span><span class="n">summary</span><span class="p">())</span>
+</span></code></pre></div>
+<h3 id="after-a-massive-deletion">After a massive deletion</h3>
+<p>Same as above — <code>delete_rows(..., compact_after_update=True)</code> already merged
+and rewrote. If the deletion also emptied every value of some columns,
+<code>delete_rows</code> drops them automatically (<code>perform_cleanup</code>, default follows
+<code>auto_cleanup</code>); check <code>report.columns_dropped</code>.</p>
+<h3 id="after-n-updates-file-range-overlap">After N updates (file-range overlap)</h3>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="n">report</span> <span class="o">=</span> <span class="n">maintenance</span><span class="o">.</span><span class="n">storage_report</span><span class="p">()</span>
+</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="k">if</span> <span class="n">report</span><span class="o">.</span><span class="n">overlap_ratio</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="ow">and</span> <span class="n">report</span><span class="o">.</span><span class="n">overlap_ratio</span> <span class="o">&gt;</span> <span class="mf">0.5</span><span class="p">:</span>
+</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a>    <span class="n">maintenance</span><span class="o">.</span><span class="n">maintain</span><span class="p">(</span><span class="n">MaintenancePolicy</span><span class="p">(</span><span class="n">recluster</span><span class="o">=</span><span class="kc">True</span><span class="p">))</span>
+</span></code></pre></div>
+<h3 id="freeing-disk-space-retention">Freeing disk space (retention)</h3>
+<p>Space is only actually freed by <code>cleanup_files</code>, which only makes sense after
+<code>expire_snapshots</code>. Both are planned-maintenance-only:</p>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="n">maintenance</span><span class="o">.</span><span class="n">maintain</span><span class="p">(</span><span class="n">MaintenancePolicy</span><span class="p">(</span><span class="n">retention_days</span><span class="o">=</span><span class="mi">30</span><span class="p">))</span>
+</span></code></pre></div>
+<h3 id="after-an-interrupted-transaction">After an interrupted transaction</h3>
+<p>Review candidates before deleting anything:</p>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="n">candidates</span> <span class="o">=</span> <span class="n">maintenance</span><span class="o">.</span><span class="n">delete_orphaned_files</span><span class="p">(</span><span class="n">dry_run</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+</span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="c1"># inspect candidates, then:</span>
+</span><span id="__span-4-3"><a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="n">maintenance</span><span class="o">.</span><span class="n">delete_orphaned_files</span><span class="p">(</span><span class="n">dry_run</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
+</span></code></pre></div>
+<h3 id="finding-the-run-behind-a-given-state">Finding the run behind a given state</h3>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="n">recovery</span> <span class="o">=</span> <span class="n">DatabaseRecoveryManager</span><span class="p">(</span><span class="n">conn</span><span class="p">)</span>
+</span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="nb">print</span><span class="p">(</span><span class="n">recovery</span><span class="o">.</span><span class="n">list_ducklake_snapshots</span><span class="p">())</span>  <span class="c1"># snapshot_id, author (run_id), commit_message, commit_extra_info, ...</span>
+</span></code></pre></div>
+<p>See <a href="../schema/#traceability-of-runs">Traceability of runs</a> for how <code>run_id</code> and
+<code>commit_message</code> land on a snapshot in the first place.</p>
+<h3 id="time-travel-reading-a-past-state">Time travel (reading a past state)</h3>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="n">old</span> <span class="o">=</span> <span class="n">DuckLakeConnector</span><span class="p">(</span><span class="n">catalog_path</span><span class="p">,</span> <span class="n">data_path</span><span class="p">,</span> <span class="n">snapshot_version</span><span class="o">=</span><span class="mi">17</span><span class="p">)</span><span class="o">.</span><span class="n">connect</span><span class="p">()</span>
+</span><span id="__span-6-2"><a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="c1"># read tables from `old`, then reinsert into the current catalog if recovering</span>
+</span></code></pre></div>
+<p>With the file-based DuckDB backend, a snapshot connection cannot coexist with
+an already-open connection to the same catalog (the catalog file is locked at
+the process level); when a connection is already open, build an
+<code>AT (VERSION =&gt; n)</code> clause instead (<code>DuckLakeConnector.at_clause</code>).</p>
+<h3 id="explicit-broadcast-of-a-partial-key-column">Explicit broadcast of a partial-key column</h3>
+<p><code>add_columns</code> never spreads a value carried by a partial key (e.g.
+<code>(region, product)</code>) over a fact table keyed by a fuller key (e.g. <code>(date,
+region, product)</code>) — see <a href="../architecture/#1-result-set-granularity">Result-set granularity</a>
+for why. To broadcast deliberately:</p>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="n">keys</span> <span class="o">=</span> <span class="n">updater</span><span class="o">.</span><span class="n">get_key_combinations</span><span class="p">([</span><span class="s2">&quot;region&quot;</span><span class="p">,</span> <span class="s2">&quot;product&quot;</span><span class="p">])</span>
+</span><span id="__span-7-2"><a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a><span class="n">df_partial</span> <span class="o">=</span> <span class="n">keys</span><span class="o">.</span><span class="n">to_polars</span><span class="p">()</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">df_score</span><span class="p">,</span> <span class="n">on</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;region&quot;</span><span class="p">,</span> <span class="s2">&quot;product&quot;</span><span class="p">])</span>
+</span><span id="__span-7-3"><a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a><span class="n">updater</span><span class="o">.</span><span class="n">add_columns</span><span class="p">(</span><span class="n">df_partial</span><span class="p">)</span>
+</span></code></pre></div>
+<h2 id="reading-an-operationreport">Reading an <code>OperationReport</code></h2>
+<p>Every write (<code>build_schema</code>, <code>update_database</code>, <code>add_columns</code>, <code>delete_rows</code>,
+<code>delete_columns</code>) and every maintenance call (<code>recluster</code>, <code>maintain</code>) returns
+or exposes an <a class="autorefs autorefs-internal" title="OperationReport
+
+
+  
+      dataclass
+  " href="../api/reporting/OperationReport/#dt_ducklake_manager.reporting.OperationReport"><code>OperationReport</code></a>,
+built from DuckLake's own introspection functions (<code>ducklake_table_info</code>,
+<code>ducklake_snapshots</code>, <code>ducklake_table_changes</code>), never estimated in Python.
+Zeros are explicit rather than omitted in the underlying counters; the
+one-line <code>summary()</code> only shows non-trivial deltas:</p>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-8-1"><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="n">report</span> <span class="o">=</span> <span class="n">updater</span><span class="o">.</span><span class="n">last_report</span>
+</span><span id="__span-8-2"><a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a><span class="nb">print</span><span class="p">(</span><span class="n">report</span><span class="o">.</span><span class="n">summary</span><span class="p">())</span>
+</span><span id="__span-8-3"><a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a><span class="c1"># update main [run-42]: +1240 rows, ~380 updated, +2 columns (score, rank),</span>
+</span><span id="__span-8-4"><a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a><span class="c1"># 3 -&gt; 2 files (48.2 -&gt; 31.7 MB), snapshot 17 -&gt; 18, 4.1s</span>
+</span></code></pre></div>
+<p>Key fields: <code>rows_inserted</code> / <code>rows_updated</code> / <code>rows_deleted</code> (from
+<code>ducklake_table_changes</code>), <code>columns_added</code> / <code>columns_dropped</code>,
+<code>snapshot_before</code> / <code>snapshot_after</code>, <code>files_before</code> / <code>files_after</code>,
+<code>bytes_before</code> / <code>bytes_after</code>, <code>maintenance</code> (counters from the post-write
+compaction or from <code>maintain</code>'s steps), and <code>warnings</code> (non-fatal issues
+collected during the operation). <code>to_dict()</code> gives a JSON-serializable form
+for logging pipelines.</p>
+<h2 id="reading-a-storagereport">Reading a <code>StorageReport</code></h2>
+<p><a class="autorefs autorefs-internal" title="StorageReport
+
+
+  
+      dataclass
+  " href="../api/maintenance/StorageReport/#dt_ducklake_manager.maintenance.compaction.StorageReport"><code>StorageReport</code></a>,
+returned by <code>storage_report()</code>, is the decision input behind <code>maintain</code>:
+<code>file_count</code>, <code>total_bytes</code>, <code>delete_file_count</code>, <code>delete_ratio</code>,
+<code>small_file_count</code>, <code>inlined_rows</code> / <code>has_inlined_data</code>, <code>snapshot_count</code> /
+<code>oldest_snapshot_age_days</code>, and <code>overlap_ratio</code> / <code>cluster_column</code>. Every
+field defaults to its "nothing to do" value when it cannot be measured (no
+real DuckLake catalog attached, unknown table) rather than raising.</p>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-9-1"><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a><span class="n">report</span> <span class="o">=</span> <span class="n">maintenance</span><span class="o">.</span><span class="n">storage_report</span><span class="p">()</span>
+</span><span id="__span-9-2"><a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a><span class="nb">print</span><span class="p">(</span><span class="n">report</span><span class="o">.</span><span class="n">summary</span><span class="p">())</span>
+</span><span id="__span-9-3"><a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a><span class="c1"># storage main.fact_table: 3 files (2.4 MB), 0 delete files (0.0%),</span>
+</span><span id="__span-9-4"><a id="__codelineno-9-4" name="__codelineno-9-4" href="#__codelineno-9-4"></a><span class="c1"># 3 small files, 0 inlined rows, 12 snapshots (oldest 4.2 days), overlap 0.67 on date</span>
+</span></code></pre></div>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+  <script>var tabs=__md_get("__tabs");if(Array.isArray(tabs))e:for(var set of document.querySelectorAll(".tabbed-set")){var labels=set.querySelector(".tabbed-labels");for(var tab of tabs)for(var label of labels.getElementsByTagName("label"))if(label.innerText.trim()===tab){var input=document.getElementById(label.htmlFor);input.checked=!0;continue e}}</script>
+
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "..", "features": ["content.tabs.link", "content.code.annotate", "content.code.copy", "navigation.sections", "navigation.path"], "search": "../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../assets/javascripts/bundle.79ae519e.min.js"></script>
+      
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/2.7.4/MathJax.js?config=TeX-AMS-MML_HTMLorMML"></script>
+      
+    
+  </body>
+</html>
