@@ -8,7 +8,9 @@
 > **Version du schéma** : le schéma décrit ici est **la version 1** du schéma de la base et
 > de l'API (le projet est en phase de développement ; l'état antérieur du code n'a jamais été
 > publié et ne fait l'objet d'aucune migration). Le champ `dataset_metadata.schema_version`
-> vaut `1` et n'existe que pour permettre une évolution future.
+> vaut `1` et n'existe que pour permettre une évolution future. L'ajout de
+> `metadata.label_for` (§2.6, septembre 2026) reste dans la version 1 : les catalogues
+> de développement construits auparavant sont reconstruits, sans migration.
 >
 > **Base empirique** : tous les comportements DuckLake cités comme *mesurés* l'ont été sur
 > l'environnement du dépôt (DuckDB 1.5.2, extension `ducklake` 415a9ebd, catalogue fichier),
@@ -22,9 +24,12 @@
    l'interface a besoin pour se piloter (libellé, type, statut catégoriel, hiérarchie, unité,
    format, famille, agrégation par défaut) est dans `metadata`, jamais déduit des données
    à l'exécution.
-2. **La fact table stocke les libellés, pas des codes.** Le dictionary-encoding Parquet
-   absorbe le coût de stockage ; aucune table de dimension n'est nécessaire. Il n'existe
-   **aucune table `dim_*`** dans le schéma.
+2. **La fact table stocke les libellés, pas des codes synthétiques.** Le
+   dictionary-encoding Parquet absorbe le coût de stockage ; aucune table de dimension
+   n'est nécessaire. Il n'existe **aucune table `dim_*`** dans le schéma. Quand un
+   **code métier** doit être restitué tel quel (nomenclature, code INSEE), le code et
+   son libellé sont deux colonnes de la fact table, reliées par `metadata.label_for`
+   (§2.6).
 3. **Un catalogue par projet, un schéma par jeu de résultats.** Un jeu de résultats est
    défini par sa clé (ex. `(date, region, produit)`) ; un résultat porté par une autre clé
    est un autre schéma, pas des colonnes supplémentaires.
@@ -67,6 +72,7 @@ pas de colonne technique ajoutée par le package. La table est :
 | `is_primary_key` | BOOLEAN | non | Fait partie de la clé logique (déduplication, upsert) |
 | `is_categorical` | BOOLEAN | non | **Métadonnée d'UI pure** : la colonne se filtre par un menu et peut servir de `groupBy`. Ne pilote aucun choix de stockage |
 | `parent_name` | VARCHAR | oui | Colonne parente dans une hiérarchie de colonnes (§2.5) |
+| `label_for` | VARCHAR | oui | Renseigné sur une **colonne de libellés** : nom de la colonne de code dont elle porte le libellé de chaque valeur (§2.6) |
 | `unit` | VARCHAR | oui | Suffixe d'axe / tooltip (`"€"`, `"%"`, `"MW"`) |
 | `display_format` | VARCHAR | oui | Chaîne d3-format (`",.2f"`, `".0%"`) |
 | `family` | VARCHAR | oui | Famille thématique (regroupement des variables dans les menus) |
@@ -90,10 +96,13 @@ Règles :
   booléen ne sert qu'à choisir le composant de filtre de l'interface (menu select ou
   champ de recherche) ; un statut qui bascule au gré des lots rendrait l'interface
   instable pour un gain nul.
-- Les champs d'UI (`label`, `parent_name`, `unit`, `display_format`, `family`,
-  `description`, `default_aggregation`) et `is_categorical` appartiennent au producteur
-  de métadonnées : un update de données ne les écrase jamais. Ils se corrigent sur une
-  base existante par `update_column_metadata(column, **fields)`.
+- Les champs d'UI (`label`, `parent_name`, `label_for`, `unit`, `display_format`,
+  `family`, `description`, `default_aggregation`) et `is_categorical` appartiennent au
+  producteur de métadonnées : un update de données ne les écrase jamais. Ils se
+  corrigent sur une base existante par `update_column_metadata(column, **fields)`.
+- `label` et `label_for` ne se confondent pas : `label` est le libellé **de la
+  colonne** (en-tête « Code NC8 ») ; `label_for` désigne la colonne dont on porte le
+  libellé **de chaque valeur** (« 01012100 » → « Chevaux reproducteurs de race pure »).
 
 ### 2.3 `dataset_metadata` — une ligne par schéma
 
@@ -114,7 +123,8 @@ par des arguments optionnels du builder.
 `is_categorical` choisit le composant de filtre : menu select pour une colonne
 catégorielle, champ de recherche sinon. L'interface obtient les modalités d'une colonne
 catégorielle par `SELECT DISTINCT` sur la fact table (colonne dictionary-encodée, requête
-bon marché), avec recherche et limite. `label = value` toujours.
+bon marché), avec recherche et limite. `label = value`, sauf pour une colonne de code
+dotée d'une colonne de libellés (§2.6) : `value` = code, `label` = libellé.
 
 ### 2.5 Hiérarchies : uniquement des hiérarchies de colonnes
 
@@ -147,10 +157,102 @@ supérieur (cela ferait apparaître un faux nœud).
   élimine. Si un projet en a besoin un jour, l'extension est locale : une table déclarée
   explicitement au build (`value_hierarchies={col: df}`), remplacée en bloc à chaque mise
   à jour, sans impact sur la fact table ni sur `metadata`.
-- *Table de libellés `dim_<col>(value, label)` pour code métier ≠ libellé*. Même
-  raisonnement : la fact table porte le libellé ; si un code métier est nécessaire aux
-  jointures, c'est une colonne supplémentaire du DataFrame (`country_code`), non
-  catégorielle, et le lien code ↔ libellé se fait par `SELECT DISTINCT` des deux colonnes.
+- *Table de libellés `dim_<col>(value, label)` pour code métier ≠ libellé* : voir
+  §2.6, qui traite ce cas par deux colonnes de la fact table et un lien dans
+  `metadata`.
+
+### 2.6 Codes et libellés : colonnes de libellés (`label_for`)
+
+Certaines colonnes portent un **code métier** qui doit être restitué tel quel (code de
+nomenclature tarifaire NC8, code INSEE, code pays ISO) et auquel on veut associer un
+**libellé** lisible. Le code et le libellé sont **deux colonnes de la fact table** ; le
+lien est déclaré dans `metadata.label_for`, **sur la colonne de libellés**, qui pointe
+vers la colonne de code :
+
+| `name` | `parent_name` | `label_for` |
+|---|---|---|
+| `nc6` | NULL | NULL |
+| `nc6_libelle` | NULL | `nc6` |
+| `nc8` | `nc6` | NULL |
+| `nc8_libelle_fr` | NULL | `nc8` |
+| `nc8_libelle_en` | NULL | `nc8` |
+
+Le pointeur est porté par le libellé et non par le code pour deux raisons : c'est la
+même forme que `parent_name` (l'enfant pointe vers sa cible : mêmes validations, même
+cascade à la suppression), et un code peut avoir **plusieurs** colonnes de libellés
+(langues, libellé court/long) sans changement de schéma. Chaque niveau d'une hiérarchie
+de codes porte ses propres libellés ; la hiérarchie, elle, relie les codes.
+
+**Invariants validés à l'écriture** (`ValueError` explicite, `ROLLBACK`) :
+
+1. la colonne cible existe dans la fact table et diffère de la colonne de libellés ;
+2. pas de chaîne : la cible n'est pas elle-même une colonne de libellés ;
+3. la colonne de libellés est `VARCHAR`, n'est pas clé primaire et n'appartient à
+   aucune hiérarchie (ni `parent_name` renseigné, ni parente d'une autre colonne) ;
+4. **dépendance fonctionnelle code → libellé** : pour chaque valeur non `NULL` du code,
+   la colonne de libellés porte **une seule** valeur sur toute la table, `NULL` compris
+   (un code dont certaines lignes ont un libellé et d'autres non est incohérent) ; une
+   ligne dont le code est `NULL` a un libellé `NULL`. Contrôle :
+
+   ```sql
+   SELECT code FROM fact_table WHERE code IS NOT NULL GROUP BY code
+   HAVING COUNT(DISTINCT libelle) > 1 OR (COUNT(libelle) > 0 AND COUNT(libelle) < COUNT(*));
+   SELECT COUNT(*) FROM fact_table WHERE code IS NULL AND libelle IS NOT NULL;
+   ```
+
+Le contrôle s'exécute au build (sur le DataFrame dédupliqué), à chaque update (état
+post-upsert, **dans la transaction**, restreint aux codes présents dans le lot), à
+chaque `add_columns` qui écrit une colonne de code ou de libellés, à la déclaration
+d'un lien sur une base existante (`update_column_metadata(col, label_for=...)`, toute
+la table) et après `update_value_labels`. Le message d'erreur liste au plus dix codes
+fautifs avec leurs libellés concurrents.
+
+Aucune contrainte sur `is_categorical` : un code à 10 000 modalités peut rester non
+catégoriel (champ de recherche, dont l'autocomplétion cherche dans le code **et** le
+libellé). Le statut de la colonne de libellés est sans objet pour l'interface, qui la
+masque des listes de variables.
+
+**Changement de libellé.** Une révision de nomenclature qui renomme un code viole la
+dépendance si elle arrive par upsert (les lignes anciennes gardent l'ancien libellé) :
+l'upsert est refusé et le message renvoie vers
+`DatabaseUpdater.update_value_labels(label_column, labels)`, où `labels` est un
+DataFrame `(code, libellé)`. L'opération est un unique `UPDATE … FROM` sur toutes les
+lignes des codes concernés (réécriture copy-on-write de ces lignes, suivie de
+`compact`), dans une transaction, avec `OperationReport` (`operation =
+'update_value_labels'`). Le libellé affiché est donc toujours le libellé **courant** ;
+les libellés antérieurs restent lisibles par time travel. Un code qui change de *sens*
+d'un millésime à l'autre n'est pas un changement de libellé : le producteur intègre le
+millésime au code ou garde une colonne ordinaire, sans `label_for`.
+
+**Lecture.** `SELECT DISTINCT code, libelle` donne la table de correspondance ; un
+agrégat groupé par code récupère le libellé par `ANY_VALUE(libelle)` (licite grâce à la
+dépendance fonctionnelle) ; filtres et jointures entre jeux de résultats portent sur le
+code. `get_value_label_columns(conn, schema, catalog_alias) -> dict[str, list[str]]`
+(code → colonnes de libellés, triées par nom) est l'implémentation de référence pour
+l'API, comme `get_column_hierarchies` pour les hiérarchies.
+
+**Stockage.** Coût faible : le libellé est dictionary-encodé et parfaitement corrélé au
+code. Réserve **non mesurée** : pour un code à forte cardinalité avec des libellés
+longs (NC8, ~10 000 codes), le dictionnaire d'un row group peut dépasser le seuil
+au-delà duquel l'écriture Parquet repasse en encodage plain ; la compression `zstd`
+absorbe alors l'essentiel des répétitions. À mesurer sur un volume réel avant d'en
+faire une recommandation.
+
+**Ce qui n'est pas retenu, et pourquoi.**
+
+- *Table de libellés `dim_<col>(code, label)`, ou catalogue de référentiels partagé
+  entre projets.* Préférable seulement si le référentiel est maintenu indépendamment des
+  modèles **et** que ses libellés doivent changer sans toucher aux faits. Le coût est
+  celui que la suppression des `dim_*` élimine : jointure à chaque requête (et, pour un
+  catalogue séparé, lecture multi-catalogues, §7), versionnage par millésime (la
+  nomenclature NC change chaque année), codes orphelins, cohérence entre deux tables.
+  Un référentiel partagé, s'il existe, s'utilise **en amont** : le producteur le joint à
+  son DataFrame avant l'écriture.
+- *Convention de nommage (`<col>_label`) sans métadonnée.* Contrat implicite que
+  l'interface devrait deviner ; `label_for` le rend explicite pour le prix d'une
+  colonne nullable.
+- *Pointeur sur la colonne de code (`label_column`).* Limiterait chaque code à un seul
+  libellé.
 
 ---
 
@@ -184,11 +286,12 @@ updated_at` mis à jour.
 
 Entrées : DataFrame, `primary_keys`, `categorical_threshold`, `categorical_overrides`,
 `column_labels`, `column_metadata` (champs d'UI par colonne), `hierarchies` (colonne →
-parente), `partition_by`, `cluster_by`, métadonnées de jeu de résultats (`label`,
-`description`, `source`).
+parente), `value_labels` (colonne de libellés → colonne de code, §2.6), `partition_by`,
+`cluster_by`, métadonnées de jeu de résultats (`label`, `description`, `source`).
 
 Étapes : validation (clés présentes, `column_metadata` sur colonnes existantes, clés de
-sous-dictionnaire autorisées, `default_aggregation` valide, forêt de `parent_name`) ;
+sous-dictionnaire autorisées, `default_aggregation` valide, forêt de `parent_name`,
+invariants des colonnes de libellés dont la dépendance fonctionnelle) ;
 déduplication ; création de `metadata` ; création de `fact_table` par
 `INSERT … SELECT … ORDER BY cluster_by` (DDL explicite quand clés ou partition, CTAS
 sinon) ; création de `dataset_metadata`.
@@ -200,7 +303,9 @@ existantes mises à jour, lot trié sur `cluster_by` avant écriture. Nouvelles 
 **refusées par défaut** ; acceptées avec `allow_new_columns=True` (ajout de la colonne,
 ligne `metadata`, champs d'UI depuis `column_metadata`). Nouvelles modalités d'une
 colonne catégorielle : rien à faire (ce sont des libellés), et `is_categorical` n'est
-pas recalculé. Suivie d'un `rewrite_data_files(delete_threshold)` (§5.4),
+pas recalculé. Dépendance fonctionnelle des colonnes de libellés contrôlée sur l'état
+post-upsert, dans la transaction, pour les codes du lot (§2.6) ; un changement de
+libellé passe par `update_value_labels`. Suivie d'un `rewrite_data_files(delete_threshold)` (§5.4),
 jamais d'une expiration de snapshots.
 
 ### 4.3 Gestion explicite des colonnes
@@ -219,7 +324,12 @@ jamais d'une expiration de snapshots.
 - `DatabaseDeleter.delete_columns(columns)` : `ALTER TABLE … DROP COLUMN` (*mesuré* :
   opération de métadonnées, aucun fichier réécrit) + suppression de la ligne `metadata` +
   retrait de la colonne de `cluster_by` et des `parent_name` qui la référencent (erreur si
-  elle est clé primaire ou parente d'une autre colonne, sauf `cascade`).
+  elle est clé primaire ou parente d'une autre colonne, sauf `cascade`). Même règle pour
+  une colonne de code visée par des colonnes de libellés : erreur, sauf `cascade`, qui
+  remet leur `label_for` à `NULL` (elles deviennent des colonnes ordinaires) avec un
+  warning. Supprimer une colonne de libellés ne demande rien de particulier.
+- `DatabaseUpdater.update_value_labels(label_column, labels)` : remplacement explicite
+  des libellés de certains codes (§2.6).
 
 **Non retenu : diffusion (broadcast) d'une colonne sur un sous-ensemble de clés.** Un
 DataFrame portant `(region, produit, score)` face à une fact table de clé `(date, region,
@@ -396,7 +506,7 @@ exigeant `pytz` (*mesuré*).
 ```python
 @dataclass
 class OperationReport:
-    operation: str                  # 'build' | 'update' | 'add_columns' | 'delete_columns' | 'delete' | 'recluster' | 'maintenance'
+    operation: str                  # 'build' | 'update' | 'add_columns' | 'update_value_labels' | 'delete_columns' | 'delete' | 'recluster' | 'maintenance'
     schema: str
     run_id: str | None
     started_at: datetime
@@ -460,11 +570,20 @@ ERROR en cas d'échec avec l'étape atteinte. `update_database` continue de reto
 
 - `getCatalogs` expose `dataset_metadata` (`label`, `description`, `source`,
   `updatedAt`, `schemaVersion`).
-- `getCatalogSchema` / `getFields` exposent `parentName`, `unit`, `displayFormat`,
-  `family`, `description`, `defaultAggregation`.
-- `getSelectOptions(field, searchTerm, limit)` : `SELECT DISTINCT` sur la fact table,
-  `label = value`. Reste l'endpoint typé pour la recherche et la pagination sur un niveau
-  (ex. 35 000 communes).
+- `getCatalogSchema` / `getFields` exposent `parentName`, `labelFor`, `unit`,
+  `displayFormat`, `family`, `description`, `defaultAggregation`, plus le champ calculé
+  `labelFields` (inverse de `labelFor` : colonnes de libellés d'un code, triées par nom,
+  lues dans les mêmes lignes `metadata`, sans requête supplémentaire).
+- `getFields` exclut par défaut les colonnes de libellés (argument
+  `includeLabelFields: Boolean = false`) : ce ne sont pas des variables à proposer dans
+  un menu. `getCatalogSchema` rend toutes les colonnes (contrat complet).
+- `getSelectOptions(field, searchTerm, limit, labelField)` : `SELECT DISTINCT` sur la
+  fact table, `label = value`, sauf colonne de code dotée de libellés (§2.6) :
+  `value` = code, `label` = libellé. Colonne de libellés utilisée : `labelField` si
+  fourni (doit viser `field`), sinon la seule colonne de libellés, sinon la première
+  par ordre alphabétique. `searchTerm` cherche dans le code **ou** le libellé. Reste
+  l'endpoint typé pour la recherche et la pagination sur un niveau (ex. 35 000
+  communes).
 - **`getSelectOptionsTree(field, maxDepth, searchTerm): JSON`** remplace
   `getGroupedSelectOptions` : arbre imbriqué `[{value, label, children: [...]}]` construit
   par `SELECT DISTINCT` sur la chaîne de colonnes remontée via `parentName`, `NULL`
@@ -472,10 +591,16 @@ ERROR en cas d'échec avec l'étape atteinte. `update_database` continue de reto
   GraphQL n'exprime pas une profondeur arbitraire, les menus sont bornés par nature, et
   le typage fort qu'apporterait une liste plate n'a pas de consommateur (la liste plate
   n'aurait d'intérêt que pour un chargement paresseux de sous-arbres très grands, cas
-  couvert par `searchTerm` et `getSelectOptions` sur le niveau feuille).
+  couvert par `searchTerm` et `getSelectOptions` sur le niveau feuille). Chaque niveau
+  prend son libellé dans sa colonne de libellés quand elle existe (même règle de choix
+  par défaut que `getSelectOptions`).
+- `AggregatedFact.keyLabel` et `ComparedFact.keyLabel` : libellé de la clé de groupe
+  quand la colonne groupée a une colonne de libellés (`ANY_VALUE`, même requête),
+  `null` sinon.
 - `dimensionDetails`, `getDimensionTable` : **supprimés** (pas de dépréciation, le
   projet n'est pas publié).
-- `compareFacts` : jointure directe sur les libellés.
+- `compareFacts` : jointure directe sur les colonnes partagées (libellés, ou codes
+  quand ils existent). `getSharedFields` exclut les colonnes de libellés.
 - Profondeur maximale de requête (7) et pagination par offset (10 000) : limites de
   conception à documenter.
 
@@ -490,8 +615,9 @@ générée :
    contrat `metadata`, l'absence de tables de dimension ; schéma draw.io
    (`docs/assets/schema_bdd.drawio` + export PNG) à jour.
 2. **Fonctionnement du schéma** (nouvelle page) : statut catégoriel, hiérarchies de
-   colonnes et convention `NULL`, types, `cluster_by`, traçabilité des runs, ce qui n'est
-   pas retenu et pourquoi (§2.5, §4.3).
+   colonnes et convention `NULL`, codes et colonnes de libellés (`label_for`, dépendance
+   fonctionnelle, changement de libellé), types, `cluster_by`, traçabilité des runs, ce
+   qui n'est pas retenu et pourquoi (§2.5, §2.6, §4.3).
 3. **Cycle de vie physique et maintenance** (nouvelle page) : copy-on-write, inlining,
    tableau des opérations avec « quand » et « risque » (§5.5), exemples concrets : après un
    gros update, après une suppression massive, après N updates (recouvrement), avant de

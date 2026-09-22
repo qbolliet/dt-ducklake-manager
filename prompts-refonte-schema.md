@@ -726,6 +726,298 @@ serveur réel).
 
 ---
 
+## Prompt 12 — Codes et colonnes de libellés (`label_for`)
+
+**Modèle : Sonnet · Plan mode : OUI · Dépendances : prompts 1 à 10 (réalisés)**
+
+*Ajout de septembre 2026, après la série : la spécification a gagné un §2.6. Le schéma
+reste en version 1 (catalogues de développement reconstruits, aucune migration).*
+
+```text
+Lis d'abord specification-bdd.md, sections 2.2, 2.5, 2.6 (nouvelle), 4.1 à 4.3 et 6.
+Un code métier (nomenclature NC8, code INSEE) et son libellé sont DEUX colonnes de la
+fact_table ; le lien est déclaré dans metadata.label_for, porté par la colonne de
+libellés et pointant vers la colonne de code. Aucune table auxiliaire. Le mécanisme
+est calqué sur parent_name (prompt 4) : relis utils/hierarchy.py,
+SchemaBuilder._resolve_hierarchies (schema/inference.py),
+BaseSchemaManager.update_column_metadata et _clear_child_parent_references
+(operations/_base.py), et DatabaseDeleter.delete_columns avant d'écrire, et réutilise
+leurs patterns.
+
+1) Schéma de metadata : ajoute label_for à UI_METADATA_FIELDS (utils/types.py), juste
+   après parent_name. METADATA_COLUMNS, metadata_table_ddl, empty_metadata_frame,
+   COLUMN_METADATA_KEYS, l'auditeur et recovery en dérivent : vérifie que rien d'autre
+   ne liste les colonnes à la main (grep parent_name). Le champ passe ainsi
+   automatiquement par column_metadata et update_column_metadata.
+
+2) Nouveau module utils/value_labels.py :
+   - validate_value_labels(label_for: Mapping[str, str], columns: Mapping[str, str],
+     primary_keys, parent_of) -> None : invariants 1 à 3 de la spec §2.6 (cible
+     existante et distincte, pas de chaîne, colonne de libellés VARCHAR, non clé
+     primaire, hors de toute hiérarchie) — columns mappe nom → sql_type ;
+   - check_value_label_dependency(conn, fact_table_qualified, code, label,
+     restrict_to: str | None = None) -> None : invariant 4 (dépendance fonctionnelle,
+     NULL compris, et libellé non NULL sous un code NULL) par les deux requêtes SQL de
+     la spec ; restrict_to est le nom d'une vue temporaire dont on prend les codes
+     (WHERE code IN (SELECT code FROM <vue>)) pour limiter le contrôle d'un update aux
+     codes du lot. ValueError listant au plus 10 codes fautifs avec leurs libellés
+     concurrents et, pour une violation par un lot, la mention de
+     DatabaseUpdater.update_value_labels. Identifiants quotés ;
+   - get_value_label_columns(conn, schema="main", catalog_alias="db")
+     -> dict[str, list[str]] : code → colonnes de libellés triées par nom (implémentation
+     de référence pour l'API, symétrique de get_column_hierarchies).
+   Exporte-les là où get_column_hierarchies est exporté.
+
+3) Construction : SchemaBuilder et DuckLakeTablesBuilder acceptent
+   value_labels: dict[str, str] | None (colonne de libellés → colonne de code), fusionné
+   avec column_metadata[col]["label_for"] (ValueError en cas de désaccord, comme
+   hierarchies). Validation des invariants 1 à 3 sur le DataFrame, puis de la dépendance
+   fonctionnelle sur le DataFrame dédupliqué (via la vue temporaire déjà enregistrée,
+   avant l'écriture). Aucun effet sur is_categorical.
+
+4) update_column_metadata(column, label_for=...) : invariants 1 à 3 contre l'état
+   courant de metadata, puis dépendance fonctionnelle sur toute la fact_table, avant
+   l'UPDATE de metadata. label_for=None retire le lien. Refuse aussi parent_name sur
+   une colonne de libellés, et label_for sur une colonne qui a des enfants ou une
+   parente.
+
+5) Écritures :
+   - update_database : après l'upsert, DANS la transaction, contrôle de la dépendance
+     pour chaque couple (code, libellé) déclaré dont l'une des deux colonnes est dans le
+     lot, restreint aux codes du lot ; violation → ValueError, ROLLBACK (rien n'est
+     écrit). Cas à couvrir : nouveau libellé pour un code existant ; lot sans la
+     colonne de libellés qui insère un code déjà libellé ailleurs (libellé NULL mêlé à
+     un libellé renseigné) ; code non clé primaire modifié sans son libellé.
+   - add_columns (fusion externe) : même contrôle quand une colonne de code ou de
+     libellés est écrite ; une nouvelle colonne peut être déclarée colonne de libellés
+     via column_metadata={"x_libelle": {"label_for": "x"}}.
+   - Nouvelle méthode DatabaseUpdater.update_value_labels(label_column: str, labels,
+     run_id=None, commit_message=None, commit_info=None,
+     compact_after_update=True) -> OperationReport : labels est un DataFrame narwhals à
+     deux colonnes (le code, sous le nom de la colonne de code, et le libellé, sous le
+     nom de label_column), unique sur le code. Un seul UPDATE fact SET label = t.label
+     FROM <vue> t WHERE fact.code = t.code, dans _transaction (operation =
+     'update_value_labels'), contrôle de dépendance après l'UPDATE, puis
+     DuckLakeMaintenance.compact après le commit. Codes absents de la base : warning
+     avec échantillon, jamais d'insertion. label_column sans label_for → ValueError.
+     Journalise avant d'agir le nombre de lignes réécrites (copy-on-write).
+   - DatabaseDeleter.delete_columns : supprimer une colonne de code visée par des
+     colonnes de libellés est une dépendance critique (lot entier refusé), sauf
+     cascade=True qui remet leur label_for à NULL avec un warning (même mécanique que
+     _clear_child_parent_references, factorisée si c'est simple). Supprimer une colonne
+     de libellés : rien de particulier.
+
+6) Auditeur : nouvelle vérification (niveau STANDARD) des invariants 1 à 4 sur l'état
+   courant ; une violation de la dépendance fonctionnelle est une erreur, avec les
+   codes fautifs dans le rapport.
+
+Tests pytest, cas limites : label_for vers une colonne inexistante, vers elle-même,
+chaîne libellé → libellé, colonne de libellés clé primaire / non VARCHAR / dans une
+hiérarchie ; value_labels et column_metadata contradictoires ; deux libellés pour un
+même code au build ; libellé NULL sur une partie des lignes d'un code ; libellé non
+NULL sous un code NULL ; deux colonnes de libellés (fr, en) sur un même code ;
+hiérarchie de codes nc6 → nc8 avec un libellé par niveau ; les trois cas d'update
+refusé du point 5 (et vérification que la base est inchangée après le ROLLBACK) ;
+update qui respecte la dépendance (accepté) ; update_value_labels (lignes réécrites,
+code absent, dépendance respectée ensuite, rapport) ; add_columns d'une colonne de
+libellés ; delete_columns d'un code avec et sans cascade ; get_value_label_columns ;
+auditeur sur une base corrompue à la main. Ne touche à aucun notebook : ils sont
+l'objet du prompt 13. Conventions habituelles. Termine par uv run --no-sync pytest,
+puis ruff et mypy limités aux fichiers touchés.
+```
+
+*Pourquoi Sonnet + plan mode : le mécanisme est entièrement spécifié et calqué sur
+`parent_name`, mais le contrôle dans la transaction d'update touche un chemin
+critique ; le plan fixe les points d'insertion avant d'écrire.*
+
+---
+
+## Prompt 13 — Documentation et notebooks des codes et colonnes de libellés
+
+**Modèle : Sonnet · Plan mode : non · Dépendances : prompt 12**
+
+```text
+Lis d'abord specification-bdd.md (sections 2.2, 2.6 et 9) et le code livré par le
+prompt 12 (utils/value_labels.py, update_value_labels, value_labels du builder). Mets
+la documentation en cohérence ; elle est en anglais (docs/, README.md), les notebooks
+sont en français.
+
+1) docs/schema.md :
+   - tableau de metadata : ligne label_for ; distinction label (libellé de la colonne)
+     / label_for (libellé de chaque valeur) ;
+   - section « Categorical status » : « label = value always » devient faux, renvoie
+     vers la nouvelle section ;
+   - nouvelle section « Codes and value labels » après « Column hierarchies » :
+     exemple nc6 → nc8 avec libellés fr/en (tableau metadata), déclaration au build
+     (value_labels= et column_metadata), les quatre invariants et quand ils sont
+     vérifiés, la dépendance fonctionnelle et ses deux requêtes, le changement de
+     libellé par update_value_labels (et pourquoi un upsert est refusé), la lecture
+     (SELECT DISTINCT, ANY_VALUE), get_value_label_columns, et la réserve de stockage
+     non mesurée ;
+   - la page ne contient PAS la section « Design choices not retained » que la
+     spécification (§9) demande et vers laquelle docs/architecture.md pointe
+     (schema.md#design-choices-not-retained, ancre cassée aujourd'hui) : crée-la en fin
+     de page, reprenant les sections 2.5, 2.6 et 4.3 de la spécification (hiérarchies
+     de valeurs, tables de libellés et référentiel partagé, convention de nommage,
+     pointeur sur le code, diffusion sur clé partielle), avec les raisons.
+
+2) docs/index.md, README.md, CLAUDE.md (section « Database structure ») : mentionne
+   dans la description de metadata le lien code → libellé par label_for, en une
+   phrase ; dans l'exemple d'usage du README et de docs/index.md, ajoute un couple code
+   / libellé seulement si l'exemple reste court (sinon renvoie vers la page schema).
+
+3) docs/architecture.md, section 1 : « Cross-result-set analysis joins on labels »
+   devient « joins on shared columns » — sur le code quand la colonne en a un (plus
+   stable qu'un libellé révisable), sur le libellé sinon.
+
+4) docs/api/ et mkdocs.yml : pages mkdocstrings pour get_value_label_columns,
+   validate_value_labels et check_value_label_dependency ; update_value_labels apparaît
+   déjà via DatabaseUpdater (vérifie).
+
+5) Schéma draw.io (docs/assets/schema_bdd.drawio) : ajoute label_for à la table
+   metadata et, dans la fact_table d'exemple, un couple code / libellé relié par une
+   flèche pointillée depuis metadata.label_for. Réexporte le PNG :
+   "C:\Program Files\draw.io\draw.io.exe" -x -f png -e -b 10 -o docs/assets/schema_bdd.png docs/assets/schema_bdd.drawio
+   Si l'export échoue, laisse le .drawio à jour et signale-le.
+
+6) Skill C:\Users\bolli\.claude\skills\dashboard-api-client\SKILL.md : dans la section
+   « Database schema (target for the API) », ajoute label_for et la règle de lecture
+   (value = code, label = libellé). Ne touche pas au reste.
+
+7) Notebooks. Les hiérarchies de colonnes et les colonnes de libellés reposent sur la
+   même logique (un pointeur nullable dans metadata, validé à l'écriture, lu par
+   SELECT DISTINCT) : ils s'illustrent ensemble.
+   - Renomme notebooks/5 - Hiérarchies.ipynb en
+     « notebooks/5 - Hiérarchies et libellés.ipynb » (git mv) et mets à jour son titre,
+     son sommaire et toute référence à son ancien nom (README, docs/, autres
+     notebooks : grep).
+   - Ajoute-lui une section « Codes et libellés » sur un extrait de nomenclature
+     douanière : hiérarchie de codes nc6 → nc8 déclarée par hierarchies=, libellés
+     déclarés par value_labels= (nc8_libelle_fr et nc8_libelle_en sur nc8, un libellé
+     sur nc6), lecture de la correspondance par SELECT DISTINCT, arbre de menu
+     (code, libellé) par niveau, agrégat par code avec ANY_VALUE du libellé, update
+     refusé parce qu'il apporte un nouveau libellé pour un code existant (montre le
+     message d'erreur et vérifie que la base est inchangée), correction par
+     update_value_labels, puis time travel affichant l'ancien libellé. Comme le reste
+     de la série, fais varier les arguments plutôt que d'exposer un seul chemin
+     heureux : au moins un cas sans colonne de libellés et un code sans libellé (NULL).
+   - Le notebook 5 reste le seul endroit où hiérarchies et libellés sont illustrés :
+     ne réintroduis pas ces exemples dans les notebooks 0 à 4.
+   - Exécute ENSUITE les notebooks 0 à 7 de bout en bout et corrige ce qui casse, y
+     compris les problèmes antérieurs à ce prompt. Deux sont connus : les notebooks 0
+     et 2 échouaient au moment de la refonte sur une « IO Error » à l'ouverture de
+     ..\outputs\*_data\main\metadata\*.parquet (jamais investiguée) ; pytz n'étant pas
+     installé, expire_snapshots ne fait rien silencieusement dans les notebooks —
+     tranche entre ajouter la dépendance et le dire explicitement dans le notebook
+     concerné. Méthode de vérification de ce dépôt : extraire chaque cellule de code
+     dans un .py autonome (magics retirées, display remplacé par print) et l'exécuter
+     avec uv run --no-sync python contre un vrai catalogue sous outputs/, plutôt que
+     de relire le notebook. Si un notebook échoue pour une raison hors sujet et
+     coûteuse, laisse-le en l'état et signale-le en fin de réponse plutôt que d'élargir
+     le prompt.
+   - Attention (convention du dépôt) : ruff lancé sans portée reformate tout le dépôt,
+     y compris les .ipynb (injection d'un « id » par cellule) — limite les commandes de
+     formatage aux fichiers réellement modifiés.
+
+Termine par uv run --no-sync mkdocs build --strict et liste ce qui n'a pas pu être
+fait (export PNG, notebook en échec).
+```
+
+---
+
+## Prompt 14 — Revue d'implémentation : performance, redondances, design
+
+**Modèle : Opus · Plan mode : OUI · Dépendances : prompt 13 (toute la série livrée)**
+
+*Prompt de fin de série : la fonctionnalité est complète, l'enjeu est la qualité de ce
+qui a été écrit prompt par prompt, souvent sans vue d'ensemble.*
+
+```text
+Lis d'abord specification-bdd.md en entier : elle reste la référence de ce qui DOIT
+exister. Ce prompt ne change aucun comportement public documenté et n'ajoute aucune
+fonctionnalité ; il cherche ce qui, dans le code livré par les prompts 1 à 13, est
+redondant, coûteux ou mal placé. Le package fait ~12 600 lignes réparties très
+inégalement (compaction.py 1788, _base.py 1399, auditor.py 1352, updater.py 1188,
+connector.py 1171, recovery.py 1135) : cette asymétrie est elle-même un signal.
+
+TRAVAILLE EN DEUX TEMPS, et n'écris aucun code avant que je valide le premier.
+
+TEMPS 1 — diagnostic. Produis revue-implementation.md à la racine : une liste de
+constats, chacun avec le ou les emplacements exacts (fichier:ligne), ce qui est
+observé, la conséquence (coût mesuré ou mécanisme précis, pas une impression), la
+correction proposée, le risque de la faire, et un classement en trois paniers :
+  A. à corriger (gain net, risque faible) ;
+  B. à discuter (gain réel mais changement de comportement, d'API publique ou de
+     structure de fichiers) ;
+  C. constaté, à ne pas corriger (dit une fois, avec la raison).
+Classe à l'intérieur de chaque panier par gain décroissant. Un constat sans preuve ne
+vaut rien : pour tout ce qui touche la performance, MESURE sur un catalogue réel monté
+sous outputs/ (EXPLAIN ANALYZE, « Total Files Read », ducklake_table_info, time.perf_counter
+sur un jeu d'au moins quelques centaines de milliers de lignes) et donne le chiffre.
+
+Axes à couvrir, sans t'y limiter — pour chacun, va vérifier plutôt que supposer :
+
+1) Requêtes et allers-retours SQL. Requêtes répétées dont le résultat ne change pas
+   dans l'opération (metadata, cluster_by, clés primaires, existence de tables, alias de
+   catalogue) ; COUNT / COUNT(DISTINCT) sur toute la fact_table là où un contrôle
+   restreint aux lignes du lot suffirait ; comptages avant/après qui pourraient venir de
+   ducklake_table_changes déjà interrogé ; requêtes dans une boucle Python là où une
+   seule instruction ferait l'affaire.
+2) Écritures et copy-on-write. Opérations qui réécrivent plus de lignes que nécessaire
+   (add_columns, update_value_labels, recluster), ORDER BY inutiles quand le lot est
+   déjà trié, tris faits côté Python sur des données qui repartent en SQL, matérialisations
+   intermédiaires évitables, allers-retours narwhals ↔ pyarrow ↔ DuckDB superflus
+   (le passage par .to_arrow_table() est la convention : vérifie qu'il n'est pas fait
+   deux fois sur le même jeu).
+3) Efficacité de la base elle-même. Est-ce que les défauts livrés (cluster_by,
+   parquet_row_group_size, target_file_size, delete_threshold, seuils de
+   MaintenancePolicy) tiennent face à une mesure ? Est-ce que les colonnes écrites
+   permettent l'élagage attendu sur les filtres typiques d'un dashboard (une mesure de
+   « Total Files Read » vaut mieux qu'un raisonnement) ? Signale ce qui est réglé « au
+   jugé » et propose une valeur appuyée sur un chiffre.
+4) Redondances et code mort. Chemins dupliqués (_update_fact_table_direct vs
+   _update_fact_table_batch, les deux chemins d'insertion de _data.py, les
+   validate_operation présents dans quatre classes, les trois implémentations de
+   validation de colonnes), méthodes publiques sans usage ni test réel
+   (updater.optimize_database, updater.get_update_status et leurs équivalents ailleurs :
+   vérifie par grep dans le package, les tests, les notebooks et la doc avant de conclure),
+   restes des mécanismes supprimés aux prompts 2 et 7, et DataManager._ensure_columns_exist
+   qui ajoute encore des colonnes silencieusement alors que update_database a fermé cette
+   porte (prompt 6) : est-ce une porte dérobée à condamner ?
+5) Design et découpage. Modules devenus trop gros pour ce qu'ils font (auditor.py,
+   compaction.py, recovery.py : est-ce que tout ce qu'ils contiennent est encore utile,
+   et au bon endroit ?), responsabilités mélangées, duplication entre auditor et les
+   validations d'écriture, cohérence des signatures et des valeurs de retour entre
+   opérations publiques (plusieurs ont changé de type de retour au prompt 8), gestion
+   d'erreurs hétérogène (ValueError vs RuntimeError vs booléen de retour), logs INFO
+   trop bavards ou au contraire muets sur un zéro.
+6) Tests. Zones critiques sans test de cas limite, tests qui ne testent que le chemin
+   heureux, tests lents pour ce qu'ils vérifient, et l'échec connu et pré-existant de
+   tests/unit/test_maintenance/test_compaction.py::test_rewrite_data_files_zero_when_no_deletions
+   (message de log français/anglais) : diagnostique-le et propose la correction.
+   Mesure la couverture (uv run --no-sync pytest --cov=dt_ducklake_manager) et dis où
+   elle est réellement insuffisante, pas seulement où le pourcentage est bas.
+
+TEMPS 2 — application, après ma validation du document. Applique UNIQUEMENT le panier A
+et les éléments du panier B que j'aurai explicitement retenus, un sujet par commit
+logique, avec pour chacun : le comportement public inchangé (ou le changement assumé et
+noté), les tests qui le prouvent, et la mesure avant/après quand le constat était
+chiffré. Mets à jour la documentation et les docstrings touchées. Ne profite pas de ce
+prompt pour ajouter des fonctionnalités, renommer par goût ou réécrire un module
+entier : toute proposition de cette ampleur reste dans le panier B du document et attend
+une décision.
+
+Conventions habituelles (types, commentaires français nominaux, docstrings anglaises
+Google). Termine par uv run --no-sync pytest, puis ruff et mypy limités aux fichiers
+touchés, et par un résumé qui oppose ce qui a été appliqué à ce qui reste ouvert.
+```
+
+*Pourquoi Opus + plan mode : c'est le seul prompt de la série dont la sortie n'est pas
+spécifiée d'avance ; il faut juger l'existant, et le plan sert à cadrer le périmètre du
+diagnostic avant de le lancer.*
+
+---
+
 ## Ordre d'exécution et jalons
 
 | # | Prompt | Modèle | Plan mode | Après |
@@ -742,6 +1034,14 @@ serveur réel).
 | 9 | Réordonnancement et politique de maintenance | Opus | oui | 5, 8 |
 | 10 | Documentation, notebooks, draw.io, README, CLAUDE.md, skill | Sonnet | non | 2–9 |
 | 11 | Lecture multi-catalogues (optionnel) | Sonnet | non | 1, 10 |
+| 12 | Codes et colonnes de libellés (`label_for`) | Sonnet | oui | 1–10 |
+| 13 | Documentation et notebooks des colonnes de libellés | Sonnet | non | 12 |
+| 14 | Revue d'implémentation (performance, redondances, design) | Opus | oui | 13 |
+
+Les prompts 12 et 13 ont été ajoutés après l'exécution de la série (spécification §2.6).
+L'API les suit : prompt 6 de `../dashboard-template-api/prompts-migration-api-v2.md`,
+qui ne dépend que de la spécification (ses données de test sont écrites à la main) et
+peut donc être exécuté en parallèle du prompt 12.
 
 Différences avec la série précédente (`prompts-migration-schema-v2.md`) : plus de
 migration v1 → v2 (supprimée, projet non publié) ; hiérarchies réduites au cas des
