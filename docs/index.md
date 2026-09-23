@@ -16,7 +16,7 @@ The schema is structured around exactly three tables per result set, with **no
 dimension table anywhere**:
 
 - the `fact_table` holds the observations; categorical columns store their **original labels** directly (Parquet dictionary-encoding absorbs the storage cost), so there is no synthetic code ;
-- the `metadata` table describes each column of the fact table — one row per column — and is the contract between the database and the interface (label, SQL type, primary-key and categorical flags, column hierarchy via `parent_name`, and the UI fields `unit`, `display_format`, `family`, `description`, `default_aggregation`) ;
+- the `metadata` table describes each column of the fact table — one row per column — and is the contract between the database and the interface (label, SQL type, primary-key and categorical flags, column hierarchy via `parent_name`, the code → label link via `label_for`, and the UI fields `unit`, `display_format`, `family`, `description`, `default_aggregation`) ;
 - the `dataset_metadata` table describes the result set itself (title, description, source, last update, schema version, and `cluster_by`, the physical sort key).
 
 See [Schema and data model](schema.md) for the full description, and [Storage
@@ -111,6 +111,10 @@ print(report.recommendations)
 maintenance = DuckLakeMaintenance(connection)
 maintenance.maintain(MaintenancePolicy(retention_days=30))
 ```
+
+A code column can also carry its own label column(s) (e.g. a nomenclature code
+labelled in French and English) via the builder's `value_labels` argument —
+see [Codes and value labels](schema.md#codes-and-value-labels).
 
 More detailed examples and parametrization walkthroughs are available in the `notebooks/` folder.
 

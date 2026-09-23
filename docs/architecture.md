@@ -50,10 +50,12 @@ column *names*. Forcing them into one fact table would mean padding every
 prediction row with `NULL` Shapley columns (or the reverse), and would make
 the primary key of the combined table ambiguous.
 
-**Cross-result-set analysis joins on labels, not on ids.** A
+**Cross-result-set analysis joins on shared columns, not on ids.** A
 query correlating `predictions` and `shapley` joins directly on their shared
-label columns (`region`, `product`, …), which is exactly what a categorical
-column already stores. This is simpler than the dimension-table alternative
+columns (`region`, `product`, …) — on the **code** when the column has one
+(a code is more stable than a label, which a nomenclature revision can
+rename via [`update_value_labels`](schema.md#changing-a-label)), on the
+label otherwise. This is simpler than the dimension-table alternative
 that was considered and dropped (see [Schema and data
 model](schema.md#design-choices-not-retained)): there is no id↔label
 resolution step, and no risk of two databases assigning different ids to the

@@ -17,7 +17,8 @@ This package provides a complete lifecycle for a DuckLake database:
 The schema is built around exactly three tables per result set, with **no
 dimension table anywhere**: a **fact table** holding the observations, a **metadata table** describing every column — one row per column, the
 contract between the database and the interface (label, SQL type,
-primary-key and categorical flags, column hierarchy, UI fields), and a
+primary-key and categorical flags, column hierarchy, the code → label link
+via `label_for`, UI fields), and a
 **dataset metadata table** describing the result set itself (title,
 description, source, last update, schema version, physical sort key). See
 the [schema](https://qbolliet.github.io/dt-ducklake-manager/schema/) and
@@ -110,6 +111,10 @@ print(report.recommendations)
 maintenance = DuckLakeMaintenance(connection)
 maintenance.maintain(MaintenancePolicy(retention_days=30))
 ```
+
+A code column can also carry its own label column(s) (e.g. an NC8 tariff code
+labelled in French and English) via the builder's `value_labels` argument —
+see [Codes and value labels](https://qbolliet.github.io/dt-ducklake-manager/schema/#codes-and-value-labels).
 
 More detailed examples and parametrization walkthroughs are available in the `notebooks/` folder.
 
