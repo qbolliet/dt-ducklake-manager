@@ -10,6 +10,7 @@ import pytest
 # Utilisation de DataManager (sous-classe concrète) pour instancier
 # BaseSchemaManager
 from dt_ducklake_manager.operations._data import DataManager
+from dt_ducklake_manager.schema import DuckLakeTablesBuilder
 
 # ---------------------------------------------------------------------------
 # Fixture locale
@@ -746,6 +747,220 @@ def test_clear_child_parent_references_no_children(manager: DataManager) -> None
     """
     detached = manager._clear_child_parent_references("value")
     assert detached == []
+
+
+# ===========================================================================
+# Tests de update_column_metadata(label_for=...) et des colonnes de libellés (§2.6)
+# ===========================================================================
+
+# NOTE : sur le schéma construit (sample_df), 'status' -> 'category' respecte la
+# dépendance fonctionnelle (chaque catégorie a un statut unique), alors que
+# 'category' -> 'status' la viole ('active' correspond aux catégories 'A' et 'C').
+
+
+# Test qu'une cible inexistante lève une ValueError
+def test_update_column_metadata_label_for_missing_target_raises(
+    manager: DataManager,
+) -> None:
+    """Test that a label_for referencing an unknown column raises ValueError.
+
+    Args:
+        manager: DataManager fixture with a built schema.
+    """
+    with pytest.raises(ValueError, match="does not exist"):
+        manager.update_column_metadata("category", label_for="not_a_column")
+
+
+# Test qu'une colonne pointant vers elle-même lève une ValueError
+def test_update_column_metadata_label_for_self_reference_raises(
+    manager: DataManager,
+) -> None:
+    """Test that setting a column as its own label_for target raises ValueError.
+
+    Args:
+        manager: DataManager fixture with a built schema.
+    """
+    with pytest.raises(ValueError, match="own label_for target"):
+        manager.update_column_metadata("category", label_for="category")
+
+
+# Test qu'une chaîne de libellés (cible elle-même colonne de libellés) lève une erreur
+def test_update_column_metadata_label_for_chain_raises(manager: DataManager) -> None:
+    """Test that targeting an existing label column raises a chaining ValueError.
+
+    Args:
+        manager: DataManager fixture with a built schema.
+    """
+    manager.update_column_metadata("status", label_for="category")
+    with pytest.raises(ValueError, match="chaining"):
+        manager.update_column_metadata("high_cardinality", label_for="status")
+
+
+# Test qu'une colonne de libellés clé primaire lève une ValueError
+def test_update_column_metadata_label_for_primary_key_raises() -> None:
+    """Test that a VARCHAR label column that is a primary key raises ValueError."""
+    df = pl.DataFrame({"code": ["01", "02"], "value_col": [1, 2]})
+    conn = duckdb.connect(":memory:")
+    DuckLakeTablesBuilder(
+        df, categorical_threshold=10, primary_keys=["code"], connection=conn
+    ).build_schema()
+    manager = DataManager(connection=conn, categorical_threshold=10)
+
+    with pytest.raises(ValueError, match="primary key"):
+        manager.update_column_metadata("code", label_for="value_col")
+
+
+# Test qu'une colonne de libellés non VARCHAR lève une ValueError
+def test_update_column_metadata_label_for_non_varchar_raises(
+    manager: DataManager,
+) -> None:
+    """Test that a non-VARCHAR label column raises ValueError.
+
+    Args:
+        manager: DataManager fixture with a built schema.
+    """
+    with pytest.raises(ValueError, match="VARCHAR"):
+        manager.update_column_metadata("value", label_for="category")
+
+
+# Test que label_for est refusé sur une colonne ayant déjà une parente
+def test_update_column_metadata_label_for_refuses_hierarchy_child(
+    manager: DataManager,
+) -> None:
+    """Test that label_for is refused on a column that already has a parent_name.
+
+    Args:
+        manager: DataManager fixture with a built schema.
+    """
+    with pytest.warns(UserWarning, match="hierarchy"):
+        manager.update_column_metadata("high_cardinality", parent_name="date")
+    with pytest.raises(ValueError, match="hierarchy"):
+        manager.update_column_metadata("high_cardinality", label_for="category")
+
+
+# Test que label_for est refusé sur une colonne parente d'une hiérarchie
+def test_update_column_metadata_label_for_refuses_hierarchy_parent(
+    manager: DataManager,
+) -> None:
+    """Test that label_for is refused on a column that is a hierarchy parent.
+
+    Args:
+        manager: DataManager fixture with a built schema.
+    """
+    with pytest.warns(UserWarning, match="hierarchy"):
+        manager.update_column_metadata("high_cardinality", parent_name="date")
+    with pytest.raises(ValueError, match="hierarchy"):
+        manager.update_column_metadata("date", label_for="value")
+
+
+# Test que parent_name est refusé sur une colonne de libellés
+def test_update_column_metadata_refuses_parent_name_on_label_column(
+    manager: DataManager,
+) -> None:
+    """Test that parent_name is refused on a column that already has label_for.
+
+    Args:
+        manager: DataManager fixture with a built schema.
+    """
+    manager.update_column_metadata("status", label_for="category")
+    with pytest.raises(ValueError, match="label column"):
+        manager.update_column_metadata("status", parent_name="date")
+
+
+# Test qu'une violation de la dépendance fonctionnelle sur toute la table lève une
+# ValueError
+def test_update_column_metadata_label_for_functional_violation_raises(
+    manager: DataManager,
+) -> None:
+    """Test that declaring a label_for violating the functional dependency raises.
+
+    'category' -> 'status' violates the dependency: 'status'='active' maps to both
+    'category'='A' and 'category'='C'.
+
+    Args:
+        manager: DataManager fixture with a built schema.
+    """
+    with pytest.raises(ValueError, match="Functional dependency"):
+        manager.update_column_metadata("category", label_for="status")
+
+
+# Test qu'une déclaration valide de label_for est acceptée
+def test_update_column_metadata_label_for_accepted(manager: DataManager) -> None:
+    """Test that a label_for respecting the functional dependency is accepted.
+
+    label_for has no effect on is_categorical, unlike parent_name.
+
+    Args:
+        manager: DataManager fixture with a built schema.
+    """
+    was_categorical = manager.conn.execute(
+        "SELECT is_categorical FROM metadata WHERE name = 'status'"
+    ).fetchone()[0]
+
+    manager.update_column_metadata("status", label_for="category")
+
+    row = manager.conn.execute(
+        "SELECT label_for, is_categorical FROM metadata WHERE name = 'status'"
+    ).fetchone()
+    assert row == ("category", was_categorical)
+
+
+# Test que label_for=None efface le lien sans validation
+def test_update_column_metadata_label_for_clear(manager: DataManager) -> None:
+    """Test that clearing label_for (None) works without any validation.
+
+    Args:
+        manager: DataManager fixture with a built schema.
+    """
+    manager.update_column_metadata("status", label_for="category")
+    manager.update_column_metadata("status", label_for=None)
+
+    row = manager.conn.execute(
+        "SELECT label_for FROM metadata WHERE name = 'status'"
+    ).fetchone()
+    assert row[0] is None
+
+
+# Test que _clear_label_for_references détache les colonnes de libellés
+def test_clear_label_for_references_detaches_label_columns(
+    manager: DataManager,
+) -> None:
+    """Test that _clear_label_for_references NULLs out label columns' label_for.
+
+    Args:
+        manager: DataManager fixture with a built schema.
+    """
+    manager.update_column_metadata("status", label_for="category")
+    detached = manager._clear_label_for_references("category")
+    assert detached == ["status"]
+
+    row = manager.conn.execute(
+        "SELECT label_for FROM metadata WHERE name = 'status'"
+    ).fetchone()
+    assert row[0] is None
+
+
+# Test que _clear_label_for_references ne fait rien pour un code sans libellé
+def test_clear_label_for_references_no_label_columns(manager: DataManager) -> None:
+    """Test that _clear_label_for_references is a no-op absent any label column.
+
+    Args:
+        manager: DataManager fixture with a built schema.
+    """
+    detached = manager._clear_label_for_references("value")
+    assert detached == []
+
+
+# Test que _get_label_columns_for_code lit les colonnes de libellés d'un code
+def test_get_label_columns_for_code(manager: DataManager) -> None:
+    """Test that _get_label_columns_for_code returns the declared label columns.
+
+    Args:
+        manager: DataManager fixture with a built schema.
+    """
+    manager.update_column_metadata("status", label_for="category")
+    assert manager._get_label_columns_for_code("category") == ["status"]
+    assert manager._get_label_columns_for_code("value") == []
 
 
 # ===========================================================================

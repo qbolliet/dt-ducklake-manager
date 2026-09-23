@@ -586,3 +586,101 @@ def test_validate_metadata_fact_consistency_clean_schema(
     auditor._validate_metadata_fact_consistency(report)
 
     assert len(report.issues) == 0
+
+
+# Test que _validate_value_labels_consistency ne signale rien en l'absence de
+# colonne de libellés déclarée
+def test_validate_value_labels_consistency_clean_schema(
+    built_ducklake_schema: Any,
+) -> None:
+    """Test that a schema declaring no label_for raises no issue.
+
+    Args:
+        built_ducklake_schema: Fixture providing a DuckDB connection with a built
+        schema.
+    """
+    auditor = DatabaseAuditor(connection=built_ducklake_schema)
+    report = ValidationReport(validation_level=ValidationLevel.STANDARD)
+
+    auditor._validate_value_labels_consistency(report)
+
+    assert len(report.issues) == 0
+
+
+# Test que _validate_value_labels_consistency détecte une violation structurelle
+# (forme de la colonne de libellés) sur une base corrompue à la main
+def test_validate_value_labels_consistency_detects_invariant_violation(
+    built_ducklake_schema: Any,
+) -> None:
+    """Test that a hand-set label_for on a non-VARCHAR column is reported.
+
+    'value' (DOUBLE) is given a label_for pointing at 'category' directly via SQL,
+    bypassing update_column_metadata's own validation.
+
+    Args:
+        built_ducklake_schema: Fixture providing a DuckDB connection with a built
+        schema.
+    """
+    built_ducklake_schema.execute(
+        "UPDATE metadata SET label_for = 'category' WHERE name = 'value'"
+    )
+
+    auditor = DatabaseAuditor(connection=built_ducklake_schema)
+    report = ValidationReport(validation_level=ValidationLevel.STANDARD)
+
+    auditor._validate_value_labels_consistency(report)
+
+    issues = report.get_issues_by_type(IssueType.SCHEMA_INCONSISTENCY)
+    assert len(issues) == 1
+    assert "VARCHAR" in issues[0].description
+
+
+# Test que _validate_value_labels_consistency détecte une violation de la
+# dépendance fonctionnelle sur une base corrompue à la main
+def test_validate_value_labels_consistency_detects_dependency_violation(
+    built_ducklake_schema: Any,
+) -> None:
+    """Test that a hand-set label_for violating the functional dependency is
+    reported as a critical constraint violation, with the faulty codes named.
+
+    'category' is given a label_for pointing at 'status' directly via SQL:
+    'status'='active' maps to both 'category'='A' and 'category'='C' in the
+    built schema fixture, violating the dependency.
+
+    Args:
+        built_ducklake_schema: Fixture providing a DuckDB connection with a built
+        schema.
+    """
+    built_ducklake_schema.execute(
+        "UPDATE metadata SET label_for = 'status' WHERE name = 'category'"
+    )
+
+    auditor = DatabaseAuditor(connection=built_ducklake_schema)
+    report = ValidationReport(validation_level=ValidationLevel.STANDARD)
+
+    auditor._validate_value_labels_consistency(report)
+
+    issues = report.get_issues_by_type(IssueType.CONSTRAINT_VIOLATION)
+    assert len(issues) == 1
+    assert issues[0].severity == IssueSeverity.CRITICAL
+    assert "active" in issues[0].description
+
+
+# Test que le niveau STANDARD de validate_database inclut le contrôle des libellés
+def test_validate_database_standard_includes_value_labels(
+    built_ducklake_schema: Any,
+) -> None:
+    """Test that validate_database(STANDARD) surfaces a value-label violation.
+
+    Args:
+        built_ducklake_schema: Fixture providing a DuckDB connection with a built
+        schema.
+    """
+    built_ducklake_schema.execute(
+        "UPDATE metadata SET label_for = 'status' WHERE name = 'category'"
+    )
+
+    auditor = DatabaseAuditor(connection=built_ducklake_schema)
+    report = auditor.validate_database(ValidationLevel.STANDARD)
+
+    assert report.get_critical_issues_count() > 0

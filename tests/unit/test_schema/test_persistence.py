@@ -793,6 +793,71 @@ def test_build_schema_hierarchy_cycle_raises(sample_df: pl.DataFrame) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Tests des colonnes de libellés (value_labels / label_for, §2.6)
+# ---------------------------------------------------------------------------
+
+
+# Test que build_schema écrit la paire code/libellé déclarée via value_labels
+def test_build_schema_writes_value_labels(sample_df: pl.DataFrame) -> None:
+    """Test that value_labels passed to the constructor reach the metadata table.
+
+    ``status`` (label) -> ``category`` (code) respects the functional dependency
+    on ``sample_df`` (each category maps to a single status).
+
+    Args:
+        sample_df: Sample polars DataFrame.
+    """
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        builder = DuckLakeTablesBuilder(
+            sample_df,
+            categorical_threshold=4,
+            primary_keys=["id"],
+            value_labels={"status": "category"},
+        )
+
+    builder.build_schema()
+
+    row = builder.conn.execute(
+        "SELECT label_for FROM metadata WHERE name = 'status'"
+    ).fetchone()
+    assert row[0] == "category"
+
+
+# Test que build_schema propage une violation de la dépendance fonctionnelle
+def test_build_schema_value_label_dependency_violation_raises(
+    sample_df: pl.DataFrame,
+) -> None:
+    """Test that a functional dependency violation aborts build_schema, writing
+    nothing.
+
+    ``category`` (label) -> ``status`` (code) violates the dependency on
+    ``sample_df``: ``status='active'`` maps to both ``category='A'`` and
+    ``category='C'``.
+
+    Args:
+        sample_df: Sample polars DataFrame.
+    """
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        builder = DuckLakeTablesBuilder(
+            sample_df,
+            categorical_threshold=4,
+            primary_keys=["id"],
+            value_labels={"category": "status"},
+        )
+
+    with pytest.raises(ValueError, match="Functional dependency"):
+        builder.build_schema()
+
+    # Rien n'a été écrit, y compris la table metadata (déjà créée avant le contrôle)
+    tables = builder.conn.execute(
+        "SELECT table_name FROM information_schema.tables WHERE table_schema = 'main'"
+    ).fetchall()
+    assert tables == []
+
+
+# ---------------------------------------------------------------------------
 # Tests de cluster_by (§5.3)
 # ---------------------------------------------------------------------------
 

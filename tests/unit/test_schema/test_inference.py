@@ -825,3 +825,256 @@ def test_hierarchies_two_independent_trees() -> None:
     assert dep_row["parent_name"][0] == "region"
     subcat_row = metadata.filter(nw.col("name") == "subcategory")
     assert subcat_row["parent_name"][0] == "category"
+
+
+# ---------------------------------------------------------------------------
+# Tests des colonnes de libellés (label_for, §2.6)
+# ---------------------------------------------------------------------------
+
+
+# Test que le paramètre value_labels renseigne label_for
+def test_value_labels_param_sets_label_for(sample_df: Any) -> None:
+    """Test that the ``value_labels`` constructor parameter writes ``label_for``.
+
+    Args:
+        sample_df: Sample polars DataFrame.
+    """
+    builder = SchemaBuilder(
+        sample_df,
+        categorical_threshold=4,
+        primary_keys=["id"],
+        value_labels={"status": "category"},
+    )
+    metadata = builder.create_metadata_table()
+
+    row = metadata.filter(nw.col("name") == "status")
+    assert row["label_for"][0] == "category"
+    assert builder.value_labels_resolved == {"status": "category"}
+
+
+# Test que label_for peut être renseigné via column_metadata uniquement
+def test_label_for_via_column_metadata_only(schema_builder: Any) -> None:
+    """Test that ``column_metadata``'s ``label_for`` key alone declares the pair.
+
+    Args:
+        schema_builder: SchemaBuilder fixture (categorical_threshold=4).
+    """
+    metadata = schema_builder.create_metadata_table(
+        column_metadata={"status": {"label_for": "category"}}
+    )
+    row = metadata.filter(nw.col("name") == "status")
+    assert row["label_for"][0] == "category"
+
+
+# Test qu'une cible inconnue dans value_labels lève une ValueError à l'initialisation
+def test_value_labels_unknown_target_raises(sample_df: Any) -> None:
+    """Test that an unknown target column in ``value_labels`` raises ValueError.
+
+    Args:
+        sample_df: polars DataFrame fixture from conftest.
+    """
+    with pytest.raises(ValueError, match="do not exist in the DataFrame"):
+        SchemaBuilder(
+            sample_df,
+            categorical_threshold=4,
+            primary_keys=["id"],
+            value_labels={"status": "not_a_column"},
+        )
+
+
+# Test qu'une colonne de libellés inconnue dans value_labels lève une ValueError
+def test_value_labels_unknown_label_column_raises(sample_df: Any) -> None:
+    """Test that an unknown label column in ``value_labels`` raises ValueError.
+
+    Args:
+        sample_df: polars DataFrame fixture from conftest.
+    """
+    with pytest.raises(ValueError, match="do not exist in the DataFrame"):
+        SchemaBuilder(
+            sample_df,
+            categorical_threshold=4,
+            primary_keys=["id"],
+            value_labels={"not_a_column": "category"},
+        )
+
+
+# Test qu'une colonne pointant vers elle-même lève une ValueError
+def test_label_for_self_reference_raises(sample_df: Any) -> None:
+    """Test that a label column targeting itself raises ValueError.
+
+    Args:
+        sample_df: Sample polars DataFrame.
+    """
+    builder = SchemaBuilder(
+        sample_df,
+        categorical_threshold=4,
+        primary_keys=["id"],
+        value_labels={"category": "category"},
+    )
+    with pytest.raises(ValueError, match="own label_for target"):
+        builder.create_metadata_table()
+
+
+# Test qu'une chaîne de libellés (cible elle-même colonne de libellés) lève une erreur
+def test_label_for_chain_raises(sample_df: Any) -> None:
+    """Test that a target which is itself a label column raises ValueError.
+
+    Args:
+        sample_df: Sample polars DataFrame.
+    """
+    builder = SchemaBuilder(
+        sample_df,
+        categorical_threshold=4,
+        primary_keys=["id"],
+        value_labels={"status": "category", "high_cardinality": "status"},
+    )
+    with pytest.raises(ValueError, match="chaining"):
+        builder.create_metadata_table()
+
+
+# Test qu'une colonne de libellés clé primaire lève une ValueError
+def test_label_for_primary_key_column_raises() -> None:
+    """Test that a VARCHAR label column that is a primary key raises ValueError."""
+    df = pl.DataFrame({"code": ["01", "02"], "value": [1, 2]})
+    builder = SchemaBuilder(
+        df,
+        categorical_threshold=10,
+        primary_keys=["code"],
+        value_labels={"code": "value"},
+    )
+    with pytest.raises(ValueError, match="primary key"):
+        builder.create_metadata_table()
+
+
+# Test qu'une colonne de libellés non VARCHAR lève une ValueError
+def test_label_for_non_varchar_column_raises(sample_df: Any) -> None:
+    """Test that a non-VARCHAR label column raises ValueError.
+
+    Args:
+        sample_df: Sample polars DataFrame.
+    """
+    builder = SchemaBuilder(
+        sample_df,
+        categorical_threshold=4,
+        primary_keys=["id"],
+        value_labels={"value": "category"},
+    )
+    with pytest.raises(ValueError, match="VARCHAR"):
+        builder.create_metadata_table()
+
+
+# Test qu'une colonne de libellés membre d'une hiérarchie lève une ValueError
+def test_label_for_hierarchy_member_raises(sample_df: Any) -> None:
+    """Test that a label column participating in a column hierarchy raises
+    ValueError.
+
+    'category' is declared as a hierarchy child of 'status' and, at the same time,
+    as a label column targeting 'high_cardinality': the label column shape check
+    (§2.6) forbids a label column from being part of any hierarchy.
+
+    Args:
+        sample_df: Sample polars DataFrame.
+    """
+    builder = SchemaBuilder(
+        sample_df,
+        categorical_threshold=4,
+        primary_keys=["id"],
+        hierarchies={"category": "status"},
+        value_labels={"category": "high_cardinality"},
+    )
+    with pytest.raises(ValueError, match="hierarchy"):
+        builder.create_metadata_table()
+
+
+# Test que value_labels et column_metadata contradictoires lèvent une ValueError
+def test_value_labels_and_column_metadata_conflict_raises(sample_df: Any) -> None:
+    """Test that conflicting ``value_labels`` and ``column_metadata`` raise
+    ValueError.
+
+    Args:
+        sample_df: Sample polars DataFrame.
+    """
+    builder = SchemaBuilder(
+        sample_df,
+        categorical_threshold=4,
+        primary_keys=["id"],
+        value_labels={"status": "category"},
+    )
+    with pytest.raises(ValueError, match="Conflicting label_for"):
+        builder.create_metadata_table(
+            column_metadata={"status": {"label_for": "high_cardinality"}}
+        )
+
+
+# Test que value_labels et column_metadata cohérents ne lèvent aucune erreur
+def test_value_labels_and_column_metadata_agree_ok(sample_df: Any) -> None:
+    """Test that ``value_labels`` and ``column_metadata`` agreeing on the same
+    target does not raise.
+
+    Args:
+        sample_df: Sample polars DataFrame.
+    """
+    builder = SchemaBuilder(
+        sample_df,
+        categorical_threshold=4,
+        primary_keys=["id"],
+        value_labels={"status": "category"},
+    )
+    metadata = builder.create_metadata_table(
+        column_metadata={"status": {"label_for": "category"}}
+    )
+    row = metadata.filter(nw.col("name") == "status")
+    assert row["label_for"][0] == "category"
+
+
+# Test d'une hiérarchie de codes (nc6 -> nc8) avec un libellé par niveau
+def test_value_labels_with_code_hierarchy() -> None:
+    """Test a column hierarchy of codes, each level carrying its own label column.
+
+    Each level of the nc6 -> nc8 hierarchy carries its own label column; the
+    hierarchy links the codes, not the labels.
+    """
+    df = pl.DataFrame(
+        {
+            "id": [1, 2],
+            "nc6": ["010121", "010129"],
+            "nc6_libelle": ["Chevaux", "Autres equides"],
+            "nc8": ["01012100", "01012900"],
+            "nc8_libelle": ["Chevaux reproducteurs", "Autres chevaux"],
+        }
+    )
+    builder = SchemaBuilder(
+        df,
+        categorical_threshold=10,
+        primary_keys=["id"],
+        hierarchies={"nc8": "nc6"},
+        value_labels={"nc6_libelle": "nc6", "nc8_libelle": "nc8"},
+    )
+    metadata = builder.create_metadata_table()
+
+    assert metadata.filter(nw.col("name") == "nc8")["parent_name"][0] == "nc6"
+    assert metadata.filter(nw.col("name") == "nc6_libelle")["label_for"][0] == "nc6"
+    assert metadata.filter(nw.col("name") == "nc8_libelle")["label_for"][0] == "nc8"
+
+
+# Test de deux colonnes de libellés (fr, en) déclarées pour un même code
+def test_value_labels_two_label_columns_for_one_code() -> None:
+    """Test that two label columns (fr, en) can target the same code column."""
+    df = pl.DataFrame(
+        {
+            "id": [1, 2],
+            "nc8": ["01012100", "01012900"],
+            "nc8_libelle_fr": ["Chevaux reproducteurs", "Autres chevaux"],
+            "nc8_libelle_en": ["Breeding horses", "Other horses"],
+        }
+    )
+    builder = SchemaBuilder(
+        df,
+        categorical_threshold=10,
+        primary_keys=["id"],
+        value_labels={"nc8_libelle_fr": "nc8", "nc8_libelle_en": "nc8"},
+    )
+    metadata = builder.create_metadata_table()
+
+    assert metadata.filter(nw.col("name") == "nc8_libelle_fr")["label_for"][0] == "nc8"
+    assert metadata.filter(nw.col("name") == "nc8_libelle_en")["label_for"][0] == "nc8"

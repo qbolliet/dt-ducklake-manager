@@ -7,8 +7,12 @@ import narwhals as nw
 # Tous VARCHAR nullable (NULL par défaut) ; un update de données ne les écrase jamais.
 # parent_name porte la hiérarchie de colonnes : la colonne
 # parente dans un menu à group-options / arbre de sélection.
+# label_for, porté par une colonne de libellés, pointe vers la colonne de code métier
+# dont elle restitue le libellé ; plusieurs colonnes de libellés (langues,
+# libellé court/long) peuvent pointer vers le même code.
 UI_METADATA_FIELDS: tuple[str, ...] = (
     "parent_name",
+    "label_for",
     "unit",
     "display_format",
     "family",
@@ -199,7 +203,7 @@ def map_python_to_sql_type(dtype: nw.dtypes.DType) -> str:
     """
     # Types textuels
     # String, Categorical et Enum sont tous stockés sous forme VARCHAR en SQL
-    if isinstance(dtype, (nw.String, nw.Categorical, nw.Enum)):
+    if isinstance(dtype, nw.String | nw.Categorical | nw.Enum):
         return "VARCHAR"
 
     # Entiers signés
@@ -265,7 +269,7 @@ def map_python_to_sql_type(dtype: nw.dtypes.DType) -> str:
     # DuckDB supporte nativement ces types, mais leur définition SQL complète
     # nécessiterait la connaissance des types imbriqués. On replie vers VARCHAR
     # pour garantir la compatibilité dans tous les contextes d'usage.
-    elif isinstance(dtype, (nw.Array, nw.List, nw.Struct)):
+    elif isinstance(dtype, nw.Array | nw.List | nw.Struct):
         return "VARCHAR"
 
     # Cas de repli : Object, Unknown, et tout type non reconnu
@@ -288,10 +292,10 @@ def validate_column_metadata(
 
     Args:
         column_metadata: Mapping of column name to a sub-dictionary of UI fields
-            (``label``, ``parent_name``, ``unit``, ``display_format``, ``family``,
-            ``description``, ``default_aggregation``), all keys optional. ``None``
-            yields an empty mapping. Note that ``parent_name`` existence and
-            forest validation happen later, in the caller.
+            (``label``, ``parent_name``, ``label_for``, ``unit``, ``display_format``,
+            ``family``, ``description``, ``default_aggregation``), all keys optional.
+            ``None`` yields an empty mapping. Note that ``parent_name``/``label_for``
+            existence and consistency validation happen later, in the caller.
         columns: Column names the mapping may reference (e.g. the columns of the
             source DataFrame, or the columns actually being added).
 

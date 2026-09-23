@@ -333,6 +333,87 @@ def test_delete_columns_parent_with_cascade_detaches_children(
     assert parent_of_category is None
 
 
+# Test qu'une colonne de code visée par des colonnes de libellés est refusée sans
+# cascade
+def test_delete_columns_code_refused_without_cascade(
+    deleter: DatabaseDeleter, built_ducklake_schema: Any
+) -> None:
+    """Test that deleting a code column targeted by a label column is refused.
+
+    'status' is declared as the label column of 'category' (§2.6); deleting
+    'category' without cascade=True must be refused for the whole batch and leave
+    both columns intact.
+
+    Args:
+        deleter: DatabaseDeleter fixture.
+        built_ducklake_schema: DuckDB connection.
+    """
+    deleter.update_column_metadata("status", label_for="category")
+
+    result = deleter.delete_columns(["category"], use_transaction=False)
+
+    assert result.columns_dropped == []
+    assert any("category" in w for w in result.warnings)
+    columns_after = [
+        row[0]
+        for row in built_ducklake_schema.execute("DESCRIBE fact_table").fetchall()
+    ]
+    assert "category" in columns_after
+
+
+# Test que cascade=True autorise la suppression et détache les colonnes de libellés
+def test_delete_columns_code_with_cascade_detaches_label_columns(
+    deleter: DatabaseDeleter, built_ducklake_schema: Any
+) -> None:
+    """Test that cascade=True allows deleting a code column and clears the label
+    columns' label_for.
+
+    Args:
+        deleter: DatabaseDeleter fixture.
+        built_ducklake_schema: DuckDB connection.
+    """
+    deleter.update_column_metadata("status", label_for="category")
+
+    result = deleter.delete_columns(["category"], use_transaction=False, cascade=True)
+
+    assert result.columns_dropped == ["category"]
+    columns_after = [
+        row[0]
+        for row in built_ducklake_schema.execute("DESCRIBE fact_table").fetchall()
+    ]
+    assert "category" not in columns_after
+
+    # La colonne de libellés est toujours là, mais détachée du code supprimé
+    label_for_status = built_ducklake_schema.execute(
+        "SELECT label_for FROM metadata WHERE name = 'status'"
+    ).fetchone()[0]
+    assert label_for_status is None
+
+
+# Test que supprimer une colonne de libellés elle-même ne demande rien de particulier
+def test_delete_columns_label_column_itself(
+    deleter: DatabaseDeleter, built_ducklake_schema: Any
+) -> None:
+    """Test that deleting a label column itself needs no special handling.
+
+    Args:
+        deleter: DatabaseDeleter fixture.
+        built_ducklake_schema: DuckDB connection.
+    """
+    deleter.update_column_metadata("status", label_for="category")
+
+    result = deleter.delete_columns(["status"], use_transaction=False)
+
+    assert result.columns_dropped == ["status"]
+    columns_after = [
+        row[0]
+        for row in built_ducklake_schema.execute("DESCRIBE fact_table").fetchall()
+    ]
+    assert "status" not in columns_after
+    # 'category', la colonne de code, est intacte
+    assert "category" in columns_after
+
+
 # ---------------------------------------------------------------------------
 # Tests de delete_columns() et cluster_by (§4.3, §5.3)
 # ---------------------------------------------------------------------------

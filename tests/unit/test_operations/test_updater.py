@@ -1189,3 +1189,231 @@ def test_add_columns_rolls_back_column_and_metadata(updater: DatabaseUpdater) ->
     # Ni la colonne, ni sa ligne de métadonnées, ni les valeurs ne subsistent
     assert "score" not in updater._get_fact_table_columns()
     assert _snapshot_state(updater.conn) == before
+
+
+# ===========================================================================
+# Tests des colonnes de libellés (§2.6) : update_database, update_value_labels,
+# add_columns
+# ===========================================================================
+
+# Jeu de données : deux lignes de code '01' (label 'Chevaux'), une de code '02'
+# (label 'Bovins') — la dépendance nc8 -> nc8_libelle est respectée à la construction.
+
+
+# Fixture d'une connexion DuckLake avec une paire code/libellé déjà déclarée
+@pytest.fixture
+def value_label_conn() -> Any:
+    """Provide a built schema with a declared code/label pair (nc8 -> nc8_libelle)."""
+    df = pl.DataFrame(
+        {
+            "id": [1, 2, 3],
+            "nc8": ["01", "01", "02"],
+            "nc8_libelle": ["Chevaux", "Chevaux", "Bovins"],
+            "value": [1.0, 2.0, 3.0],
+        }
+    )
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        builder = DuckLakeTablesBuilder(
+            df,
+            categorical_threshold=10,
+            primary_keys=["id"],
+            value_labels={"nc8_libelle": "nc8"},
+        )
+    builder.build_schema()
+    return builder.conn
+
+
+# Fixture d'un DatabaseUpdater construit sur ce schéma
+@pytest.fixture
+def value_label_updater(value_label_conn: Any) -> DatabaseUpdater:
+    """Create a DatabaseUpdater over the code/label schema fixture."""
+    return DatabaseUpdater(
+        connection=value_label_conn, categorical_threshold=10, enable_validation=True
+    )
+
+
+# Test qu'update_database refuse un nouveau libellé partiel pour un code existant
+def test_update_database_refuses_partial_new_label(
+    value_label_updater: DatabaseUpdater,
+) -> None:
+    """Test that relabeling only some rows of an existing code is refused.
+
+    Only id=1 (code '01') gets a new label; id=2 (also code '01') keeps the old
+    one: the batch is rejected and rolled back, pointing to update_value_labels.
+
+    Args:
+        value_label_updater: DatabaseUpdater over the code/label schema fixture.
+    """
+    before = _snapshot_state(value_label_updater.conn)
+
+    df = pl.DataFrame({"id": [1], "nc8_libelle": ["NewLabel"]})
+    assert value_label_updater.update_database(df) is False
+
+    after = _snapshot_state(value_label_updater.conn)
+    assert after["facts"] == before["facts"]
+
+
+# Test qu'update_database refuse un lot sans libellé insérant un code déjà libellé
+def test_update_database_refuses_new_row_without_label_for_existing_code(
+    value_label_updater: DatabaseUpdater,
+) -> None:
+    """Test that inserting a code without its label is refused when the code
+    already carries a label elsewhere.
+
+    Args:
+        value_label_updater: DatabaseUpdater over the code/label schema fixture.
+    """
+    before = _snapshot_state(value_label_updater.conn)
+
+    df = pl.DataFrame({"id": [4], "nc8": ["01"], "value": [4.0]})
+    assert value_label_updater.update_database(df, allow_new_columns=False) is False
+
+    after = _snapshot_state(value_label_updater.conn)
+    assert after["facts"] == before["facts"]
+
+
+# Test qu'update_database refuse un changement de code non clé primaire sans son
+# libellé
+def test_update_database_refuses_code_change_without_label(
+    value_label_updater: DatabaseUpdater,
+) -> None:
+    """Test that changing a non-primary-key code without its label is refused.
+
+    Moving id=1 into code '02' keeps its stale label 'Chevaux', conflicting with
+    the label already carried by '02' ('Bovins').
+
+    Args:
+        value_label_updater: DatabaseUpdater over the code/label schema fixture.
+    """
+    before = _snapshot_state(value_label_updater.conn)
+
+    df = pl.DataFrame({"id": [1], "nc8": ["02"]})
+    assert value_label_updater.update_database(df) is False
+
+    after = _snapshot_state(value_label_updater.conn)
+    assert after["facts"] == before["facts"]
+
+
+# Test qu'update_database accepte une mise à jour respectant la dépendance
+def test_update_database_accepts_consistent_relabel(
+    value_label_updater: DatabaseUpdater,
+) -> None:
+    """Test that relabeling every row of a code together is accepted.
+
+    Args:
+        value_label_updater: DatabaseUpdater over the code/label schema fixture.
+    """
+    df = pl.DataFrame({"id": [1, 2], "nc8_libelle": ["NewChevaux", "NewChevaux"]})
+    assert value_label_updater.update_database(df) is True
+
+    rows = value_label_updater.conn.execute(
+        "SELECT nc8_libelle FROM fact_table WHERE nc8 = '01' ORDER BY id"
+    ).fetchall()
+    assert rows == [("NewChevaux",), ("NewChevaux",)]
+
+
+# Test qu'update_value_labels réécrit les libellés d'un code
+def test_update_value_labels_rewrites_rows(
+    value_label_updater: DatabaseUpdater,
+) -> None:
+    """Test that update_value_labels rewrites every row of the given code(s).
+
+    Args:
+        value_label_updater: DatabaseUpdater over the code/label schema fixture.
+    """
+    new_labels = pl.DataFrame({"nc8": ["01"], "nc8_libelle": ["Chevaux reproducteurs"]})
+    report = value_label_updater.update_value_labels("nc8_libelle", new_labels)
+
+    assert isinstance(report, OperationReport)
+    assert report.operation == "update_value_labels"
+    assert report.rows_updated == 2
+
+    rows = value_label_updater.conn.execute(
+        "SELECT nc8_libelle FROM fact_table WHERE nc8 = '01' ORDER BY id"
+    ).fetchall()
+    assert rows == [("Chevaux reproducteurs",), ("Chevaux reproducteurs",)]
+    # Le code '02', non concerné, garde son libellé d'origine
+    other = value_label_updater.conn.execute(
+        "SELECT nc8_libelle FROM fact_table WHERE nc8 = '02'"
+    ).fetchone()
+    assert other[0] == "Bovins"
+
+
+# Test qu'update_value_labels signale, sans les insérer, les codes absents
+def test_update_value_labels_warns_on_absent_codes(
+    value_label_updater: DatabaseUpdater,
+) -> None:
+    """Test that a code absent from the fact table is warned about, never inserted.
+
+    Args:
+        value_label_updater: DatabaseUpdater over the code/label schema fixture.
+    """
+    new_labels = pl.DataFrame(
+        {"nc8": ["01", "99"], "nc8_libelle": ["Chevaux", "Inconnu"]}
+    )
+    report = value_label_updater.update_value_labels("nc8_libelle", new_labels)
+
+    assert any("99" in w for w in report.warnings)
+    count = value_label_updater.conn.execute(
+        "SELECT COUNT(*) FROM fact_table WHERE nc8 = '99'"
+    ).fetchone()[0]
+    assert count == 0
+
+
+# Test qu'update_value_labels refuse un label_column sans label_for déclaré
+def test_update_value_labels_requires_label_for(
+    value_label_updater: DatabaseUpdater,
+) -> None:
+    """Test that update_value_labels refuses a column with no declared label_for.
+
+    Args:
+        value_label_updater: DatabaseUpdater over the code/label schema fixture.
+    """
+    labels = pl.DataFrame({"nc8": ["01"], "value": [99.0]})
+    with pytest.raises(ValueError, match="label_for"):
+        value_label_updater.update_value_labels("value", labels)
+
+
+# Test qu'update_value_labels refuse un DataFrame de libellés non unique sur le code
+def test_update_value_labels_requires_unique_codes(
+    value_label_updater: DatabaseUpdater,
+) -> None:
+    """Test that update_value_labels refuses labels not unique on the code column.
+
+    Args:
+        value_label_updater: DatabaseUpdater over the code/label schema fixture.
+    """
+    labels = pl.DataFrame({"nc8": ["01", "01"], "nc8_libelle": ["A", "B"]})
+    with pytest.raises(ValueError, match="unique"):
+        value_label_updater.update_value_labels("nc8_libelle", labels)
+
+
+# Test qu'add_columns peut déclarer une nouvelle colonne de libellés
+def test_add_columns_declares_new_label_column(
+    updater: DatabaseUpdater, built_ducklake_schema: Any
+) -> None:
+    """Test that add_columns can declare a new column as a label column.
+
+    Every row of ``sample_df`` is covered so the functional dependency
+    category -> category_libelle holds across the whole table.
+
+    Args:
+        updater: DatabaseUpdater fixture.
+        built_ducklake_schema: DuckDB connection (ids 1..5, category A/B/A/C/B).
+    """
+    df = pl.DataFrame(
+        {
+            "id": [1, 2, 3, 4, 5],
+            "category_libelle": ["Cat A", "Cat B", "Cat A", "Cat C", "Cat B"],
+        }
+    )
+    report = updater.add_columns(
+        df, column_metadata={"category_libelle": {"label_for": "category"}}
+    )
+    assert isinstance(report, OperationReport)
+
+    meta = built_ducklake_schema.execute(
+        "SELECT label_for FROM metadata WHERE name = 'category_libelle'"
+    ).fetchone()
+    assert meta[0] == "category"

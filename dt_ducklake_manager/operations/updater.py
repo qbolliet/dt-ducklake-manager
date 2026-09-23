@@ -20,6 +20,7 @@ from ..utils.sql import (
     remove_dataframe_duplicates,
 )
 from ..utils.types import map_python_to_sql_type, validate_column_metadata
+from ..utils.value_labels import check_value_label_dependency, get_value_label_columns
 
 # Import des gestionnaires
 from ._base import BaseSchemaManager
@@ -378,6 +379,89 @@ class DatabaseUpdater(BaseSchemaManager):
         # Logging
         self.logger.info(f"Added new column(s) from update_df: {new_columns}")
 
+    # Méthode de contrôle de la dépendance fonctionnelle des colonnes de libellés
+    # après l'écriture d'un lot (update_database ou add_columns)
+    def _check_value_label_dependencies(
+        self,
+        df: nw.DataFrame[Any],
+        primary_keys: list[str],
+        touched_columns: set[str],
+    ) -> None:
+        """
+        Check label -> code association for every declared pair touched by a batch.
+
+        Restricted to the codes of the rows the batch touched, not a full-table
+        scan: for each declared code column whose code column or at least one of
+        its label columns is in ``touched_columns``, builds the *current*
+        (post-write) distinct code values of the fact table rows matching ``df``'s
+        primary keys, then checks the dependency against that restriction. This one
+        restriction view correctly covers every scenario of a refused update: a new
+        label for an existing code, a batch without the label column inserting a
+        code already labeled elsewhere, and a non-primary-key code changed without
+        its label.
+
+        Args:
+            df: The batch just written (``update_df`` or ``add_columns``' ``df``),
+                carrying every primary key column.
+            primary_keys: Primary key columns of the fact table, used to join ``df``
+                back to it.
+            touched_columns: Columns of ``df`` that were actually written.
+
+        Raises:
+            ValueError: If the functional dependency is violated for any relevant
+                pair, naming the faulty codes and pointing to
+                ``DatabaseUpdater.update_value_labels`` for a deliberate relabeling.
+        """
+        # Paires code -> colonnes de libellés concernées par ce lot
+        pairs = get_value_label_columns(
+            self.conn, schema=self.schema, catalog_alias=self.catalog_alias
+        )
+        relevant = {
+            code_col: label_cols
+            for code_col, label_cols in pairs.items()
+            if code_col in touched_columns
+            or any(label_col in touched_columns for label_col in label_cols)
+        }
+        if not relevant:
+            return
+
+        # Extraction de la table des faits
+        fact_table = self._qualified("fact_table")
+        batch_view = "_value_label_check_batch"
+        codes_view = "_value_label_check_codes"
+        # Enregistrement de la vue
+        self.conn.register(batch_view, nw.to_native(df))
+        try:
+            # Condition de jointure sur les clés primaires
+            join_condition = " AND ".join(
+                f"f.{quote_ident(k)} = t.{quote_ident(k)}" for k in primary_keys
+            )
+            # Parcours des colonnes de code/labels
+            for code_col, label_cols in relevant.items():
+                # Extraction des codes sur la vue
+                quoted_code = quote_ident(code_col)
+                self.conn.execute(f"""
+                    CREATE OR REPLACE TEMP VIEW {codes_view} AS
+                    SELECT DISTINCT f.{quoted_code} AS {quoted_code}
+                    FROM {fact_table} f
+                    JOIN {batch_view} t ON {join_condition}
+                """)
+                try:
+                    # Vérification de l'association label -> code
+                    for label_col in label_cols:
+                        check_value_label_dependency(
+                            self.conn,
+                            fact_table,
+                            code_col,
+                            label_col,
+                            restrict_to=codes_view,
+                        )
+                finally:
+                    self.conn.execute(f"DROP VIEW IF EXISTS {codes_view}")
+        finally:
+            # Suppression de la vue
+            self.conn.unregister(batch_view)
+
     # Méthode d'exécution ordonnée des étapes d'une mise à jour
     def _run_update_steps(
         self,
@@ -391,10 +475,11 @@ class DatabaseUpdater(BaseSchemaManager):
         """Run the ordered steps of a database update.
 
         Steps, in order: update-data deduplication, database deduplication,
-        metadata update, fact table upsert, categorical flag refresh, post-update
-        validation. Called from inside the transaction opened by
-        ``update_database``: every failure raises, so the whole update is rolled
-        back and the database returns to its pre-update state.
+        metadata update, fact table upsert, value-label functional dependency check
+        ), post-update validation. Called from
+        inside the transaction opened by ``update_database``: every failure raises,
+        so the whole update is rolled back and the database returns to its
+        pre-update state.
 
         Args:
             update_df: DataFrame containing the update data.
@@ -409,6 +494,8 @@ class DatabaseUpdater(BaseSchemaManager):
             RuntimeError: If any step fails, naming the step reached. The exception
                 message is what the caller logs as the step at which the update
                 stopped.
+            ValueError: If the update violates the functional dependency of a
+                code/label column pair declared on a column of ``update_df``.
         """
         # Étape 1 : suppression des doublons dans les données de mise à jour
         if check_duplicates_update:
@@ -429,6 +516,15 @@ class DatabaseUpdater(BaseSchemaManager):
         else:
             if not self._update_fact_table_direct(update_df, report):
                 raise RuntimeError("fact table update failed (direct)")
+
+        # Étape 4b : dépendance fonctionnelle des colonnes de libellés, sur
+        # l'état post-upsert, restreinte aux codes du lot. Une violation lève
+        # directement une ValueError (pas de RuntimeError intermédiaire) : le
+        # message pointe déjà vers update_value_labels pour un changement de
+        # libellé délibéré.
+        self._check_value_label_dependencies(
+            update_df, self._get_primary_key_columns(), set(update_df.columns)
+        )
 
         # Étape 5 : validation post-update
         if self.enable_validation and self.auditor:
@@ -836,8 +932,10 @@ class DatabaseUpdater(BaseSchemaManager):
                 primary key.
             column_metadata: Per-added-column UI fields (``label``, ``unit``,
                 ``display_format``, ``family``, ``description``,
-                ``default_aggregation``, ``parent_name``). Applies to newly added
-                columns as well as to overwritten existing ones.
+                ``default_aggregation``, ``parent_name``, ``label_for``). Applies to
+                newly added columns as well as to overwritten existing ones. A new
+                column can be declared a label column this way, e.g.
+                ``{'nc8_libelle': {'label_for': 'nc8'}}``.
             overwrite: Whether a column of ``df`` that already exists in the fact
                 table may have its values replaced. Defaults to False: an existing
                 column then raises ``ValueError`` instead.
@@ -860,8 +958,9 @@ class DatabaseUpdater(BaseSchemaManager):
                 is missing a primary key column, if a primary key of ``df`` holds a
                 null, if ``df`` is not unique on the primary keys, if ``df``
                 carries no value column, if a value column
-                already exists and ``overwrite`` is False, or if ``column_metadata``
-                is malformed.
+                already exists and ``overwrite`` is False, if ``column_metadata``
+                is malformed, or if writing a code or label column violates the
+                functional dependency of a declared code/label pair.
 
         Examples:
             >>> updater.add_columns(df_with_score)
@@ -1024,6 +1123,15 @@ class DatabaseUpdater(BaseSchemaManager):
 
                 self.conn.execute(f"DROP VIEW {view_name}")
 
+                # Dépendance fonctionnelle des colonnes de libellés, sur
+                # l'état post-écriture, restreinte aux codes du lot. Couvre aussi le
+                # cas d'une nouvelle colonne de libellés déclarée via
+                # column_metadata={'x_libelle': {'label_for': 'x'}} : sa validation
+                # structurelle a déjà eu lieu dans l'appel à update_column_metadata.
+                self._check_value_label_dependencies(
+                    df_nw, primary_keys, set(new_columns)
+                )
+
                 # dataset_metadata.updated_at
                 self._touch_dataset_metadata()
         except Exception:
@@ -1052,6 +1160,183 @@ class DatabaseUpdater(BaseSchemaManager):
             self.maintenance.compact(
                 schema=self.schema, delete_threshold=0.05, report=final_report
             )
+
+        self._invalidate_metadata_cache()
+        self._finalize_report_after_write(final_report)
+        self.logger.info(final_report.summary())
+        return final_report
+
+    # ---------------------------------------------------------------------------
+    # Gestion explicite des colonnes de libellés
+    # ---------------------------------------------------------------------------
+
+    # Méthode de remplacement explicite des libellés de certains codes
+    def update_value_labels(
+        self,
+        label_column: str,
+        labels: IntoDataFrame,
+        run_id: str | None = None,
+        commit_message: str | None = None,
+        commit_info: dict[str, Any] | None = None,
+        compact_after_update: bool = True,
+    ) -> OperationReport:
+        """
+        Replace the label of one or more codes of a code/label column pair .
+
+        The one legitimate way to relabel a code: an upsert cannot do it, since the
+        rows of that code already written under the old label would violate the
+        functional dependency (``update_database``'s value-label check refuses
+        exactly this and points here). Runs a single ``UPDATE fact_table SET
+        <label_column> = t.<label_column> FROM <labels> t WHERE fact_table.<code> =
+        t.<code>``, rewriting (copy-on-write) every row of the codes given, inside a
+        single transaction: a change of *some* labels either all lands or none does.
+        The displayed label is thus always the **current** one; earlier labels
+        remain readable through DuckLake time travel.
+
+        Args:
+            label_column: Name of the label column to update. Must already have a
+                ``label_for`` declared (via the build, ``add_columns`` or
+                ``update_column_metadata``).
+            labels: Narwhals-compatible DataFrame carrying exactly two columns: the
+                code (under the code column's own name) and the new label (under
+                ``label_column``'s name). Must be unique on the code column.
+            run_id: Run identifier recorded on the resulting DuckLake snapshot
+                (``ducklake_set_commit_message``). Ignored (skipped with a DEBUG
+                log) on a connection with no real DuckLake catalog attached.
+            commit_message: Commit message recorded alongside ``run_id``.
+            commit_info: Extra JSON-serializable fields merged into the commit's
+                ``extra_info``.
+            compact_after_update: Whether to run DuckLake compaction
+                (``rewrite_data_files``) after a successful commit. Defaults to True.
+
+        Returns:
+            OperationReport: report describing the rows rewritten
+            (``rows_updated``); codes of ``labels`` absent from the fact table are
+            listed (sample) in ``report.warnings``, never inserted.
+
+        Raises:
+            ValueError: If ``label_column`` has no ``label_for`` declared, if
+                ``labels`` does not carry exactly the code and label columns, if
+                ``labels`` is not unique on the code column, or if the update would
+                (still) violate the functional dependency code -> label.
+
+        Examples:
+            >>> import polars as pl
+            >>> new_labels = pl.DataFrame({
+            ...     'nc8': ['01012100'], 'nc8_libelle': ['Chevaux reproducteurs']})
+            >>> report = updater.update_value_labels('nc8_libelle', new_labels)
+        """
+        # Conversion vers narwhals dès le point d'entrée public
+        labels_nw = nw.from_native(labels, eager_only=True)
+
+        # Résolution de la colonne de code associée à la colonne de libellés
+        metadata_table = self._qualified("metadata")
+        _row = self.conn.execute(
+            f"SELECT label_for FROM {metadata_table} WHERE name = ?", [label_column]
+        ).fetchone()
+        code_column = _row[0] if _row is not None else None
+        if code_column is None:
+            raise ValueError(
+                f"Column {label_column!r} has no label_for; it is not a value-label"
+                " column"
+            )
+
+        # labels doit porter exactement le code et le libellé
+        expected_columns = {code_column, label_column}
+        if set(labels_nw.columns) != expected_columns:
+            raise ValueError(
+                f"labels must carry exactly the columns {sorted(expected_columns)},"
+                f" got {sorted(labels_nw.columns)}"
+            )
+
+        # Unicité sur le code : sinon le libellé affecté à un même code serait
+        # indéterminé (dernière ligne du lot gagnante, silencieusement)
+        if len(labels_nw) != len(labels_nw.unique(subset=[code_column], keep="any")):
+            raise ValueError(f"labels must be unique on {code_column!r}")
+
+        fact_table = self._qualified("fact_table")
+        view_name = "_update_value_labels_src"
+        quoted_code = quote_ident(code_column)
+        quoted_label = quote_ident(label_column)
+
+        # Transaction DuckDB unique : sur échec, aucun libellé n'est modifié.
+        try:
+            with self._transaction(
+                "update_value_labels",
+                run_id=run_id,
+                commit_message=commit_message,
+                commit_info=commit_info,
+            ) as report:
+                # Enregistrement d'une vue temporaire pour la jointure
+                self.conn.register(view_name, nw.to_native(labels_nw))
+
+                # Journalisation, avant d'agir, du nombre de lignes sur le point
+                # d'être réécrites (réécriture copy-on-write des fichiers concernés)
+                _cnt_row = self.conn.execute(f"""
+                    SELECT COUNT(*) FROM {fact_table}
+                    WHERE {quoted_code} IN (SELECT {quoted_code} FROM {view_name})
+                """).fetchone()
+                rows_to_rewrite = _cnt_row[0] if _cnt_row is not None else 0
+                self.logger.info(
+                    f"update_value_labels: about to rewrite {rows_to_rewrite}"
+                    f" fact_table row(s) for {len(labels_nw)} code(s)"
+                )
+
+                # Codes absents de la base : jamais insérés, seulement signalés
+                absent_rows = self.conn.execute(f"""
+                    SELECT DISTINCT {quoted_code} FROM {view_name}
+                    WHERE {quoted_code} NOT IN (
+                        SELECT {quoted_code} FROM {fact_table}
+                    )
+                    LIMIT 10
+                """).fetchall()
+                if absent_rows:
+                    sample = [row[0] for row in absent_rows]
+                    report.warnings.append(
+                        f"{len(sample)} code(s) of labels absent from the fact"
+                        f" table (showing up to 10, never inserted): {sample}"
+                    )
+
+                # UPDATE unique portant sur tous les codes du lot
+                self.conn.execute(f"""
+                    UPDATE {fact_table} f SET {quoted_label} = t.{quoted_label}
+                    FROM {view_name} t
+                    WHERE f.{quoted_code} = t.{quoted_code}
+                """)
+                # Valeur exacte, calculée en Python : sert de repli tant que
+                # _transaction n'a pas pu obtenir la mesure DuckLake réelle
+                # (table_changes), qui la remplacera si elle est disponible.
+                report.rows_updated = rows_to_rewrite
+
+                # Contrôle de dépendance après l'UPDATE (garde-fou : l'unicité sur le
+                # code et la restriction aux codes du lot devraient déjà le garantir)
+                check_value_label_dependency(
+                    self.conn,
+                    fact_table,
+                    code_column,
+                    label_column,
+                    restrict_to=view_name,
+                )
+
+                self.conn.execute(f"DROP VIEW {view_name}")
+
+                # dataset_metadata.updated_at
+                self._touch_dataset_metadata()
+        except Exception:
+            # Nettoyage de la vue temporaire : elle survit au ROLLBACK, qui ne porte
+            # que sur le catalogue.
+            try:
+                self.conn.execute(f"DROP VIEW IF EXISTS {view_name}")
+            except Exception:
+                pass
+            raise
+
+        # Compaction DuckLake optionnelle : l'UPDATE réécrit (copy-on-write) toutes
+        # les lignes des codes concernés.
+        final_report = self.last_report
+        assert final_report is not None  # posé par _transaction sur tout succès
+        if compact_after_update:
+            self.maintenance.compact(schema=self.schema, report=final_report)
 
         self._invalidate_metadata_cache()
         self._finalize_report_after_write(final_report)

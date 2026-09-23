@@ -30,6 +30,7 @@ from ..utils.sql import (
 
 # Modules ad hoc
 from ..utils.types import METADATA_COLUMNS, metadata_table_ddl
+from ..utils.value_labels import check_value_label_dependency
 from .inference import SchemaBuilder
 
 # Version du schéma de base de données écrite dans dataset_metadata.
@@ -92,6 +93,7 @@ class DuckLakeTablesBuilder(SchemaScoped):
         primary_keys: list[str] | None = None,
         categorical_overrides: dict[str, bool] | None = None,
         hierarchies: dict[str, str] | None = None,
+        value_labels: dict[str, str] | None = None,
         connection: duckdb.DuckDBPyConnection | None = None,
         schema: str = "main",
         catalog_alias: str = "db",
@@ -120,6 +122,11 @@ class DuckLakeTablesBuilder(SchemaScoped):
                 ``metadata.parent_name``. Must agree with
                 any ``parent_name`` also supplied through ``column_metadata``.
                 Defaults to None.
+            value_labels (Optional[Dict[str, str]]): Code/label column pairs,
+                declared as a mapping of label column name to code column name,
+                written to ``metadata.label_for``, carried by the label column. Must
+                agree with any ``label_for`` also supplied through
+                ``column_metadata``. Defaults to None.
             connection (Optional[duckdb.DuckDBPyConnection]): DuckLake-attached DuckDB
                 connection obtained from ``DuckLakeConnector.connect()``. If None, an
                 in-memory DuckDB connection is used (for unit tests only).
@@ -154,6 +161,7 @@ class DuckLakeTablesBuilder(SchemaScoped):
             primary_keys=primary_keys,
             categorical_overrides=categorical_overrides,
             hierarchies=hierarchies,
+            value_labels=value_labels,
             log_filename=log_filename,
         )
 
@@ -439,6 +447,35 @@ class DuckLakeTablesBuilder(SchemaScoped):
             f" (schema_version={SCHEMA_VERSION})"
         )
 
+    # Méthode de contrôle de la dépendance fonctionnelle des colonnes de libellés
+    def _check_value_labels_dependency(self) -> None:
+        """
+        Check the code -> label functional dependency of every declared pair
+        before writing.
+
+        Runs on ``self.schema_builder.df`` — the deduplicated source DataFrame,
+        already resolved by ``create_duckdb_metadata_table`` into
+        ``self.schema_builder.value_labels_resolved`` — via a temporary view, so the
+        check happens before the fact table itself is ever created. A no-op when no
+        code/label pair is declared.
+
+        Raises:
+            ValueError: If the functional dependency code -> label is violated for
+                any declared pair.
+        """
+        value_labels_resolved = self.schema_builder.value_labels_resolved
+        if not value_labels_resolved:
+            return
+
+        df = self.schema_builder.df
+        view_name = "_value_labels_check_src"
+        self.conn.register(view_name, df.to_arrow().select(list(df.columns)))
+        try:
+            for label_col, code_col in value_labels_resolved.items():
+                check_value_label_dependency(self.conn, view_name, code_col, label_col)
+        finally:
+            self.conn.unregister(view_name)
+
     # Méthode de construction du schéma
     def build_schema(
         self,
@@ -474,9 +511,10 @@ class DuckLakeTablesBuilder(SchemaScoped):
             column_labels (Optional[Dict[str, str]]): Optional mapping of column names
                 to labels.
             column_metadata (Optional[Dict[str, Dict[str, str]]]): Optional per-column
-                UI metadata (``label``, ``parent_name``, ``unit``, ``display_format``,
-                ``family``, ``description``, ``default_aggregation``), written into
-                the metadata table. Defaults to None.
+                UI metadata (``label``, ``parent_name``, ``label_for``, ``unit``,
+                ``display_format``, ``family``, ``description``,
+                ``default_aggregation``), written into the metadata table. Defaults
+                to None.
             check_duplicates (bool): Whether to check and remove duplicates. Defaults to
                 True.
             keep (Literal['any', 'none', 'first', 'last']): Which duplicates to keep.
@@ -498,7 +536,10 @@ class DuckLakeTablesBuilder(SchemaScoped):
 
         Raises:
             ValueError: If ``cluster_by`` references a column absent from the source
-                DataFrame, in addition to the existing primary-key duplicate check.
+                DataFrame, in addition to the existing primary-key duplicate check, or
+                if a declared code/label pair (``value_labels``/``label_for``)
+                violates the functional dependency code -> label on the deduplicated
+                DataFrame (nothing is written, including the ``metadata`` rows).
 
         Returns:
             OperationReport: report describing the tables just built
@@ -587,6 +628,12 @@ class DuckLakeTablesBuilder(SchemaScoped):
                 column_labels=column_labels,
                 column_metadata=column_metadata,
             )
+
+            # Contrôle de la dépendance fonctionnelle code -> libellé, sur le DataFrame
+            # dédupliqué, avant l'écriture de la fact_table : une violation annule
+            # tout, y compris les lignes de metadata déjà insérées ci-dessus (même
+            # transaction).
+            self._check_value_labels_dependency()
 
             # Création de la table d'informations avec partitionnement et tri
             # optionnels

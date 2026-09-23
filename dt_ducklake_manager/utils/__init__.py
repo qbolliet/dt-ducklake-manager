@@ -18,6 +18,11 @@ from .types import (
     normalize_default_aggregation,
     resolve_sql_type_conflict,
 )
+from .value_labels import (
+    check_value_label_dependency,
+    get_value_label_columns,
+    validate_value_labels,
+)
 
 # Exportation au niveau du module
 __all__ = [
@@ -37,4 +42,7 @@ __all__ = [
     "ALLOWED_DEFAULT_AGGREGATIONS",
     "get_column_hierarchies",
     "validate_hierarchy_forest",
+    "validate_value_labels",
+    "check_value_label_dependency",
+    "get_value_label_columns",
 ]

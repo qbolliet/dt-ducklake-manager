@@ -15,6 +15,7 @@ from narwhals.typing import IntoDataFrame
 from ..utils.logger import _init_logger
 from ..utils.sql import SchemaScoped, quote_ident, resolve_catalog
 from ..utils.types import METADATA_COLUMNS
+from ..utils.value_labels import check_value_label_dependency, validate_value_labels
 
 
 # Classe des niveaux de validation sur la base de données
@@ -283,6 +284,8 @@ class DatabaseAuditor(SchemaScoped):
                 self._validate_metadata_fact_consistency(report)
                 # Validation de la consistance des types des données
                 self._validate_data_types_consistency(report)
+                # Validation des colonnes de libellés
+                self._validate_value_labels_consistency(report)
 
             # Validation complète
             if validation_level == ValidationLevel.COMPREHENSIVE:
@@ -702,6 +705,108 @@ class DatabaseAuditor(SchemaScoped):
                 severity=IssueSeverity.MEDIUM,
                 table_name="fact_table",
                 description=f"Error validating data types consistency: {str(e)}",
+                suggested_fix="Check metadata and fact_table structure",
+            )
+            report.add_issue(issue)
+
+    # Méthode de validation des colonnes de libellés
+    def _validate_value_labels_consistency(self, report: ValidationReport) -> None:
+        """Validate every declared code/label column pair.
+
+        Runs the same structural checks as ``validate_value_labels`` (target
+        exists and differs from the label column, no chaining, label column is
+        VARCHAR / not a primary key / outside any hierarchy) against the current
+        ``metadata`` state, then the ``check_value_label_dependency`` functional
+        dependency check (code -> label) against the current ``fact_table`` state,
+        for every column declaring a ``label_for``. A violation should never
+        occur through the package's own write paths (validated before every write);
+        this check exists to detect a base corrupted outside of them.
+
+        Args:
+            report: Validation report collecting the issues found.
+
+        Examples:
+            >>> auditor._validate_value_labels_consistency(report)
+        """
+        try:
+            # Vérification que les tables existent
+            if not self._table_exists("fact_table") or not self._table_exists(
+                "metadata"
+            ):
+                return
+
+            # Extraction de la table de métadonnées
+            metadata_df = self._get_metadata()
+            if len(metadata_df) == 0:
+                return
+
+            # Extraction des noms de variables
+            names = metadata_df["name"].to_list()
+            # Association du type au nom de colonne
+            columns_sql_types = dict(zip(names, metadata_df["sql_type"].to_list()))
+            # Association du statut de clé primaire au nom de colonne
+            primary_keys = [
+                name
+                for name, is_pk in zip(names, metadata_df["is_primary_key"].to_list())
+                if is_pk
+            ]
+            # Association du statut de parent au nom de colonne
+            parent_of = dict(zip(names, metadata_df["parent_name"].to_list()))
+            # Association du statut de label au nom de colonne
+            label_for_map = {
+                name: label_for
+                for name, label_for in zip(names, metadata_df["label_for"].to_list())
+                if label_for is not None
+            }
+
+            if not label_for_map:
+                return
+
+            # Contrôles structurels (cible, chaînage, forme de colonne), sur l'état
+            # complet des paires déclarées
+            try:
+                validate_value_labels(
+                    label_for_map, columns_sql_types, primary_keys, parent_of
+                )
+            except ValueError as e:
+                issue = ValidationIssue(
+                    issue_type=IssueType.SCHEMA_INCONSISTENCY,
+                    severity=IssueSeverity.HIGH,
+                    table_name="metadata",
+                    description=f"Invalid label_for declaration: {e}",
+                    suggested_fix="Correct or clear the offending label_for via"
+                    " update_column_metadata",
+                )
+                report.add_issue(issue)
+
+            # Dépendance fonctionnelle, par paire : une violation est une erreur,
+            # avec les codes fautifs dans le rapport.
+            fact_table = self._qualified("fact_table")
+            for label_col, code_col in label_for_map.items():
+                try:
+                    check_value_label_dependency(
+                        self.conn, fact_table, code_col, label_col
+                    )
+                except ValueError as e:
+                    issue = ValidationIssue(
+                        issue_type=IssueType.CONSTRAINT_VIOLATION,
+                        severity=IssueSeverity.CRITICAL,
+                        table_name="fact_table",
+                        column_name=label_col,
+                        description=str(e),
+                        suggested_fix="Correct the labels via"
+                        " DatabaseUpdater.update_value_labels",
+                        additional_info={"code_column": code_col},
+                    )
+                    report.add_issue(issue)
+
+        except Exception as e:
+            # Création d'un problème dans le rapport associé à l'erreur
+            issue = ValidationIssue(
+                issue_type=IssueType.SCHEMA_INCONSISTENCY,
+                severity=IssueSeverity.HIGH,
+                table_name="metadata",
+                description=f"Error validating value-label columns: {str(e)}",
                 suggested_fix="Check metadata and fact_table structure",
             )
             report.add_issue(issue)

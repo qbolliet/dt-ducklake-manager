@@ -382,14 +382,16 @@ class DatabaseDeleter(BaseSchemaManager):
         """
         Delete columns from fact table and related structures with dependency analysis.
 
-        A column that is the parent of another column in a hierarchy cannot
-        be deleted by default: it would silently orphan its children's
-        ``parent_name``. Pass ``cascade=True`` to allow it anyway; every child's
-        ``parent_name`` is then reset to ``NULL``, with a warning. A dropped column
-        that is part of ``dataset_metadata.cluster_by`` is also removed from it
-        (reset to ``NULL`` if it was the only sort column), with a warning.
-        ``ALTER TABLE ... DROP COLUMN`` is a DuckLake metadata-only operation: no
-        data file is rewritten.
+        A column that is the parent of another column in a hierarchy, or the
+        ``label_for`` target of one or more label columns, cannot be deleted
+        by default: it would silently orphan its children's ``parent_name`` or its
+        label columns' ``label_for``. Pass ``cascade=True`` to allow it anyway; every
+        child's ``parent_name`` and every label column's ``label_for`` is then reset
+        to ``NULL``, with a warning. A dropped column that is part of
+        ``dataset_metadata.cluster_by`` is also removed from it (reset to ``NULL`` if
+        it was the only sort column), with a warning. Dropping a label column itself
+        needs nothing special. ``ALTER TABLE ... DROP COLUMN`` is a DuckLake
+        metadata-only operation: no data file is rewritten.
 
         Args:
             columns: List of column names to delete
@@ -398,8 +400,9 @@ class DatabaseDeleter(BaseSchemaManager):
                 ``metadata`` rows exactly as they were. Defaults to True.
             validate_dependencies: Whether to validate column dependencies
             cascade: Whether to allow deleting a column that is the parent of
-                another column, detaching its children (``parent_name`` set to
-                ``NULL``) instead of refusing the deletion. Defaults to False.
+                another column or the ``label_for`` target of a label column,
+                detaching its children/label columns (``parent_name``/``label_for``
+                set to ``NULL``) instead of refusing the deletion. Defaults to False.
             run_id: Run identifier recorded on the resulting DuckLake snapshot
                 (``ducklake_set_commit_message``). Ignored (skipped with a DEBUG
                 log) on a connection with no real DuckLake catalog attached.
@@ -635,6 +638,28 @@ class DatabaseDeleter(BaseSchemaManager):
                             f"CRITICAL: Column {column} is the parent of"
                             f" {hierarchy_children} in a hierarchy - deletion would"
                             f" orphan them (use cascade=True to detach)"
+                        )
+
+                # Vérification si la colonne est visée par des colonnes de libellés :
+                # dépendance critique sauf cascade=True.
+                label_columns = self._get_label_columns_for_code(column)
+                column_deps["label_columns"] = label_columns
+                if label_columns:
+                    if cascade:
+                        # Warning uniquement
+                        dependency_report["warnings"].append(
+                            f"Column {column} is the label_for target of"
+                            f" {label_columns}; cascade=True will clear their"
+                            f" label_for"
+                        )
+                    else:
+                        # Dépendance critique
+                        dependency_report["has_critical_dependencies"] = True
+                        # Warning
+                        dependency_report["warnings"].append(
+                            f"CRITICAL: Column {column} is the label_for target of"
+                            f" {label_columns} - deletion would orphan them (use"
+                            f" cascade=True to detach)"
                         )
 
                 dependency_report["dependencies"][column] = column_deps

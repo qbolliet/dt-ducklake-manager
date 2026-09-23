@@ -39,6 +39,7 @@ from ..utils.types import (
     normalize_default_aggregation,
     resolve_sql_type_conflict,
 )
+from ..utils.value_labels import check_value_label_dependency, validate_value_labels
 
 
 # Classe contenant des opérations utilitaires de base sur la base de données au schéma
@@ -721,7 +722,7 @@ class BaseSchemaManager(SchemaScoped, ABC):
         # colonne textuelle dont la cardinalité (hors valeurs manquantes) respecte le
         # seuil.
         is_categorical = (
-            isinstance(dtype_obj, (nw.String, nw.Categorical, nw.Enum))
+            isinstance(dtype_obj, nw.String | nw.Categorical | nw.Enum)
             and self.categorical_threshold is not None
             and df_nw[column].drop_nulls().n_unique() <= self.categorical_threshold
         )
@@ -781,9 +782,9 @@ class BaseSchemaManager(SchemaScoped, ABC):
         """
         Set or correct the producer-owned UI fields of an existing column.
 
-        Only ``label``, ``parent_name``, ``unit``, ``display_format``, ``family``,
-        ``description``, ``default_aggregation`` and ``is_categorical`` may be
-        updated. ``is_categorical`` is inferred only once, when the column is
+        Only ``label``, ``parent_name``, ``label_for``, ``unit``, ``display_format``,
+        ``family``, ``description``, ``default_aggregation`` and ``is_categorical``
+        may be updated. ``is_categorical`` is inferred only once, when the column is
         created: this method is the way to correct it (e.g. to switch the UI filter
         of a column from a search input to a select menu). The update
         touches nothing else, so a later data update never has to rebuild the base
@@ -792,23 +793,38 @@ class BaseSchemaManager(SchemaScoped, ABC):
         corrects) a column hierarchy link: the parent column must already
         exist in metadata, the resulting graph must stay a forest (no cycle), and
         both ``column`` and its new parent are forced categorical, with a warning,
-        if either is not already.
+        if either is not already. Setting ``label_for`` declares (or corrects) a
+        code/label column pair : the target code column must exist, must not
+        itself be a label column, ``column`` must be ``VARCHAR``, not a primary key
+        and outside any hierarchy (the label_for structural checks performed by
+        :func:`validate_value_labels`), and the functional dependency code -> label
+        must hold on the whole fact table (checked by
+        :func:`check_value_label_dependency`) before the write. A column cannot be
+        both a hierarchy member (``parent_name`` set, or a
+        hierarchy parent) and a label column (``label_for`` set) at the same time.
+        ``label_for=None`` just clears the link, with no validation, same as
+        ``parent_name=None``; unlike ``parent_name``, ``label_for`` has no effect on
+        ``is_categorical``.
 
         Args:
             column: Name of the column, which must already have a row in the
                 metadata table.
-            **fields: Field/value pairs among ``label``, ``parent_name``, ``unit``,
-                ``display_format``, ``family``, ``description``,
-                ``default_aggregation`` (strings, ``None`` clears the field) and
-                ``is_categorical`` (bool).
+            **fields: Field/value pairs among ``label``, ``parent_name``,
+                ``label_for``, ``unit``, ``display_format``, ``family``,
+                ``description``, ``default_aggregation`` (strings, ``None`` clears
+                the field) and ``is_categorical`` (bool).
 
         Raises:
             ValueError: If a field name is not one of the allowed fields, if
                 ``default_aggregation`` is invalid, if the column has no row in the
                 metadata table, if a non-``None`` ``parent_name`` references a
                 column absent from metadata, if it would create a cycle in the
-                ``parent_name`` graph, if ``is_categorical`` is not a bool, or if
-                ``is_categorical=False`` targets a column of a hierarchy.
+                ``parent_name`` graph, if ``is_categorical`` is not a bool, if
+                ``is_categorical=False`` targets a column of a hierarchy, if a
+                non-``None`` ``label_for`` violates the label_for structural
+                checks or the code -> label functional dependency, or
+                if ``parent_name`` and ``label_for`` are set (currently or in the same
+                call) on the same column.
 
         Example:
             >>> manager.update_column_metadata(
@@ -816,6 +832,7 @@ class BaseSchemaManager(SchemaScoped, ABC):
             ...     default_aggregation='sum')
             >>> manager.update_column_metadata('commune', parent_name='departement')
             >>> manager.update_column_metadata('model', is_categorical=True)
+            >>> manager.update_column_metadata('nc8_libelle', label_for='nc8')
         """
         # Contrôle des champs autorisés
         allowed = COLUMN_METADATA_KEYS | {"is_categorical"}
@@ -858,10 +875,13 @@ class BaseSchemaManager(SchemaScoped, ABC):
                 "update_column_metadata only corrects existing columns"
             )
 
+        # Extraction des nouvelles valeurs de parent_name / label_for, utilisées par
+        # plusieurs blocs de validation ci-dessous.
+        new_parent = fields.get("parent_name")
+        new_label_for = fields.get("label_for")
+
         # Validation spécifique à parent_name : existence de la colonne parente dans
         # l'état courant de metadata, puis détection de cycle sur le graphe complet.
-        # Extraction du nouveau parent
-        new_parent = fields.get("parent_name")
         if "parent_name" in fields and new_parent is not None:
             # Vérification que la colonne parent existe dans la table des
             # métadonnées (et est donc une colonne valide de la table des faits)
@@ -874,13 +894,78 @@ class BaseSchemaManager(SchemaScoped, ABC):
                     f"Parent column {new_parent!r} has no row in the metadata table"
                 )
             # Extraction des paires parent/enfant
-            current_rows = self.conn.execute(
+            parent_rows = self.conn.execute(
                 f"SELECT name, parent_name FROM {metadata_table}"
             ).fetchall()
-            parent_of = {name: parent for name, parent in current_rows}
+            parent_of = {name: parent for name, parent in parent_rows}
             parent_of[column] = str(new_parent)
             # Validation de la hiérarchie
             validate_hierarchy_forest(parent_of)
+
+            # Une colonne de libellés ne peut pas aussi être membre d'une hiérarchie
+            if "label_for" in fields:
+                has_label_for = new_label_for is not None
+            else:
+                _lfrow = self.conn.execute(
+                    f"SELECT label_for FROM {metadata_table} WHERE name = ?", [column]
+                ).fetchone()
+                has_label_for = _lfrow is not None and _lfrow[0] is not None
+            if has_label_for:
+                raise ValueError(
+                    f"Column {column!r} is a label column (label_for is set) and"
+                    " cannot also declare a parent_name"
+                )
+
+        # Validation spécifique à label_for : contrôles structurels (cible, chaînage,
+        # forme de colonne) contre l'état courant de metadata, puis dépendance
+        # fonctionnelle sur toute la fact_table.
+        if "label_for" in fields and new_label_for is not None:
+            # Une colonne membre d'une hiérarchie (parente ou enfant) ne peut pas
+            # aussi être une colonne de libellés
+            hierarchy_children = self._get_hierarchy_children(column)
+            if "parent_name" in fields:
+                has_parent = new_parent is not None
+            else:
+                _prow4 = self.conn.execute(
+                    f"SELECT parent_name FROM {metadata_table} WHERE name = ?",
+                    [column],
+                ).fetchone()
+                has_parent = _prow4 is not None and _prow4[0] is not None
+            if hierarchy_children or has_parent:
+                raise ValueError(
+                    f"Column {column!r} is part of a column hierarchy (parent or"
+                    " child) and cannot also declare a label_for"
+                )
+
+            # Contrôles structurels de label_for : état complet de metadata, fusionné
+            # avec le changement en cours (même schéma que parent_name/validate_
+            # hierarchy_forest ci-dessus : on valide le graphe entier, pas seulement
+            # la paire).
+            label_for_rows = self.conn.execute(
+                f"SELECT name, sql_type, is_primary_key, parent_name, label_for"
+                f" FROM {metadata_table}"
+            ).fetchall()
+            columns_sql_types = {
+                name: sql_type for name, sql_type, _, _, _ in label_for_rows
+            }
+            primary_keys = [name for name, _, is_pk, _, _ in label_for_rows if is_pk]
+            parent_of_for_labels = {
+                name: parent for name, _, _, parent, _ in label_for_rows
+            }
+            label_for_map = {
+                name: lf for name, _, _, _, lf in label_for_rows if lf is not None
+            }
+            label_for_map[column] = str(new_label_for)
+            validate_value_labels(
+                label_for_map, columns_sql_types, primary_keys, parent_of_for_labels
+            )
+
+            # Dépendance fonctionnelle code -> libellé sur toute la fact_table (pas
+            # de restrict_to : la correction porte sur l'ensemble de la table,
+            # contrairement au contrôle restreint d'un update).
+            check_value_label_dependency(
+                self.conn, self._qualified("fact_table"), str(new_label_for), column
+            )
 
         # Une colonne de hiérarchie reste catégorielle : refus de is_categorical=False
         if fields.get("is_categorical") is False:
@@ -981,7 +1066,7 @@ class BaseSchemaManager(SchemaScoped, ABC):
         """
         Clear ``parent_name`` on every column whose hierarchy parent is ``column``.
 
-        Used when a column that is the parent of another column (§2.5) is deleted
+        Used when a column that is the parent of another column is deleted
         with ``cascade=True``: rather than leaving children pointing at a column
         that no longer exists, their ``parent_name`` is reset to ``NULL`` and a
         warning is logged.
@@ -1015,6 +1100,68 @@ class BaseSchemaManager(SchemaScoped, ABC):
                 f" parent_name was cleared to NULL (cascade=True)"
             )
         return children
+
+    # Méthode de détachement des colonnes de libellés d'un code supprimé
+    def _clear_label_for_references(self, column: str) -> list[str]:
+        """
+        Clear ``label_for`` on every label column pointing at ``column``.
+
+        Used when a code column targeted by one or more label columns is
+        deleted with ``cascade=True``: rather than leaving label columns pointing at
+        a code column that no longer exists, their ``label_for`` is reset to
+        ``NULL`` (they become ordinary columns) and a warning is logged.
+
+        Args:
+            column: Name of the code column about to be dropped, used as the
+                ``label_for`` target to detach.
+
+        Returns:
+            list[str]: Names of the label columns that were detached. Empty when
+            ``column`` was not targeted by any label column.
+
+        Example:
+            >>> manager._clear_label_for_references('nc8')
+            ['nc8_libelle']
+        """
+        # Extraction des colonnes de libellés associées à la colonne de code
+        label_columns = self._get_label_columns_for_code(column)
+        # Retrait du lien
+        if label_columns:
+            self.conn.execute(
+                f"UPDATE {self._qualified('metadata')} SET label_for = NULL"
+                " WHERE label_for = ?",
+                [column],
+            )
+            # Invalidation du cache
+            self._invalidate_metadata_cache()
+            # Logging
+            self.logger.warning(
+                f"Column {column!r} was the label_for target of {label_columns};"
+                f" their label_for was cleared to NULL (cascade=True)"
+            )
+        return label_columns
+
+    # Méthode de détachement de toutes les références (hiérarchie et libellés) à une
+    # colonne sur le point d'être supprimée
+    def _clear_references_to(self, column: str) -> None:
+        """
+        Clear every ``parent_name``/``label_for`` reference to ``column``.
+
+        Thin wrapper factoring the two independent cascade mechanics
+        (``_clear_child_parent_references`` for hierarchy children,
+        ``_clear_label_for_references`` for label columns) that ``cascade=True``
+        applies together before a column is dropped.
+
+        Args:
+            column: Name of the column about to be dropped.
+
+        Example:
+            >>> manager._clear_references_to('region')
+        """
+        # Nettoyage des références à la hiérarchie
+        self._clear_child_parent_references(column)
+        # Nettoyage des références au label
+        self._clear_label_for_references(column)
 
     # Méthode auxiliaire de suppression physique d'une colonne de la table des faits
     def _drop_fact_table_column(self, column: str) -> bool:
@@ -1054,21 +1201,22 @@ class BaseSchemaManager(SchemaScoped, ABC):
         """
         Drop a fact table column together with every reference to it.
 
-        Ordered steps: children detachment (``parent_name`` set to ``NULL``, only
-        when ``cascade``), ``ALTER TABLE ... DROP COLUMN``, ``metadata`` row removal
-        and ``cluster_by`` update. Shared by ``DatabaseDeleter.delete_columns`` and
+        Ordered steps: references detachment (hierarchy children's ``parent_name``
+        and label columns' ``label_for`` set to ``NULL``, only when ``cascade``),
+        ``ALTER TABLE ... DROP COLUMN``, ``metadata`` row removal and ``cluster_by``
+        update. Shared by ``DatabaseDeleter.delete_columns`` and
         ``_cleanup_null_only_columns`` so that a dropped column never leaves a
         dangling reference behind. No transaction is opened here: the caller owns
         it.
 
         Args:
             column: Name of the column to drop. Must exist in the fact table.
-            cascade: Whether to detach the hierarchy children of ``column`` before
-                dropping it. Defaults to False.
+            cascade: Whether to detach the hierarchy children and label columns of
+                ``column`` before dropping it. Defaults to False.
 
         Returns:
             bool: True if the column was dropped, False if the ``DROP COLUMN``
-            failed (nothing else is then modified, except detached children).
+            failed (nothing else is then modified, except detached references).
 
         Raises:
             Exception: Any error raised while removing the metadata row or updating
@@ -1078,9 +1226,9 @@ class BaseSchemaManager(SchemaScoped, ABC):
             >>> manager._drop_column_with_references('region', cascade=True)
             True
         """
-        # Détachement des colonnes enfants d'une hiérarchie (cascade uniquement)
+        # Détachement des références (hiérarchie et libellés), cascade uniquement
         if cascade:
-            self._clear_child_parent_references(column)
+            self._clear_references_to(column)
 
         # Suppression physique de la colonne
         if not self._drop_fact_table_column(column):
@@ -1146,15 +1294,18 @@ class BaseSchemaManager(SchemaScoped, ABC):
                 c for c in self._get_null_only_columns() if c not in primary_keys
             ]
 
-            # Suppression itérative : une colonne parente devient supprimable dès que
-            # ses enfants (eux-mêmes nuls) ont été supprimés, quel que soit l'ordre
-            # des colonnes dans la table.
+            # Suppression itérative : une colonne parente (hiérarchie) ou de code
+            # (libellés) devient supprimable dès que ses enfants / colonnes de
+            # libellés (eux-mêmes nuls, par la dépendance fonctionnelle) ont été
+            # supprimés, quel que soit l'ordre des colonnes dans la table.
             dropped: list[str] = []
             progress = True
             while pending and progress:
                 progress = False
                 for column in list(pending):
-                    if self._get_hierarchy_children(column):
+                    if self._get_hierarchy_children(
+                        column
+                    ) or self._get_label_columns_for_code(column):
                         continue
                     pending.remove(column)
                     if self._drop_column_with_references(column):
@@ -1165,12 +1316,17 @@ class BaseSchemaManager(SchemaScoped, ABC):
                             f"Null-only column '{column}' could not be dropped"
                         )
 
-            # Colonnes parentes conservées : enfants non nuls
+            # Colonnes conservées : enfants de hiérarchie ou colonnes de libellés non
+            # nulles
             for column in pending:
                 # Message
-                warning = (
-                    f"Null-only column '{column}' kept: it is the hierarchy parent of"
-                    f" {self._get_hierarchy_children(column)}"
+                reasons = []
+                if children := self._get_hierarchy_children(column):
+                    reasons.append(f"the hierarchy parent of {children}")
+                if label_columns := self._get_label_columns_for_code(column):
+                    reasons.append(f"the label_for target of {label_columns}")
+                warning = f"Null-only column '{column}' kept: it is " + " and ".join(
+                    reasons
                 )
                 # Logging
                 self.logger.warning(warning)
@@ -1206,6 +1362,30 @@ class BaseSchemaManager(SchemaScoped, ABC):
             row[0]
             for row in self.conn.execute(
                 f"SELECT name FROM {self._qualified('metadata')} WHERE parent_name = ?",
+                [column],
+            ).fetchall()
+        ]
+
+    # Méthode de lecture des colonnes de libellés d'une colonne de code
+    def _get_label_columns_for_code(self, column: str) -> list[str]:
+        """
+        Get the columns whose ``label_for`` is ``column``.
+
+        Args:
+            column: Name of the potential code column.
+
+        Returns:
+            list[str]: Names of the label columns targeting ``column``. Empty when
+            ``column`` is not the target of any label column.
+
+        Example:
+            >>> manager._get_label_columns_for_code('nc8')
+            ['nc8_libelle']
+        """
+        return [
+            row[0]
+            for row in self.conn.execute(
+                f"SELECT name FROM {self._qualified('metadata')} WHERE label_for = ?",
                 [column],
             ).fetchall()
         ]
