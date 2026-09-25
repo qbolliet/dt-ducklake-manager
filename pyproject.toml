@@ -21,6 +21,7 @@ dev = [
     "polars>=1.39.3,<2",
     "pre-commit>=4.6.0",
     "pytest>=8.3.4",
+    "pytest-cov>=7.0.0",
     "ruff>=0.15.14",
     "taskipy>=1.14.1",
 ]

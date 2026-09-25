@@ -168,6 +168,23 @@ registered operations, no savepoints, no compensating `rollback_func`.
 `use_transaction=False` keeps the same ordered steps but runs them in autocommit
 mode: faster, and a failure then leaves whatever was already written in place.
 
+**Every write audits its own result, cheaply.** Right before its commit, each
+write runs the `BASIC` structural audit of `DatabaseAuditor` (the three tables
+exist, `metadata` describes exactly the fact table's columns with consistent
+types, the `parent_name` links form a forest, the `label_for` declarations are
+valid). It reads only the catalog and the small metadata tables, never the fact
+table, and a critical issue rolls the write back. The `COMPREHENSIVE` level adds
+the checks that scan the fact table (primary key uniqueness, code → label
+dependency, null shares) and is meant to be run on demand; `audit_level` selects
+the level run by the writes, or disables it.
+
+**Input errors raise, execution errors roll back.** An invalid request — missing
+or null primary key, unknown column, duplicated key in a batch, violated
+code/label dependency, malformed filter — raises `ValueError` before or after an
+automatic rollback. An execution failure (database error) is rolled back too;
+`update_database` then returns `False` (its historical contract), the other
+operations re-raise the original exception.
+
 **Post-write maintenance runs after the commit, never inside it.**
 `merge_adjacent_files` and `rewrite_data_files` are called once the transaction
 has closed: they are optimizations, and a compaction failure must never undo a
@@ -179,14 +196,19 @@ that was itself committed:
 
 ```python
 recovery = DatabaseRecoveryManager(conn)
-print(recovery.list_ducklake_snapshots())          # pick a snapshot_id
-old = DuckLakeConnector(catalog, data, snapshot_version=17).connect()
+print(recovery.list_ducklake_snapshots())          # pick a snapshot_id (author = run_id)
+recovery.restore_snapshot(17, run_id="rollback-run-42")
 ```
 
-then read the tables from `old` and reinsert them into the current catalog.
-`RecoveryStrategy.USE_SNAPSHOT_HISTORY` returns that procedure step by step. The
-other strategies (`REPAIR_SCHEMA`, `CLEAN_ORPHANED_DATA`, `VALIDATE_AND_FIX`)
-repair structural inconsistencies in place and never touch the history.
+`restore_snapshot` copies the result set's tables as they were at the snapshot
+(`SELECT * FROM <table> AT (VERSION => 17)`) into temporary tables, then empties
+and refills the live tables in a single transaction. The restoration is itself a
+new snapshot: the states in between remain readable, and the restoration can be
+undone the same way. Only rows are restored: a table whose columns changed since
+the snapshot is refused, since re-creating it would lose its DuckLake identity.
+There is no in-place "repair" strategy: an automatic fix of a corrupted base
+(deleting rows with nulls, re-creating the fact table to deduplicate it) destroys
+data or history without the caller deciding it, which time travel never does.
 Snapshot expiry (`expire_snapshots`) is planned maintenance with an explicit
 retention — never a side effect of a write, because it is what destroys the
 ability to recover.

@@ -1,18 +1,23 @@
 # Importation des modules
 # Modules de base
-# Module de tests
+import warnings
 from typing import Any
 
+import polars as pl
+
+# Module de tests
 import pytest
 
 # Modules du package à tester
 from dt_ducklake_manager.maintenance import (
     DatabaseAuditor,
+    IssueSeverity,
+    IssueType,
     ValidationIssue,
     ValidationLevel,
     ValidationReport,
 )
-from dt_ducklake_manager.maintenance.auditor import IssueSeverity, IssueType
+from dt_ducklake_manager.schema import DuckLakeTablesBuilder
 
 # ===========================================================================
 # Tests de ValidationIssue
@@ -56,9 +61,9 @@ def empty_report() -> ValidationReport:
     """Create an empty ValidationReport for testing.
 
     Returns:
-        ValidationReport: a new empty report at STANDARD level.
+        ValidationReport: a new empty report at BASIC level.
     """
-    return ValidationReport(validation_level=ValidationLevel.STANDARD)
+    return ValidationReport(validation_level=ValidationLevel.BASIC)
 
 
 # Test de l'ajout d'un problème au rapport
@@ -180,41 +185,6 @@ def test_validation_report_finalize(empty_report: Any) -> None:
     assert len(empty_report.recommendations) > 0
 
 
-# Test que finalize génère la bonne recommandation de performance pour Ducklake (pas
-# d'index)
-def test_validation_report_finalize_generates_ducklake_performance_recommendation(
-    empty_report: ValidationReport,
-) -> None:
-    """Test that finalize generates a Ducklake-specific performance recommendation.
-
-    The recommendation must not reference 'indexes' and must instead reference
-    Ducklake maintenance or partition configuration.
-
-    Args:
-        empty_report: Empty ValidationReport fixture.
-    """
-    empty_report.add_issue(
-        ValidationIssue(IssueType.PERFORMANCE_ISSUE, IssueSeverity.LOW, "fact_table")
-    )
-    empty_report.finalize()
-
-    # Vérification qu'une recommandation de performance a été générée
-    assert len(empty_report.recommendations) > 0
-    perf_recommendation = next(
-        (
-            r
-            for r in empty_report.recommendations
-            if "performance" in r.lower()
-            or "ducklake" in r.lower()
-            or "partition" in r.lower()
-        ),
-        None,
-    )
-    assert perf_recommendation is not None
-    # Vérification que la recommandation ne mentionne plus les index DuckDB
-    assert "index" not in perf_recommendation.lower()
-
-
 # Test que finalize génère des recommandations pour les issues d'intégrité de schéma
 def test_validation_report_finalize_generates_schema_recommendation(
     empty_report: Any,
@@ -284,403 +254,371 @@ def test_database_auditor_catalog_alias(built_ducklake_schema: Any) -> None:
     assert custom.schema == "predictions"
 
 
-# Test de validate_database au niveau BASIC
-def test_validate_database_basic_level(built_ducklake_schema: Any) -> None:
-    """Test that validate_database with BASIC level returns a ValidationReport.
+# Fonction auxiliaire d'extraction des descriptions de problèmes
+def _descriptions(report: ValidationReport) -> list[str]:
+    """Return the descriptions of every issue of a report.
+
+    Args:
+        report: Finalized validation report.
+
+    Returns:
+        list[str]: Issue descriptions, in detection order.
+    """
+    return [issue.description for issue in report.issues]
+
+
+# Test qu'un schéma sain ne présente aucun problème, aux deux niveaux
+@pytest.mark.parametrize(
+    "level", [ValidationLevel.BASIC, ValidationLevel.COMPREHENSIVE]
+)
+def test_validate_database_clean_schema_has_no_issue(
+    built_ducklake_schema: Any, level: ValidationLevel
+) -> None:
+    """Test that a freshly built schema passes both audit levels.
 
     Args:
         built_ducklake_schema: Fixture providing a DuckDB connection with a built
         schema.
+        level: Audit level.
     """
-    auditor = DatabaseAuditor(connection=built_ducklake_schema)
-    report = auditor.validate_database(ValidationLevel.BASIC)
-
-    # Vérification du type de retour et du niveau de validation
-    assert isinstance(report, ValidationReport)
-    assert report.validation_level == ValidationLevel.BASIC
-    # Vérification que le rapport est finalisé (end_time renseigné)
+    report = DatabaseAuditor(connection=built_ducklake_schema).validate_database(level)
+    assert report.validation_level == level
+    assert report.issues == []
+    assert report.tables_validated == {"fact_table", "metadata", "dataset_metadata"}
     assert report.end_time is not None
 
 
-# Test de validate_database au niveau STANDARD
-def test_validate_database_standard_level(built_ducklake_schema: Any) -> None:
-    """Test that validate_database with STANDARD level returns a ValidationReport.
-
-    Args:
-        built_ducklake_schema: Fixture providing a DuckDB connection with a built
-        schema.
-    """
-    auditor = DatabaseAuditor(connection=built_ducklake_schema)
-    report = auditor.validate_database(ValidationLevel.STANDARD)
-
-    assert isinstance(report, ValidationReport)
-    assert report.validation_level == ValidationLevel.STANDARD
-    # Une base saine ne doit pas avoir de problèmes critiques
-    assert report.get_critical_issues_count() == 0
-
-
-# Test de validate_database au niveau COMPREHENSIVE
-def test_validate_database_comprehensive_level(built_ducklake_schema: Any) -> None:
-    """Test that validate_database with COMPREHENSIVE level returns a valid report.
-
-    On a healthy in-memory schema there should be no critical issues.
-    The new Ducklake-specific checks (partition and maintenance) must not raise
-    unhandled exceptions on an in-memory connection.
-
-    Args:
-        built_ducklake_schema: Fixture providing a DuckDB connection with a built
-        schema.
-    """
-    auditor = DatabaseAuditor(connection=built_ducklake_schema)
-    report = auditor.validate_database(ValidationLevel.COMPREHENSIVE)
-
-    # Vérification du type de retour et du niveau de validation
-    assert isinstance(report, ValidationReport)
-    assert report.validation_level == ValidationLevel.COMPREHENSIVE
-    # Vérification qu'aucun problème critique n'est remonté sur un schéma sain
-    assert report.get_critical_issues_count() == 0
-
-
-# Test de get_quick_health_check
-def test_get_quick_health_check(built_ducklake_schema: Any) -> None:
-    """Test that get_quick_health_check returns a dict with expected keys.
-
-    Args:
-        built_ducklake_schema: Fixture providing a DuckDB connection with a built
-        schema.
-    """
-    auditor = DatabaseAuditor(connection=built_ducklake_schema)
-    health = auditor.get_quick_health_check()
-
-    # Vérification que le résultat est un dictionnaire
-    assert isinstance(health, dict)
-    # Vérification de la présence des clés retournées par get_quick_health_check
-    assert "fact_table_rows" in health
-    assert "metadata_entries" in health
-    assert "status" in health
-
-
-# Test de validate_operation_preconditions pour une opération d'insertion
-def test_validate_operation_preconditions_insert(
-    built_ducklake_schema: Any, sample_df: Any
-) -> None:
-    """Test that validate_operation_preconditions for 'insert' returns
-    a ValidationReport.
-
-    Args:
-        built_ducklake_schema: Fixture providing a DuckDB connection with a built
-        schema.
-        sample_df: Sample polars DataFrame.
-    """
-    import polars as pl
-
-    auditor = DatabaseAuditor(connection=built_ducklake_schema)
-    new_row = pl.DataFrame(
-        {
-            "id": [99],
-            "category": ["A"],
-            "value": [9.9],
-            "date": sample_df["date"][:1],
-            "status": ["active"],
-            "high_cardinality": ["val_999"],
-        }
-    )
-    report = auditor.validate_operation_preconditions("insert", df=new_row)
-
-    assert isinstance(report, ValidationReport)
-
-
-# Test de validate_operation_preconditions pour une opération de suppression
-def test_validate_operation_preconditions_delete(built_ducklake_schema: Any) -> None:
-    """Test that validate_operation_preconditions for 'delete' returns
-    a ValidationReport.
-
-    Args:
-        built_ducklake_schema: Fixture providing a DuckDB connection with a built
-        schema.
-    """
-    auditor = DatabaseAuditor(connection=built_ducklake_schema)
-    report = auditor.validate_operation_preconditions(
-        "delete", filters=[("id", "=", 1)]
-    )
-
-    assert isinstance(report, ValidationReport)
-
-
-# ===========================================================================
-# Tests des nouvelles vérifications Ducklake
-# ===========================================================================
-
-
-# Test de _validate_partition_configuration sur connexion in-memory
-def test_validate_partition_configuration_reports_missing_partition(
+# Test que le niveau BASIC ne balaie jamais la table des faits
+def test_validate_database_basic_does_not_scan_fact_table(
     built_ducklake_schema: Any,
 ) -> None:
-    """Test that _validate_partition_configuration reports a LOW PERFORMANCE_ISSUE
-    when no partition key is configured (case for all in-memory connections).
+    """Test that BASIC ignores data problems only a scan could detect.
+
+    A duplicated primary key is invisible at the BASIC level (no fact table scan)
+    and reported at the COMPREHENSIVE level.
 
     Args:
-        built_ducklake_schema: Fixture providing a DuckDB connection with a built
-        schema.
+        built_ducklake_schema: DuckDB connection with a built schema.
     """
-    auditor = DatabaseAuditor(connection=built_ducklake_schema)
-    report = ValidationReport(validation_level=ValidationLevel.COMPREHENSIVE)
-
-    # Appel direct de la méthode pour isoler son comportement
-    auditor._validate_partition_configuration(report)
-
-    # Vérification qu'un problème de performance est bien signalé
-    perf_issues = report.get_issues_by_type(IssueType.PERFORMANCE_ISSUE)
-    assert len(perf_issues) >= 1
-    # Vérification de la sévérité LOW
-    assert all(issue.severity == IssueSeverity.LOW for issue in perf_issues)
-    # Vérification que le problème concerne la table des faits
-    assert any(issue.table_name == "fact_table" for issue in perf_issues)
-
-
-# Test de _validate_ducklake_maintenance silencieux sur connexion in-memory
-def test_validate_ducklake_maintenance_silent_on_in_memory(
-    built_ducklake_schema: Any,
-) -> None:
-    """Test that _validate_ducklake_maintenance adds no issues on in-memory connections.
-
-    Ducklake catalog functions (ducklake_snapshots, ducklake_data_files) are not
-    available on in-memory DuckDB connections. The method must fail silently and
-    not add any issues or raise exceptions.
-
-    Args:
-        built_ducklake_schema: Fixture providing a DuckDB connection with a built
-        schema.
-    """
-    auditor = DatabaseAuditor(connection=built_ducklake_schema)
-    report = ValidationReport(validation_level=ValidationLevel.COMPREHENSIVE)
-
-    # Appel direct — ne doit pas lever d'exception
-    auditor._validate_ducklake_maintenance(report)
-
-    # Vérification qu'aucun problème n'est ajouté sur une connexion in-memory
-    assert len(report.issues) == 0
-
-
-# Test que _validate_dataset_metadata signale une table absente
-def test_validate_dataset_metadata_missing_table(built_ducklake_schema: Any) -> None:
-    """Test that a missing dataset_metadata table is reported.
-
-    Args:
-        built_ducklake_schema: Fixture providing a DuckDB connection with a built
-        schema.
-    """
-    # Suppression de la table descriptive du jeu de résultats
-    built_ducklake_schema.execute("DROP TABLE dataset_metadata")
-
-    auditor = DatabaseAuditor(connection=built_ducklake_schema)
-    report = ValidationReport(validation_level=ValidationLevel.BASIC)
-
-    auditor._validate_dataset_metadata(report)
-
-    issues = report.get_issues_by_type(IssueType.MISSING_METADATA)
-    assert len(issues) == 1
-    assert issues[0].table_name == "dataset_metadata"
-
-
-# Test que _validate_dataset_metadata accepte une table à une seule ligne
-def test_validate_dataset_metadata_single_row(built_ducklake_schema: Any) -> None:
-    """Test that a well-formed dataset_metadata table raises no issue.
-
-    Args:
-        built_ducklake_schema: Fixture providing a DuckDB connection with a built
-        schema.
-    """
-    auditor = DatabaseAuditor(connection=built_ducklake_schema)
-    report = ValidationReport(validation_level=ValidationLevel.BASIC)
-
-    auditor._validate_dataset_metadata(report)
-
-    assert len(report.issues) == 0
-    assert "dataset_metadata" in report.tables_validated
-
-
-# Test que _validate_dataset_metadata signale une cardinalité anormale
-def test_validate_dataset_metadata_extra_row(built_ducklake_schema: Any) -> None:
-    """Test that a dataset_metadata table holding more than one row is reported.
-
-    Args:
-        built_ducklake_schema: Fixture providing a DuckDB connection with a built
-        schema.
-    """
-    # Ajout d'une seconde ligne descriptive, ce que le schéma interdit
     built_ducklake_schema.execute(
-        "INSERT INTO dataset_metadata (schema_version) VALUES (1)"
+        "INSERT INTO fact_table SELECT * FROM fact_table WHERE id = 1"
     )
-
     auditor = DatabaseAuditor(connection=built_ducklake_schema)
-    report = ValidationReport(validation_level=ValidationLevel.BASIC)
 
-    auditor._validate_dataset_metadata(report)
+    assert auditor.validate_database(ValidationLevel.BASIC).issues == []
+    comprehensive = auditor.validate_database(ValidationLevel.COMPREHENSIVE)
+    violations = comprehensive.get_issues_by_type(IssueType.CONSTRAINT_VIOLATION)
+    assert len(violations) == 1
+    assert violations[0].affected_rows == 1
 
+
+# Test qu'une table manquante est signalée avec la sévérité attendue
+@pytest.mark.parametrize(
+    ("table", "severity"),
+    [
+        ("metadata", IssueSeverity.CRITICAL),
+        ("fact_table", IssueSeverity.HIGH),
+        ("dataset_metadata", IssueSeverity.HIGH),
+    ],
+)
+def test_validate_database_reports_missing_table(
+    built_ducklake_schema: Any, table: str, severity: IssueSeverity
+) -> None:
+    """Test that each missing table of the result set is reported.
+
+    Args:
+        built_ducklake_schema: DuckDB connection with a built schema.
+        table: Table dropped before the audit.
+        severity: Expected severity of the issue.
+    """
+    built_ducklake_schema.execute(f"DROP TABLE {table}")
+    report = DatabaseAuditor(connection=built_ducklake_schema).validate_database()
+    missing = [
+        i for i in report.issues if i.description == f"Table '{table}' is missing"
+    ]
+    assert len(missing) == 1
+    assert missing[0].severity == severity
+
+
+# Test qu'une connexion illisible produit un problème critique au lieu d'une exception
+def test_validate_database_unreadable_state_is_critical(
+    built_ducklake_schema: Any,
+) -> None:
+    """Test that a failure to read the schema state becomes a critical issue.
+
+    Args:
+        built_ducklake_schema: DuckDB connection with a built schema.
+    """
+    auditor = DatabaseAuditor(connection=built_ducklake_schema)
+
+    def _boom() -> Any:
+        raise RuntimeError("catalog unreachable")
+
+    setattr(auditor, "_read_state", _boom)
+    report = auditor.validate_database()
+    assert report.get_critical_issues_count() == 1
+    assert "catalog unreachable" in report.issues[0].description
+
+
+# Test qu'un contrôle en échec est signalé sans interrompre l'audit
+def test_validate_database_failing_check_is_reported(
+    built_ducklake_schema: Any,
+) -> None:
+    """Test that a check raising an exception is reported and the others still run.
+
+    Args:
+        built_ducklake_schema: DuckDB connection with a built schema.
+    """
+    auditor = DatabaseAuditor(connection=built_ducklake_schema)
+
+    def _boom(report: Any, state: Any) -> None:
+        raise RuntimeError("check crashed")
+
+    setattr(auditor, "_validate_dataset_metadata", _boom)
+    built_ducklake_schema.execute("DELETE FROM metadata WHERE name = 'status'")
+
+    report = auditor.validate_database()
+    descriptions = _descriptions(report)
+    assert any("check crashed" in d for d in descriptions)
+    assert any("'status'" in d for d in descriptions)
+
+
+# Test que la cardinalité de dataset_metadata est contrôlée
+def test_validate_dataset_metadata_extra_row(built_ducklake_schema: Any) -> None:
+    """Test that a second dataset_metadata row is reported.
+
+    Args:
+        built_ducklake_schema: DuckDB connection with a built schema.
+    """
+    built_ducklake_schema.execute(
+        "INSERT INTO dataset_metadata SELECT * FROM dataset_metadata"
+    )
+    report = DatabaseAuditor(connection=built_ducklake_schema).validate_database()
     issues = report.get_issues_by_type(IssueType.MISSING_METADATA)
     assert len(issues) == 1
     assert issues[0].affected_rows == 2
 
 
-# Test que _validate_metadata_fact_consistency détecte une colonne non décrite
-def test_validate_metadata_fact_consistency_detects_undescribed_column(
+# Test que les écarts entre metadata et la table des faits sont signalés
+def test_validate_metadata_fact_consistency_both_directions(
     built_ducklake_schema: Any,
 ) -> None:
-    """Test that a fact table column without a metadata row is reported.
+    """Test that an undescribed column and an orphan metadata row are both reported.
 
     Args:
-        built_ducklake_schema: Fixture providing a DuckDB connection with a built
-        schema.
+        built_ducklake_schema: DuckDB connection with a built schema.
     """
-    # Ajout d'une colonne à la table des faits sans ligne de méta-données
-    built_ducklake_schema.execute("ALTER TABLE fact_table ADD COLUMN ghost VARCHAR")
+    built_ducklake_schema.execute("ALTER TABLE fact_table ADD COLUMN extra DOUBLE")
+    built_ducklake_schema.execute("ALTER TABLE fact_table DROP COLUMN status")
 
-    auditor = DatabaseAuditor(connection=built_ducklake_schema)
-    report = ValidationReport(validation_level=ValidationLevel.STANDARD)
-
-    auditor._validate_metadata_fact_consistency(report)
-
-    issues = report.get_issues_by_type(IssueType.MISSING_METADATA)
-    assert [issue.column_name for issue in issues] == ["ghost"]
-
-
-# Test que _validate_metadata_fact_consistency détecte une méta-donnée orpheline
-def test_validate_metadata_fact_consistency_detects_orphan_metadata(
-    built_ducklake_schema: Any,
-) -> None:
-    """Test that a metadata row without a fact table column is reported.
-
-    Args:
-        built_ducklake_schema: Fixture providing a DuckDB connection with a built
-        schema.
-    """
-    # Ajout d'une ligne de méta-données sans colonne correspondante
-    built_ducklake_schema.execute(
-        "INSERT INTO metadata (name, label, sql_type, is_categorical, is_primary_key)"
-        " VALUES ('ghost', 'Ghost', 'VARCHAR', FALSE, FALSE)"
+    report = DatabaseAuditor(connection=built_ducklake_schema).validate_database()
+    descriptions = _descriptions(report)
+    assert any(
+        "'extra' exists in fact_table but has no metadata" in d for d in descriptions
+    )
+    assert any(
+        "'status' is described in metadata but missing" in d for d in descriptions
     )
 
-    auditor = DatabaseAuditor(connection=built_ducklake_schema)
-    report = ValidationReport(validation_level=ValidationLevel.STANDARD)
 
-    auditor._validate_metadata_fact_consistency(report)
-
-    issues = report.get_issues_by_type(IssueType.SCHEMA_INCONSISTENCY)
-    assert [issue.column_name for issue in issues] == ["ghost"]
-
-
-# Test que _validate_metadata_fact_consistency ne signale rien sur un schéma sain
-def test_validate_metadata_fact_consistency_clean_schema(
+# Test qu'un écart de type entre metadata et la table des faits est signalé
+def test_validate_data_types_consistency_detects_mismatch(
     built_ducklake_schema: Any,
 ) -> None:
-    """Test that a freshly built schema raises no consistency issue.
+    """Test that a declared type differing from the physical one is reported.
 
     Args:
-        built_ducklake_schema: Fixture providing a DuckDB connection with a built
-        schema.
+        built_ducklake_schema: DuckDB connection with a built schema.
     """
-    auditor = DatabaseAuditor(connection=built_ducklake_schema)
-    report = ValidationReport(validation_level=ValidationLevel.STANDARD)
+    built_ducklake_schema.execute(
+        "UPDATE metadata SET sql_type = 'INTEGER' WHERE name = 'value'"
+    )
+    report = DatabaseAuditor(connection=built_ducklake_schema).validate_database()
+    mismatches = report.get_issues_by_type(IssueType.TYPE_MISMATCH)
+    assert [issue.column_name for issue in mismatches] == ["value"]
 
-    auditor._validate_metadata_fact_consistency(report)
 
-    assert len(report.issues) == 0
-
-
-# Test que _validate_value_labels_consistency ne signale rien en l'absence de
-# colonne de libellés déclarée
-def test_validate_value_labels_consistency_clean_schema(
-    built_ducklake_schema: Any,
-) -> None:
-    """Test that a schema declaring no label_for raises no issue.
+# Test des synonymes de types acceptés
+@pytest.mark.parametrize(
+    ("expected", "actual", "compatible"),
+    [
+        ("VARCHAR", "varchar", True),
+        ("TEXT", "VARCHAR", True),
+        ("INT", "INTEGER", True),
+        ("BOOL", "BOOLEAN", True),
+        ("INTEGER", "BIGINT", False),
+        ("DOUBLE", "FLOAT", False),
+    ],
+)
+def test_types_are_compatible(expected: str, actual: str, compatible: bool) -> None:
+    """Test the declared/physical type comparison.
 
     Args:
-        built_ducklake_schema: Fixture providing a DuckDB connection with a built
-        schema.
+        expected: Type declared in metadata.
+        actual: Physical type.
+        compatible: Expected outcome.
     """
-    auditor = DatabaseAuditor(connection=built_ducklake_schema)
-    report = ValidationReport(validation_level=ValidationLevel.STANDARD)
-
-    auditor._validate_value_labels_consistency(report)
-
-    assert len(report.issues) == 0
+    assert DatabaseAuditor._types_are_compatible(expected, actual) is compatible
 
 
-# Test que _validate_value_labels_consistency détecte une violation structurelle
-# (forme de la colonne de libellés) sur une base corrompue à la main
-def test_validate_value_labels_consistency_detects_invariant_violation(
+# Test que la forêt des parent_name est contrôlée (cycle et parent inconnu)
+def test_validate_column_links_detects_cycle_and_unknown_parent(
     built_ducklake_schema: Any,
 ) -> None:
-    """Test that a hand-set label_for on a non-VARCHAR column is reported.
+    """Test that a parent_name cycle and a dangling parent are both reported.
 
-    'value' (DOUBLE) is given a label_for pointing at 'category' directly via SQL,
-    bypassing update_column_metadata's own validation.
+    The links are written directly in metadata, as a base modified outside of the
+    package would be; ``update_column_metadata`` refuses them.
 
     Args:
-        built_ducklake_schema: Fixture providing a DuckDB connection with a built
-        schema.
+        built_ducklake_schema: DuckDB connection with a built schema.
+    """
+    built_ducklake_schema.execute(
+        "UPDATE metadata SET parent_name = 'status' WHERE name = 'category'"
+    )
+    built_ducklake_schema.execute(
+        "UPDATE metadata SET parent_name = 'category' WHERE name = 'status'"
+    )
+    built_ducklake_schema.execute(
+        "UPDATE metadata SET parent_name = 'ghost' WHERE name = 'value'"
+    )
+    report = DatabaseAuditor(connection=built_ducklake_schema).validate_database()
+    descriptions = _descriptions(report)
+    assert any("Cycle detected" in d for d in descriptions)
+    assert any("references 'ghost'" in d for d in descriptions)
+
+
+# Test que les déclarations label_for invalides sont signalées au niveau BASIC
+def test_validate_column_links_detects_invalid_label_for(
+    built_ducklake_schema: Any,
+) -> None:
+    """Test that a label_for on a non-VARCHAR column is reported without a scan.
+
+    Args:
+        built_ducklake_schema: DuckDB connection with a built schema.
     """
     built_ducklake_schema.execute(
         "UPDATE metadata SET label_for = 'category' WHERE name = 'value'"
     )
-
-    auditor = DatabaseAuditor(connection=built_ducklake_schema)
-    report = ValidationReport(validation_level=ValidationLevel.STANDARD)
-
-    auditor._validate_value_labels_consistency(report)
-
-    issues = report.get_issues_by_type(IssueType.SCHEMA_INCONSISTENCY)
-    assert len(issues) == 1
-    assert "VARCHAR" in issues[0].description
+    report = DatabaseAuditor(connection=built_ducklake_schema).validate_database(
+        ValidationLevel.BASIC
+    )
+    assert any("Invalid label_for declaration" in d for d in _descriptions(report))
 
 
-# Test que _validate_value_labels_consistency détecte une violation de la
-# dépendance fonctionnelle sur une base corrompue à la main
-def test_validate_value_labels_consistency_detects_dependency_violation(
+# Test que la dépendance code -> libellé est contrôlée au niveau COMPREHENSIVE
+def test_validate_value_label_dependencies_detects_violation() -> None:
+    """Test that a code carrying two labels is a critical COMPREHENSIVE issue."""
+    df = pl.DataFrame(
+        {
+            "id": [1, 2, 3],
+            "nc8": ["01", "01", "02"],
+            "nc8_libelle": ["Chevaux", "Chevaux", "Bovins"],
+        }
+    )
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        builder = DuckLakeTablesBuilder(
+            df,
+            categorical_threshold=10,
+            primary_keys=["id"],
+            value_labels={"nc8_libelle": "nc8"},
+        )
+    builder.build_schema()
+    # Corruption hors du package : un second libellé pour le code '01'
+    builder.conn.execute("UPDATE fact_table SET nc8_libelle = 'Autre' WHERE id = 2")
+
+    auditor = DatabaseAuditor(connection=builder.conn)
+    assert auditor.validate_database(ValidationLevel.BASIC).issues == []
+    report = auditor.validate_database(ValidationLevel.COMPREHENSIVE)
+    assert report.get_critical_issues_count() == 1
+    assert report.issues[0].column_name == "nc8_libelle"
+
+
+# Test du contrôle de qualité : colonne entièrement nulle et colonne majoritairement
+# nulle
+def test_validate_data_quality_distinguishes_null_shares(
     built_ducklake_schema: Any,
 ) -> None:
-    """Test that a hand-set label_for violating the functional dependency is
-    reported as a critical constraint violation, with the faulty codes named.
+    """Test that a fully null column is HIGH and a mostly null column is MEDIUM.
 
-    'category' is given a label_for pointing at 'status' directly via SQL:
-    'status'='active' maps to both 'category'='A' and 'category'='C' in the
-    built schema fixture, violating the dependency.
+    The fully null case is tested before the 50% threshold, which it also exceeds.
 
     Args:
-        built_ducklake_schema: Fixture providing a DuckDB connection with a built
-        schema.
+        built_ducklake_schema: DuckDB connection with a built schema (5 rows).
     """
-    built_ducklake_schema.execute(
-        "UPDATE metadata SET label_for = 'status' WHERE name = 'category'"
+    built_ducklake_schema.execute("UPDATE fact_table SET status = NULL")
+    built_ducklake_schema.execute("UPDATE fact_table SET value = NULL WHERE id <= 3")
+    report = DatabaseAuditor(connection=built_ducklake_schema).validate_database(
+        ValidationLevel.COMPREHENSIVE
+    )
+    by_column = {
+        issue.column_name: issue
+        for issue in report.get_issues_by_type(IssueType.DATA_INTEGRITY)
+    }
+    assert by_column["status"].severity == IssueSeverity.HIGH
+    assert "only null values" in by_column["status"].description
+    assert by_column["value"].severity == IssueSeverity.MEDIUM
+    assert by_column["value"].affected_rows == 3
+
+
+# Test du contrôle de qualité sur une table vide
+def test_validate_data_quality_empty_fact_table(built_ducklake_schema: Any) -> None:
+    """Test that an empty fact table is reported once, not column by column.
+
+    Args:
+        built_ducklake_schema: DuckDB connection with a built schema.
+    """
+    built_ducklake_schema.execute("DELETE FROM fact_table")
+    report = DatabaseAuditor(connection=built_ducklake_schema).validate_database(
+        ValidationLevel.COMPREHENSIVE
+    )
+    assert _descriptions(report) == ["Fact table is empty"]
+
+
+# Test que l'auditeur audite le schéma demandé
+def test_validate_database_targets_its_schema(
+    multi_schema_connection: Any,
+) -> None:
+    """Test that each schema of a shared catalog is audited independently.
+
+    Args:
+        multi_schema_connection: Connection with 'predictions' and 'shapley'
+            schemas.
+    """
+    multi_schema_connection.execute("DROP TABLE shapley.dataset_metadata")
+    predictions = DatabaseAuditor(multi_schema_connection, schema="predictions")
+    shapley = DatabaseAuditor(multi_schema_connection, schema="shapley")
+    assert predictions.validate_database().issues == []
+    assert any(
+        "dataset_metadata" in d for d in _descriptions(shapley.validate_database())
     )
 
-    auditor = DatabaseAuditor(connection=built_ducklake_schema)
-    report = ValidationReport(validation_level=ValidationLevel.STANDARD)
 
-    auditor._validate_value_labels_consistency(report)
+# Test du contrôle de santé rapide
+def test_get_quick_health_check(built_ducklake_schema: Any) -> None:
+    """Test that the quick health check reports a healthy built schema.
 
-    issues = report.get_issues_by_type(IssueType.CONSTRAINT_VIOLATION)
-    assert len(issues) == 1
-    assert issues[0].severity == IssueSeverity.CRITICAL
-    assert "active" in issues[0].description
+    Args:
+        built_ducklake_schema: DuckDB connection with a built schema.
+    """
+    health = DatabaseAuditor(connection=built_ducklake_schema).get_quick_health_check()
+    assert health["status"] == "healthy"
+    assert health["fact_table_rows"] == 5
+    assert health["metadata_entries"] == 6
+    assert health["has_dataset_metadata"] is True
+    assert health["critical_issues"] == 0
 
 
-# Test que le niveau STANDARD de validate_database inclut le contrôle des libellés
-def test_validate_database_standard_includes_value_labels(
+# Test du contrôle de santé rapide sur un schéma sans métadonnées
+def test_get_quick_health_check_critical_without_metadata(
     built_ducklake_schema: Any,
 ) -> None:
-    """Test that validate_database(STANDARD) surfaces a value-label violation.
+    """Test that a missing metadata table makes the health check critical.
 
     Args:
-        built_ducklake_schema: Fixture providing a DuckDB connection with a built
-        schema.
+        built_ducklake_schema: DuckDB connection with a built schema.
     """
-    built_ducklake_schema.execute(
-        "UPDATE metadata SET label_for = 'status' WHERE name = 'category'"
-    )
-
-    auditor = DatabaseAuditor(connection=built_ducklake_schema)
-    report = auditor.validate_database(ValidationLevel.STANDARD)
-
-    assert report.get_critical_issues_count() > 0
+    built_ducklake_schema.execute("DROP TABLE metadata")
+    health = DatabaseAuditor(connection=built_ducklake_schema).get_quick_health_check()
+    assert health["status"] == "critical"

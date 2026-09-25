@@ -1,6 +1,7 @@
 # Importation des modules
 # Modules de base
 import os
+import re
 from enum import StrEnum
 from pathlib import Path
 from typing import Literal
@@ -13,13 +14,16 @@ import psycopg2
 
 # Module d'initialisation du logger
 from ..utils.logger import _init_logger
+from ..utils.sql import quote_literal
 
 # Nom du logger de ce module (fichier par défaut : <cwd>/logs/ducklake_connector.log)
 _LOGGER_NAME = "ducklake_connector"
 
-# Options DuckLake recommandées : compression zstd, format Parquet v2, taille
-# cible de fichier (unité obligatoire), taille de row group alignée sur des lots
-# de quelques dizaines de milliers de lignes.
+# Options DuckLake recommandées : compression zstd, format Parquet v2 et taille
+# cible de fichier (unité obligatoire). La taille de row group de 122 880 lignes
+# est déjà la valeur appliquée par DuckDB sans option : elle est
+# explicitée pour que la granularité de l'élagage par row group reste visible et
+# indépendante d'un changement de défaut du moteur.
 # `data_inlining_row_limit` est volontairement exclu : c'est un argument dédié du
 # connecteur (option d'ATTACH), pas une option de post-attachement.
 RECOMMENDED_DUCKLAKE_OPTIONS: dict[str, str | int] = {
@@ -75,6 +79,45 @@ def _quote_literal(value: str) -> str:
     """
     # Doublage des apostrophes : seul caractère à neutraliser dans un littéral SQL
     return value.replace("'", "''")
+
+
+# Motif d'un chemin distant (schéma d'URL : s3://, gs://, az://, https://, ...)
+_URL_SCHEME = re.compile(r"^[A-Za-z][A-Za-z0-9+.-]*://")
+
+
+# Fonction de normalisation d'un chemin de données local
+def _normalize_data_path(data_path: str) -> str:
+    """Return a local ``data_path`` as an absolute path; leave a URL unchanged.
+
+    DuckLake records the ``DATA_PATH`` of a catalog as it is given on creation
+    and refuses a later ``ATTACH`` whose ``DATA_PATH`` differs from it, so the
+    same directory passed once relative and once absolute cannot be attached
+    (measured). A relative path is moreover resolved against the working
+    directory of each process, so it may designate another directory for an API
+    than for the job that wrote the data. Normalizing it to an absolute path
+    removes both pitfalls; the trailing separator, if any, is kept.
+
+    Args:
+        data_path (str): Data directory, local (relative or absolute) or remote
+            (``s3://…`` and other URL schemes).
+
+    Returns:
+        str: The absolute local path, or ``data_path`` unchanged for a URL.
+
+    Examples:
+        >>> _normalize_data_path("s3://bucket/prefix/")
+        's3://bucket/prefix/'
+        >>> os.path.isabs(_normalize_data_path("data/"))
+        True
+    """
+    # Chemin distant : laissé tel quel
+    if _URL_SCHEME.match(data_path):
+        return data_path
+    # Chemin local : rendu absolu, séparateur final conservé
+    absolute = os.path.abspath(data_path)
+    if data_path.endswith(("/", "\\")) and not absolute.endswith(os.sep):
+        absolute += os.sep
+    return absolute
 
 
 # Classe de connexion à un catalogue DuckLake
@@ -182,7 +225,11 @@ class DuckLakeConnector:
                 For other backends, a backend-prefixed connection string (e.g.
                 ``'postgres:dbname=ducklake'`` or ``'sqlite:catalog.sqlite'``).
             data_path (str): Directory where Parquet data files are stored
-                (e.g. ``'data/files/'`` or ``'s3://bucket/prefix/'``). Unlike
+                (e.g. ``'data/files/'`` or ``'s3://bucket/prefix/'``). A local
+                path is normalized to an absolute path, so that the catalog records
+                a location that does not depend on the working directory; a
+                catalog created earlier with a relative path is still attached with
+                that path as given. Unlike
                 ``catalog_path``, an S3 ``data_path`` works normally for both
                 reads and writes. When either ``data_path`` or ``catalog_path``
                 starts with ``s3://``, the ``httpfs`` extension is loaded and
@@ -199,7 +246,8 @@ class DuckLakeConnector:
                 build an ``AT (VERSION => n)`` clause.
             snapshot_time (Optional[str]): Open a historical snapshot by
                 timestamp (ISO-8601 string, e.g. ``'2025-01-01 00:00:00'``).
-                Implies ``READ_ONLY``. Defaults to None.
+                Implies ``READ_ONLY``. Defaults to None. Mutually exclusive with
+                ``snapshot_version``.
                 Same restriction as ``snapshot_version`` above; prefer
                 :meth:`at_clause` when a connection is already open.
             catalog_alias (str): Alias for the attached DuckLake catalog in SQL
@@ -263,6 +311,10 @@ class DuckLakeConnector:
                 Defaults to None (engine default: inlining enabled).
             log_filename (Optional[os.PathLike]): Path to the log file.
 
+        Raises:
+            ValueError: If both ``snapshot_version`` and ``snapshot_time`` are set,
+                or if ``catalog_type`` is not a supported backend.
+
         Examples:
             >>> connector = DuckLakeConnector('catalog.ducklake', 'data/')
             >>> conn = connector.connect()
@@ -272,9 +324,18 @@ class DuckLakeConnector:
             ... )
             >>> conn = connector.connect()
         """
-        # Stockage des paramètres de connexion
+        # Voyage dans le temps : une seule référence de snapshot à la fois
+        if snapshot_version is not None and snapshot_time is not None:
+            raise ValueError(
+                "snapshot_version and snapshot_time are mutually exclusive"
+            )
+
+        # Stockage des paramètres de connexion. Le chemin de données local est
+        # rendu absolu ; le chemin tel que fourni est conservé pour attacher un
+        # catalogue existant créé avec ce chemin relatif.
         self.catalog_path = str(catalog_path)
-        self.data_path = str(data_path)
+        self._data_path_as_given = str(data_path)
+        self.data_path = _normalize_data_path(self._data_path_as_given)
         # Normalisation du backend de catalogue (accepte une chaîne ou un CatalogType).
         # CatalogType(...) valide la valeur et lève ValueError si elle est inconnue.
         self.catalog_type = CatalogType(catalog_type)
@@ -398,9 +459,9 @@ class DuckLakeConnector:
         # (catalogue et données)
         self._ensure_paths_exist()
 
-        # Construction de la chaîne d'options ATTACH
-        attach_sql = self._build_attach_sql()
-        conn.execute(attach_sql)
+        # Attachement du catalogue
+        self._attach_catalog(conn)
+        # Logging
         self.logger.info(
             f"DuckLake catalog attached : '{self.catalog_path}' "
             f"(type={self.catalog_type.value}, alias={self.catalog_alias}, "
@@ -440,24 +501,30 @@ class DuckLakeConnector:
                 or an empty string for the current snapshot.
 
         Raises:
-            ValueError: If both ``snapshot_version`` and ``snapshot_time`` are set.
+            ValueError: If both ``snapshot_version`` and ``snapshot_time`` are set
+                (e.g. after changing the attributes of the connector).
 
         Examples:
             >>> c = DuckLakeConnector('cat.ducklake', 'data/', snapshot_version=3)
             >>> c.at_clause()
             'AT (VERSION => 3)'
             >>> c2 = DuckLakeConnector('cat.ducklake', 'data/',
-            snapshot_time='2025-01-01')
+            ...     snapshot_time='2025-01-01')
             >>> c2.at_clause()
             "AT (TIMESTAMP => '2025-01-01')"
             >>> DuckLakeConnector('cat.ducklake', 'data/').at_clause()
             ''
         """
+        # Une seule référence de snapshot à la fois
+        if self.snapshot_version is not None and self.snapshot_time is not None:
+            raise ValueError(
+                "snapshot_version and snapshot_time are mutually exclusive"
+            )
         # Génération de la clause AT selon les paramètres de time-travel configurés
         if self.snapshot_version is not None:
-            return f"AT (VERSION => {self.snapshot_version})"
+            return f"AT (VERSION => {int(self.snapshot_version)})"
         if self.snapshot_time is not None:
-            return f"AT (TIMESTAMP => '{self.snapshot_time}')"
+            return f"AT (TIMESTAMP => {quote_literal(self.snapshot_time)})"
         return ""
 
     # Attachement d'un catalogue DuckLake à une connexion DuckDB existante
@@ -506,8 +573,7 @@ class DuckLakeConnector:
         self._ensure_paths_exist()
 
         # Attachement du catalogue sur la connexion existante
-        attach_sql = self._build_attach_sql()
-        conn.execute(attach_sql)
+        self._attach_catalog(conn)
         # Création éventuelle puis activation du schéma cible.
         # Ignorée lorsque activate_schema est False : dans un contexte
         # multi-catalogues, le USE d'un catalogue secondaire volerait le
@@ -556,6 +622,8 @@ class DuckLakeConnector:
         s3_access_key_id: str | None = None,
         s3_secret_access_key: str | None = None,
         s3_session_token: str | None = None,
+        ducklake_options: dict[str, str | int] | Literal["recommended"] | None = None,
+        data_inlining_row_limit: int | None = None,
         log_filename: str | os.PathLike[str] | None = None,
     ) -> "DuckLakeConnector":
         """
@@ -640,16 +708,32 @@ class DuckLakeConnector:
                 temporary credentials (e.g. Onyxia's injected
                 ``AWS_SESSION_TOKEN``). Only meaningful with
                 ``s3_access_key_id``/``s3_secret_access_key``. Defaults to None.
+            ducklake_options (dict[str, str | int] | Literal['recommended'] | None):
+                DuckLake options applied after ``ATTACH`` (``'recommended'`` for
+                :data:`RECOMMENDED_DUCKLAKE_OPTIONS`), as for the constructor.
+                Never applied on a read-only connection. Defaults to None.
+            data_inlining_row_limit (Optional[int]): ``DATA_INLINING_ROW_LIMIT``
+                ATTACH option (``0`` disables data inlining), as for the
+                constructor. Defaults to None (engine default).
             log_filename (Optional[os.PathLike]): Path to the log file.
 
         Returns:
             DuckLakeConnector: A connector configured for the PostgreSQL backend.
+
+        Raises:
+            ValueError: If both ``snapshot_version`` and ``snapshot_time`` are set.
 
         Examples:
             >>> # Read-write update job (inline credentials)
             >>> rw = DuckLakeConnector.from_postgres(
             ...     'data/', dbname='ducklake', host='localhost',
             ...     user='app', password='***',
+            ... )
+            >>> # Production writer: recommended options, no inlining at build
+            >>> writer = DuckLakeConnector.from_postgres(
+            ...     's3://bucket/prefix/', dbname='ducklake', host='db.internal',
+            ...     user='app', password='***', ducklake_options='recommended',
+            ...     data_inlining_row_limit=0,
             ... )
             >>> # Read-only API, reusing a secret created out of band
             >>> ro = DuckLakeConnector.from_postgres(
@@ -733,6 +817,8 @@ class DuckLakeConnector:
             s3_access_key_id=s3_access_key_id,
             s3_secret_access_key=s3_secret_access_key,
             s3_session_token=s3_session_token,
+            ducklake_options=ducklake_options,
+            data_inlining_row_limit=data_inlining_row_limit,
             log_filename=log_filename,
         )
         # Mémorisation du SQL de création du secret (exécuté avant ATTACH)
@@ -1124,12 +1210,50 @@ class DuckLakeConnector:
         if not self._uses_s3:
             Path(self.data_path).mkdir(parents=True, exist_ok=True)
 
+    # Attachement du catalogue, avec repli sur le chemin de données tel que fourni
+    def _attach_catalog(self, conn: duckdb.DuckDBPyConnection) -> None:
+        """
+        Execute the ``ATTACH`` statement on ``conn``.
+
+        The local ``data_path`` is attached as an absolute path. A catalog created
+        before this normalization with a relative path records that relative path,
+        and DuckLake refuses any other ``DATA_PATH`` for it: in that single case the
+        ``ATTACH`` is retried once with the path exactly as the caller gave it, and
+        a warning suggests recreating the catalog with an absolute path.
+
+        Args:
+            conn (duckdb.DuckDBPyConnection): Connection on which to attach the
+                catalog.
+
+        Raises:
+            duckdb.Error: If the catalog cannot be attached.
+        """
+        try:
+            # Connexion au catalogue
+            conn.execute(self._build_attach_sql())
+        except duckdb.Error as e:
+            # Repli limité au refus d'un chemin différent de celui du catalogue
+            if self.data_path == self._data_path_as_given or (
+                "does not match existing data path" not in str(e)
+            ):
+                raise
+            # Connexion au chemin brut
+            conn.execute(self._build_attach_sql(self._data_path_as_given))
+            # Logging
+            self.logger.warning(
+                f"Catalog '{self.catalog_path}' records the relative data path"
+                f" '{self._data_path_as_given}', resolved against the working"
+                " directory of each process: prefer an absolute data path"
+            )
+
     # Construction de la clause SQL ATTACH avec les options appropriées
-    def _build_attach_sql(self) -> str:
+    def _build_attach_sql(self, data_path: str | None = None) -> str:
         """
         Build the ``ATTACH`` SQL statement from the connector configuration.
 
-        The option string is built incrementally:
+        Every string value (catalog locator, paths, secret name, timestamp) is
+        written as an escaped SQL literal. The option string is built
+        incrementally:
         - ``DATA_PATH`` is always included.
         - ``META_SECRET`` is appended when a credential secret is configured
           (PostgreSQL backend).
@@ -1138,27 +1262,38 @@ class DuckLakeConnector:
         - ``DATA_INLINING_ROW_LIMIT`` is appended when configured (plain integer,
           no unit/quotes).
 
+        Args:
+            data_path (Optional[str]): Data path to attach with. Defaults to None
+                (the normalized ``self.data_path``).
+
         Returns:
             str: The complete ``ATTACH`` SQL statement.
+
+        Examples:
+            >>> DuckLakeConnector('cat.ducklake', 's3://b/p/')._build_attach_sql()
+            "ATTACH 'ducklake:cat.ducklake' AS db (DATA_PATH 's3://b/p/')"
         """
         # Liste des options ATTACH à construire
-        options = [f"DATA_PATH '{self.data_path}'"]
+        path = data_path if data_path is not None else self.data_path
+        options = [f"DATA_PATH {quote_literal(path)}"]
 
         # Limite d'inlining : entier nu (mesuré), pas de guillemets
         if self.data_inlining_row_limit is not None:
-            options.append(f"DATA_INLINING_ROW_LIMIT {self.data_inlining_row_limit}")
+            options.append(
+                f"DATA_INLINING_ROW_LIMIT {int(self.data_inlining_row_limit)}"
+            )
 
         # Référence au secret d'identifiants du catalogue (backend PostgreSQL)
         if self.meta_secret is not None:
-            options.append(f"META_SECRET '{self.meta_secret}'")
+            options.append(f"META_SECRET {quote_literal(self.meta_secret)}")
 
         # Ajout de l'option SNAPSHOT_VERSION si une version est spécifiée
         # (implique READ_ONLY automatiquement selon la spec DuckLake)
         if self.snapshot_version is not None:
-            options.append(f"SNAPSHOT_VERSION {self.snapshot_version}")
+            options.append(f"SNAPSHOT_VERSION {int(self.snapshot_version)}")
         # Ajout de l'option SNAPSHOT_TIME si un timestamp est spécifié
         elif self.snapshot_time is not None:
-            options.append(f"SNAPSHOT_TIME '{self.snapshot_time}'")
+            options.append(f"SNAPSHOT_TIME {quote_literal(self.snapshot_time)}")
         # Ajout de READ_ONLY si demandé explicitement (hors time travel)
         elif self.read_only:
             options.append("READ_ONLY")
@@ -1166,6 +1301,6 @@ class DuckLakeConnector:
         # Assemblage de la requête ATTACH finale
         options_str = ", ".join(options)
         return (
-            f"ATTACH 'ducklake:{self.catalog_path}' AS {self.catalog_alias}"
-            f" ({options_str})"
+            f"ATTACH {quote_literal('ducklake:' + self.catalog_path)}"
+            f" AS {self.catalog_alias} ({options_str})"
         )

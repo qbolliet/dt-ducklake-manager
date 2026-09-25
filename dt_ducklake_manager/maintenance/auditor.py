@@ -9,33 +9,43 @@ from typing import Any
 # DuckDB
 import duckdb
 import narwhals as nw
-from narwhals.typing import IntoDataFrame
 
 # Import des utilitaires
+from ..utils.hierarchy import validate_hierarchy_forest
 from ..utils.logger import _init_logger
 from ..utils.sql import SchemaScoped, quote_ident, resolve_catalog
 from ..utils.types import METADATA_COLUMNS
 from ..utils.value_labels import check_value_label_dependency, validate_value_labels
 
+# Tables composant un jeu de résultats
+RESULT_SET_TABLES: tuple[str, ...] = ("fact_table", "metadata", "dataset_metadata")
+
 
 # Classe des niveaux de validation sur la base de données
 class ValidationLevel(Enum):
-    """Validation levels for database auditing."""
+    """Validation levels for database auditing.
+
+    Attributes:
+        BASIC: Structural checks reading only the catalog and the small
+            ``metadata``/``dataset_metadata`` tables, never scanning the fact
+            table: cheap enough to run after every write.
+        COMPREHENSIVE: ``BASIC`` plus the data checks that scan the fact table
+            (primary key uniqueness, code -> label functional dependency, null
+            shares), run on demand.
+    """
 
     BASIC = "basic"
-    STANDARD = "standard"
     COMPREHENSIVE = "comprehensive"
 
 
 # Classe des types de problèmes détectés
 class IssueType(Enum):
-    """Types of issues detected during audit."""
+    """Types of issues detected during an audit."""
 
     SCHEMA_INCONSISTENCY = "schema_inconsistency"
     DATA_INTEGRITY = "data_integrity"
     TYPE_MISMATCH = "type_mismatch"
     MISSING_METADATA = "missing_metadata"
-    PERFORMANCE_ISSUE = "performance_issue"
     CONSTRAINT_VIOLATION = "constraint_violation"
 
 
@@ -53,18 +63,24 @@ class IssueSeverity(Enum):
 @dataclass
 class ValidationIssue:
     """
-    Represents a validation issue found during database audit.
+    Represents a validation issue found during a database audit.
 
     Attributes:
-        issue_type (IssueType): Type of the issue
-        severity (IssueSeverity): Severity level of the issue
-        table_name (str): Name of the affected table
-        column_name (Optional[str]): Name of the affected column (if applicable)
-        description (str): Detailed description of the issue
-        suggested_fix (str): Suggested fix for the issue
-        affected_rows (Optional[int]): Number of affected rows (if applicable)
-        detected_at (float): Timestamp when issue was detected
-        additional_info (dict): Additional information about the issue
+        issue_type (IssueType): Type of the issue.
+        severity (IssueSeverity): Severity level of the issue.
+        table_name (str): Name of the affected table.
+        column_name (str | None): Name of the affected column, if applicable.
+        description (str): Detailed description of the issue.
+        suggested_fix (str): Suggested fix for the issue.
+        affected_rows (int | None): Number of affected rows, if applicable.
+        detected_at (float): Timestamp when the issue was detected.
+        additional_info (dict): Additional information about the issue.
+
+    Examples:
+        >>> issue = ValidationIssue(IssueType.DATA_INTEGRITY, IssueSeverity.HIGH,
+        ...     "fact_table")
+        >>> issue.severity
+        <IssueSeverity.HIGH: 'high'>
     """
 
     issue_type: IssueType
@@ -85,13 +101,19 @@ class ValidationReport:
     Contains the results of a database validation audit.
 
     Attributes:
-        validation_level (ValidationLevel): Level of validation performed
-        start_time (float): Timestamp when validation started
-        end_time (Optional[float]): Timestamp when validation ended
-        issues (List[ValidationIssue]): List of issues found
-        tables_validated (Set[str]): Set of tables that were validated
-        validation_summary (dict): Summary statistics of the validation
-        recommendations (List[str]): General recommendations for database health
+        validation_level (ValidationLevel): Level of validation performed.
+        start_time (float): Timestamp when the validation started.
+        end_time (float | None): Timestamp when the validation ended.
+        issues (list[ValidationIssue]): Issues found.
+        tables_validated (set[str]): Tables that were validated.
+        validation_summary (dict): Summary statistics of the validation.
+        recommendations (list[str]): General recommendations derived from the
+            issues.
+
+    Examples:
+        >>> report = ValidationReport(validation_level=ValidationLevel.BASIC)
+        >>> report.get_critical_issues_count()
+        0
     """
 
     validation_level: ValidationLevel
@@ -104,27 +126,49 @@ class ValidationReport:
 
     # Méthode d'ajout d'un problème
     def add_issue(self, issue: ValidationIssue) -> None:
-        """Add an issue to the report."""
+        """Add an issue to the report.
+
+        Args:
+            issue: The issue to append.
+        """
         self.issues.append(issue)
 
     # Méthode d'extraction des problèmes par sévérité
     def get_issues_by_severity(self, severity: IssueSeverity) -> list[ValidationIssue]:
-        """Get issues by severity level."""
+        """Get the issues of a given severity.
+
+        Args:
+            severity: Severity to filter on.
+
+        Returns:
+            list[ValidationIssue]: The matching issues, in detection order.
+        """
         return [issue for issue in self.issues if issue.severity == severity]
 
     # Méthode d'extraction des problèmes par type
     def get_issues_by_type(self, issue_type: IssueType) -> list[ValidationIssue]:
-        """Get issues by type."""
+        """Get the issues of a given type.
+
+        Args:
+            issue_type: Type to filter on.
+
+        Returns:
+            list[ValidationIssue]: The matching issues, in detection order.
+        """
         return [issue for issue in self.issues if issue.issue_type == issue_type]
 
     # Méthode de comptage des problèmes critiques
     def get_critical_issues_count(self) -> int:
-        """Get the count of critical issues."""
+        """Get the count of critical issues.
+
+        Returns:
+            int: Number of issues of severity ``CRITICAL``.
+        """
         return len(self.get_issues_by_severity(IssueSeverity.CRITICAL))
 
     # Méthode de finalisation du rapport d'audit avec des statistiques
     def finalize(self) -> None:
-        """Finalize the report with statistics."""
+        """Stamp the end time, then compute the summary and recommendations."""
         self.end_time = time.time()
 
         # Calcul des statistiques
@@ -135,9 +179,7 @@ class ValidationReport:
             "medium_issues": len(self.get_issues_by_severity(IssueSeverity.MEDIUM)),
             "low_issues": len(self.get_issues_by_severity(IssueSeverity.LOW)),
             "tables_validated": len(self.tables_validated),
-            "validation_duration": self.end_time - self.start_time
-            if self.end_time
-            else 0,
+            "validation_duration": self.end_time - self.start_time,
         }
 
         # Génération des recommandations
@@ -145,49 +187,70 @@ class ValidationReport:
 
     # Méthode auxiliaire de génération de recommandations
     def _generate_recommendations(self) -> None:
-        """Generate recommendations based on issues found."""
-        # Identification des erreurs critiques
+        """Derive general recommendations from the issues found."""
+        # Problèmes critiques
         critical_count = self.get_critical_issues_count()
         if critical_count > 0:
             self.recommendations.append(
-                f"Adress immediately the {critical_count} critical issues detected"
+                f"Address immediately the {critical_count} critical issue(s) detected"
             )
 
-        # Identification des erreurs de schéma
-        schema_issues = self.get_issues_by_type(IssueType.SCHEMA_INCONSISTENCY)
-        if schema_issues:
+        # Incohérences de schéma
+        if self.get_issues_by_type(IssueType.SCHEMA_INCONSISTENCY):
             self.recommendations.append("Review the consistency of the database schema")
 
-        # Identification des méta-données manquantes
-        metadata_issues = self.get_issues_by_type(IssueType.MISSING_METADATA)
-        if metadata_issues:
+        # Méta-données manquantes
+        if self.get_issues_by_type(IssueType.MISSING_METADATA):
             self.recommendations.append(
                 "Complete the metadata and dataset_metadata tables"
             )
 
-        # Identification des problèmes de performance
-        performance_issues = self.get_issues_by_type(IssueType.PERFORMANCE_ISSUE)
-        if performance_issues:
-            self.recommendations.append(
-                "Run Ducklake maintenance (compaction, snapshot expiration) and review"
-                " partition configuration to improve performance"
-            )
+
+# Photographie de l'état du schéma audité, lue une seule fois par audit
+@dataclass
+class _AuditState:
+    """State of the audited schema, read once and shared by every check.
+
+    Attributes:
+        tables (set[str]): Tables present in the audited schema.
+        metadata (nw.DataFrame | None): Rows of the ``metadata`` table, or None
+            when the table is absent.
+        fact_columns (dict[str, str]): Fact table column -> SQL type, in column
+            order; empty when the fact table is absent.
+    """
+
+    tables: set[str]
+    metadata: nw.DataFrame[Any] | None
+    fact_columns: dict[str, str]
 
 
 # Classe d'audit de la base de données
 class DatabaseAuditor(SchemaScoped):
     """
-    Provides comprehensive database validation and state checking capabilities.
+    Structural audit of a result set (``fact_table``, ``metadata``,
+    ``dataset_metadata``).
 
-    Validates schema consistency, data integrity, agreement between the metadata
-    table and the fact table, and identifies potential performance issues.
+    The auditor checks what a write cannot guarantee by construction on a base
+    that may have been modified outside of the package: the three tables are
+    present, ``metadata`` describes exactly the fact table's columns with
+    consistent types, the ``parent_name`` links form a forest, the ``label_for``
+    declarations are valid and, at the ``COMPREHENSIVE`` level, the primary key is
+    unique, every code carries a single label and no column is mostly null. The
+    write operations run the ``BASIC`` level (no fact table scan) inside their
+    transaction; the ``COMPREHENSIVE`` level is meant to be run on demand.
 
     Attributes:
-        conn (duckdb.DuckDBPyConnection): Database connection
-        schema (str): DuckLake schema audited by this instance
+        conn (duckdb.DuckDBPyConnection): Database connection.
+        schema (str): DuckLake schema audited by this instance.
         catalog_alias (str): Alias of the attached DuckLake catalog, carried
             alongside ``schema``.
-        logger: Logger instance for audit tracking
+        logger: Logger instance for audit tracking.
+
+    Examples:
+        >>> auditor = DatabaseAuditor(conn, schema='predictions')
+        >>> report = auditor.validate_database(ValidationLevel.COMPREHENSIVE)
+        >>> report.get_critical_issues_count()
+        0
     """
 
     # Initialisation
@@ -209,15 +272,12 @@ class DatabaseAuditor(SchemaScoped):
             schema: DuckLake schema to audit. A catalog can host several schemas;
                 each is audited independently. Defaults to ``'main'``.
             catalog_alias: Alias of the attached DuckLake catalog, matching the one
-                passed to ``DuckLakeConnector``. Carried alongside ``schema``.
-                Defaults to ``'db'``.
+                passed to ``DuckLakeConnector``. Defaults to ``'db'``.
 
         Example:
             >>> conn = DuckLakeConnector('catalog.ducklake', 'data/').connect()
             >>> auditor = DatabaseAuditor(conn)
             >>> report = auditor.validate_database(ValidationLevel.COMPREHENSIVE)
-            >>> # Auditer un schéma dédié dans le même catalogue
-            >>> auditor = DatabaseAuditor(conn, schema='predictions')
         """
         # Initialisation de la connexion DuckLake.
         self.conn = connection if connection is not None else duckdb.connect(":memory:")
@@ -238,538 +298,476 @@ class DatabaseAuditor(SchemaScoped):
         # Chemin par défaut centralisé dans utils.logger : <cwd>/logs/<name>.log.
         self.logger = _init_logger(filename=log_filename, name="database_auditor")
 
-    # Méthodes principales de validation
-    # Méthode de validation de la base de données
+    # Méthode principale de validation
     def validate_database(
-        self, validation_level: ValidationLevel = ValidationLevel.STANDARD
+        self, validation_level: ValidationLevel = ValidationLevel.BASIC
     ) -> ValidationReport:
         """
-        Perform comprehensive database validation.
+        Audit the result set at the requested level.
+
+        ``BASIC`` (catalog and small tables only): the three tables are present;
+        ``metadata`` has its required columns, no null ``name``/``label``/
+        ``sql_type`` and no duplicated name; ``dataset_metadata`` holds exactly one
+        row; ``metadata`` and the fact table describe the same columns with
+        compatible types; the ``parent_name`` links reference existing columns and
+        form a forest; the ``label_for`` declarations are structurally valid.
+
+        ``COMPREHENSIVE`` adds the checks scanning the fact table: primary key
+        uniqueness, code -> label functional dependency of every declared pair,
+        and the share of nulls per column (one single scan for every column).
+
+        A check that fails to run is itself reported as an issue rather than
+        interrupting the audit.
 
         Args:
-            validation_level: Level of validation to perform
+            validation_level: Level of validation to perform. Defaults to
+                ``ValidationLevel.BASIC``.
 
         Returns:
-            ValidationReport containing all detected issues
+            ValidationReport: The finalized report of every issue detected.
 
-        Example:
+        Examples:
             >>> report = auditor.validate_database(ValidationLevel.COMPREHENSIVE)
-            >>> if report.get_critical_issues_count() > 0:
-            ...     print("Critical issues found!")
             >>> for issue in report.issues:
             ...     print(f"{issue.severity.value}: {issue.description}")
         """
         # Création du rapport
         report = ValidationReport(validation_level=validation_level)
-        # Logging
-        self.logger.info(
-            f"Starting database validation at level: {validation_level.value}"
-        )
 
+        # Lecture unique de l'état du schéma, partagée par tous les contrôles
         try:
-            # Validation de base (toujours effectuée)
-            # Validation du schéma
-            self._validate_schema_existence(report)
-            # Validation de la consistence des méta-données
-            self._validate_metadata_consistency(report)
-            # Validation des méta-données du jeu de résultats
-            self._validate_dataset_metadata(report)
-
-            # Validation standard
-            if validation_level in [
-                ValidationLevel.STANDARD,
-                ValidationLevel.COMPREHENSIVE,
-            ]:
-                # Validation de l'accord entre metadata et fact_table
-                self._validate_metadata_fact_consistency(report)
-                # Validation de la consistance des types des données
-                self._validate_data_types_consistency(report)
-                # Validation des colonnes de libellés
-                self._validate_value_labels_consistency(report)
-
-            # Validation complète
-            if validation_level == ValidationLevel.COMPREHENSIVE:
-                # Vérification de la configuration de partitionnement Ducklake
-                self._validate_partition_configuration(report)
-                # Validation de la qualité des données
-                self._validate_data_quality(report)
-                # Validation de la violation des contraintes
-                self._validate_constraint_violations(report)
-                # Vérification de l'état de maintenance Ducklake (snapshots, fichiers)
-                self._validate_ducklake_maintenance(report)
-
-            # Finalisation du rapport
-            report.finalize()
-
-            # Logging
-            self.logger.info(
-                f"Database validation completed. Found {len(report.issues)} issues."
-            )
-            return report
-
+            state = self._read_state()
         except Exception as e:
-            # Logging
-            self.logger.error(f"Error during database validation: {e}")
-
-            # Ajout d'un problème critique pour l'erreur de validation
-            error_issue = ValidationIssue(
-                issue_type=IssueType.SCHEMA_INCONSISTENCY,
-                severity=IssueSeverity.CRITICAL,
-                table_name="VALIDATION_SYSTEM",
-                description=f"Validation process failed: {str(e)}",
-                suggested_fix="Check database connection and schema structure",
+            report.add_issue(
+                ValidationIssue(
+                    issue_type=IssueType.SCHEMA_INCONSISTENCY,
+                    severity=IssueSeverity.CRITICAL,
+                    table_name="VALIDATION_SYSTEM",
+                    description=f"Could not read the schema state: {e}",
+                    suggested_fix="Check the database connection and the schema",
+                )
             )
-            report.add_issue(error_issue)
-            # Finalisation du rapport
             report.finalize()
-
+            self.logger.error(f"Database validation could not start: {e}")
             return report
 
-    # Validation des prérequis d'une opération
-    def validate_operation_preconditions(
-        self, operation_type: str, **kwargs: Any
-    ) -> ValidationReport:
-        """
-        Validate preconditions before executing specific operations.
+        # Contrôles structurels, toujours exécutés
+        checks = [
+            self._validate_schema_existence,
+            self._validate_metadata_consistency,
+            self._validate_dataset_metadata,
+            self._validate_metadata_fact_consistency,
+            self._validate_data_types_consistency,
+            self._validate_column_links,
+        ]
+        # Contrôles des données, qui balaient la table des faits
+        if validation_level == ValidationLevel.COMPREHENSIVE:
+            checks += [
+                self._validate_primary_key_uniqueness,
+                self._validate_value_label_dependencies,
+                self._validate_data_quality,
+            ]
 
-        Args:
-            operation_type: Type of operation ('insert', 'update', 'delete',
-                'schema_change')
-            **kwargs: Operation-specific parameters
+        # Exécution de chaque contrôle : un échec devient un problème du rapport
+        for check in checks:
+            try:
+                check(report, state)
+            except Exception as e:
+                report.add_issue(
+                    ValidationIssue(
+                        issue_type=IssueType.SCHEMA_INCONSISTENCY,
+                        severity=IssueSeverity.HIGH,
+                        table_name="VALIDATION_SYSTEM",
+                        description=f"Check {check.__name__} failed: {e}",
+                        suggested_fix="Check the structure of the audited tables",
+                    )
+                )
+
+        # Finalisation du rapport
+        report.finalize()
+
+        # Logging
+        self.logger.debug(
+            f"Validation ({validation_level.value}) of schema {self.schema}:"
+            f" {len(report.issues)} issue(s)"
+        )
+        return report
+
+    # Méthode de lecture de l'état du schéma audité
+    def _read_state(self) -> _AuditState:
+        """Read the tables, the metadata rows and the fact table columns once.
 
         Returns:
-            ValidationReport with precondition validation results
+            _AuditState: The state shared by every check of one audit.
 
-        Example:
-            >>> # Before inserting data
-            >>> report = auditor.validate_operation_preconditions('insert', df=new_data)
-            >>> if report.get_critical_issues_count() == 0:
-            ...     # Safe to proceed with insertion
-            ...     pass
+        Raises:
+            duckdb.Error: If the catalog cannot be queried.
         """
-        # Initialisation du rapport
-        report = ValidationReport(validation_level=ValidationLevel.BASIC)
-        # Logging
-        self.logger.info(f"Validating preconditions for operation: {operation_type}")
+        # Tables du schéma audité (filtrées sur le catalogue lorsqu'il est attaché)
+        catalog_filter = " AND table_catalog = ?" if self._catalog is not None else ""
+        params = [self.schema] + ([self._catalog] if self._catalog is not None else [])
+        tables = {
+            row[0]
+            for row in self.conn.execute(
+                "SELECT table_name FROM information_schema.tables"
+                f" WHERE table_schema = ?{catalog_filter}",
+                params,
+            ).fetchall()
+        }
 
-        try:
-            # Validation distincte suivant le type d'opération
-            if operation_type == "insert":
-                self._validate_insert_preconditions(report, **kwargs)
-            elif operation_type == "update":
-                self._validate_update_preconditions(report, **kwargs)
-            elif operation_type == "delete":
-                self._validate_delete_preconditions(report, **kwargs)
-            elif operation_type == "schema_change":
-                self._validate_schema_change_preconditions(report, **kwargs)
-            else:
-                issue = ValidationIssue(
-                    issue_type=IssueType.SCHEMA_INCONSISTENCY,
-                    severity=IssueSeverity.MEDIUM,
-                    table_name="OPERATION_VALIDATION",
-                    description=f"Unknown operation type: {operation_type}",
-                    suggested_fix="Use a supported operation type",
-                )
-                report.add_issue(issue)
-
-            # Finalisation du rapport
-            report.finalize()
-            return report
-
-        except Exception as e:
-            # Logging
-            self.logger.error(f"Error validating operation preconditions: {e}")
-
-            # Création d'un erreur associée à l'opération inconnue
-            error_issue = ValidationIssue(
-                issue_type=IssueType.SCHEMA_INCONSISTENCY,
-                severity=IssueSeverity.HIGH,
-                table_name="OPERATION_VALIDATION",
-                description=f"Precondition validation failed: {str(e)}",
-                suggested_fix="Check operation parameters and database state",
+        # Lignes de metadata
+        metadata: nw.DataFrame[Any] | None = None
+        if "metadata" in tables:
+            metadata = nw.from_native(
+                self.conn.execute(
+                    f"SELECT * FROM {self._qualified('metadata')}"
+                ).to_arrow_table(),
+                eager_only=True,
             )
-            report.add_issue(error_issue)
-            # Finalisation du rapport
-            report.finalize()
 
-            return report
+        # Colonnes et types de la table des faits
+        fact_columns: dict[str, str] = {}
+        if "fact_table" in tables:
+            fact_columns = {
+                row[0]: row[1]
+                for row in self.conn.execute(
+                    f"DESCRIBE {self._qualified('fact_table')}"
+                ).fetchall()
+            }
 
-    # Méthodes de validation spécifiques
-    # Méthode de validation de l'existence du schéma
-    def _validate_schema_existence(self, report: ValidationReport) -> None:
-        """Validate existence of essential schema tables."""
-        try:
-            # Vérification des tables essentielles
-            essential_tables = ["metadata"]
-            # Extraction des tables de la base de données
-            existing_tables = self._get_existing_tables()
+        return _AuditState(tables=tables, metadata=metadata, fact_columns=fact_columns)
 
-            # Parcours des tables essentielles
-            for table in essential_tables:
-                # Vérification de l'existence de la table
-                if table not in existing_tables:
-                    issue = ValidationIssue(
-                        issue_type=IssueType.SCHEMA_INCONSISTENCY,
-                        severity=IssueSeverity.CRITICAL,
-                        table_name=table,
-                        description=f"Essential table '{table}' is missing",
-                        suggested_fix=f"Create the '{table}' table with proper"
-                        f" structure",
-                    )
-                    report.add_issue(issue)
-                else:
-                    report.tables_validated.add(table)
+    # ---------------------------------------------------------------------------
+    # Contrôles structurels (niveau BASIC)
+    # ---------------------------------------------------------------------------
 
-            # Vérification de l'existence de la table des faits
-            if "fact_table" not in existing_tables:
-                issue = ValidationIssue(
-                    issue_type=IssueType.SCHEMA_INCONSISTENCY,
-                    severity=IssueSeverity.HIGH,
-                    table_name="fact_table",
-                    description="Fact table is missing",
-                    suggested_fix="Create the fact table or check if database is"
-                    " properly initialized",
+    # Méthode de validation de l'existence des trois tables
+    def _validate_schema_existence(
+        self, report: ValidationReport, state: _AuditState
+    ) -> None:
+        """Check that the three tables of a result set exist.
+
+        A missing ``metadata`` table is critical (the interface cannot describe
+        any column); a missing fact table or ``dataset_metadata`` is reported as
+        high.
+
+        Args:
+            report: Validation report collecting the issues found.
+            state: State of the audited schema.
+        """
+        # Parcours des tables attendues
+        for table in RESULT_SET_TABLES:
+            # Validation de la table du schéma
+            if table in state.tables:
+                report.tables_validated.add(table)
+                continue
+            report.add_issue(
+                ValidationIssue(
+                    issue_type=(
+                        IssueType.MISSING_METADATA
+                        if table == "dataset_metadata"
+                        else IssueType.SCHEMA_INCONSISTENCY
+                    ),
+                    severity=(
+                        IssueSeverity.CRITICAL
+                        if table == "metadata"
+                        else IssueSeverity.HIGH
+                    ),
+                    table_name=table,
+                    description=f"Table '{table}' is missing",
+                    suggested_fix="Rebuild the schema with"
+                    " DuckLakeTablesBuilder.build_schema",
                 )
-                report.add_issue(issue)
-            else:
-                report.tables_validated.add("fact_table")
-
-        except Exception as e:
-            # Création d'un problème dans le rapport associé à l'erreur
-            issue = ValidationIssue(
-                issue_type=IssueType.SCHEMA_INCONSISTENCY,
-                severity=IssueSeverity.CRITICAL,
-                table_name="SCHEMA_VALIDATION",
-                description=f"Error validating schema existence: {str(e)}",
-                suggested_fix="Check database connection and permissions",
             )
-            report.add_issue(issue)
 
-    # Méthode de validation de la cohérence des méta-données
-    def _validate_metadata_consistency(self, report: ValidationReport) -> None:
-        """Validate metadata consistency."""
-        try:
-            # Chargement des métadonnées
-            metadata_df = self._get_metadata()
+    # Méthode de validation de la cohérence interne de metadata
+    def _validate_metadata_consistency(
+        self, report: ValidationReport, state: _AuditState
+    ) -> None:
+        """Check the required columns, null fields and duplicated names of metadata.
 
-            # Vérification que la table n'est pas vide
-            if len(metadata_df) == 0:
-                issue = ValidationIssue(
+        Args:
+            report: Validation report collecting the issues found.
+            state: State of the audited schema.
+        """
+        # Extraction des métadonnées
+        metadata = state.metadata
+        if metadata is None:
+            return
+
+        # Table vide : aucune colonne décrite
+        if len(metadata) == 0:
+            report.add_issue(
+                ValidationIssue(
                     issue_type=IssueType.MISSING_METADATA,
                     severity=IssueSeverity.HIGH,
                     table_name="metadata",
                     description="Metadata table is empty",
-                    suggested_fix="Populate metadata table with column information",
+                    suggested_fix="Populate metadata with one row per fact_table"
+                    " column",
                 )
-                report.add_issue(issue)
-                return
+            )
+            return
 
-            # Vérification des colonnes requises dans metadata
-            required_columns = list(METADATA_COLUMNS)
-            missing_columns = [
-                col for col in required_columns if col not in metadata_df.columns
-            ]
-
-            if missing_columns:
-                issue = ValidationIssue(
+        # Colonnes requises
+        missing_columns = [c for c in METADATA_COLUMNS if c not in metadata.columns]
+        if missing_columns:
+            report.add_issue(
+                ValidationIssue(
                     issue_type=IssueType.SCHEMA_INCONSISTENCY,
                     severity=IssueSeverity.HIGH,
                     table_name="metadata",
                     description=f"Missing required columns in metadata:"
-                    f"{missing_columns}",
-                    suggested_fix="Add missing columns to metadata table",
+                    f" {missing_columns}",
+                    suggested_fix="Add the missing columns to the metadata table",
                 )
-                report.add_issue(issue)
+            )
 
-            # Vérification des valeurs nulles dans les colonnes critiques
-            for col in ["name", "label", "sql_type"]:
-                if col in metadata_df.columns:
-                    null_count = metadata_df[col].is_null().sum()
-                    if null_count > 0:
-                        issue = ValidationIssue(
-                            issue_type=IssueType.DATA_INTEGRITY,
-                            severity=IssueSeverity.MEDIUM,
-                            table_name="metadata",
-                            column_name=col,
-                            description=f"Found {null_count} null values in critical"
-                            f" metadata column '{col}'",
-                            suggested_fix=f"Update null values in metadata.{col}",
-                            affected_rows=int(null_count),
-                        )
-                        report.add_issue(issue)
+        # Valeurs nulles dans les champs indispensables à l'interface
+        for column in ("name", "label", "sql_type"):
+            if column not in metadata.columns:
+                continue
+            null_count = int(metadata[column].is_null().sum())
+            if null_count > 0:
+                report.add_issue(
+                    ValidationIssue(
+                        issue_type=IssueType.DATA_INTEGRITY,
+                        severity=IssueSeverity.MEDIUM,
+                        table_name="metadata",
+                        column_name=column,
+                        description=f"Found {null_count} null value(s) in the"
+                        f" critical metadata column '{column}'",
+                        suggested_fix=f"Fill metadata.{column}",
+                        affected_rows=null_count,
+                    )
+                )
 
-            # Vérification des doublons dans les noms de colonnes (il s'agit d ela clé
-            # primaire de la base de données)
-            if "name" in metadata_df.columns:
-                duplicate_names = metadata_df.filter(nw.col("name").is_duplicated())[
-                    "name"
-                ].to_list()
-                if duplicate_names:
-                    issue = ValidationIssue(
+        # Doublons de nom : une colonne ne peut être décrite qu'une fois
+        if "name" in metadata.columns:
+            duplicate_names = sorted(
+                set(metadata.filter(nw.col("name").is_duplicated())["name"].to_list())
+            )
+            if duplicate_names:
+                report.add_issue(
+                    ValidationIssue(
                         issue_type=IssueType.DATA_INTEGRITY,
                         severity=IssueSeverity.HIGH,
                         table_name="metadata",
                         column_name="name",
                         description=f"Duplicate column names in metadata:"
-                        f"{duplicate_names}",
-                        suggested_fix="Remove or rename duplicate entries in metadata",
+                        f" {duplicate_names}",
+                        suggested_fix="Keep a single metadata row per column",
                         affected_rows=len(duplicate_names),
                     )
-                    report.add_issue(issue)
+                )
 
-        except Exception as e:
-            # Création d'un problème dans le rapport associé à l'erreur
-            issue = ValidationIssue(
-                issue_type=IssueType.SCHEMA_INCONSISTENCY,
-                severity=IssueSeverity.HIGH,
-                table_name="metadata",
-                description=f"Error validating metadata consistency: {str(e)}",
-                suggested_fix="Check metadata table structure and content",
-            )
-            report.add_issue(issue)
-
-    # Méthode de validation de la présence des méta-données du jeu de résultats
-    def _validate_dataset_metadata(self, report: ValidationReport) -> None:
-        """Validate the presence and cardinality of the ``dataset_metadata`` table.
-
-        The table describes the result set itself and must hold exactly one row per
-        schema.
+    # Méthode de validation de la cardinalité de dataset_metadata
+    def _validate_dataset_metadata(
+        self, report: ValidationReport, state: _AuditState
+    ) -> None:
+        """Check that ``dataset_metadata`` holds exactly one row.
 
         Args:
             report: Validation report collecting the issues found.
-
-        Examples:
-            >>> auditor._validate_dataset_metadata(report)
+            state: State of the audited schema.
         """
-        try:
-            # Vérification de l'existence de la table
-            if not self._table_exists("dataset_metadata"):
-                issue = ValidationIssue(
-                    issue_type=IssueType.MISSING_METADATA,
-                    severity=IssueSeverity.HIGH,
-                    table_name="dataset_metadata",
-                    description="Dataset metadata table is missing",
-                    suggested_fix="Rebuild the schema so that dataset_metadata is"
-                    " created, or create it manually",
-                )
-                report.add_issue(issue)
-                return
-
-            report.tables_validated.add("dataset_metadata")
-
-            # Vérification de la cardinalité : une seule ligne par schéma
-            row = self.conn.execute(
-                f"SELECT COUNT(*) FROM {self._qualified('dataset_metadata')}"
-            ).fetchone()
-            row_count = row[0] if row is not None else 0
-
-            if row_count != 1:
-                issue = ValidationIssue(
+        if "dataset_metadata" not in state.tables:
+            return
+        row = self.conn.execute(
+            f"SELECT COUNT(*) FROM {self._qualified('dataset_metadata')}"
+        ).fetchone()
+        row_count = int(row[0]) if row is not None else 0
+        if row_count != 1:
+            report.add_issue(
+                ValidationIssue(
                     issue_type=IssueType.MISSING_METADATA,
                     severity=IssueSeverity.MEDIUM,
                     table_name="dataset_metadata",
                     description=f"Dataset metadata table holds {row_count} rows,"
-                    f" exactly one is expected",
+                    " exactly one is expected",
                     suggested_fix="Keep a single descriptive row per schema",
                     affected_rows=row_count,
                 )
-                report.add_issue(issue)
-
-        except Exception as e:
-            # Création d'un problème dans le rapport associé à l'erreur
-            issue = ValidationIssue(
-                issue_type=IssueType.MISSING_METADATA,
-                severity=IssueSeverity.MEDIUM,
-                table_name="dataset_metadata",
-                description=f"Error validating dataset metadata: {str(e)}",
-                suggested_fix="Check the dataset_metadata table structure",
             )
-            report.add_issue(issue)
 
-    # Méthode de validation de l'accord entre la table des méta-données et celle
-    # des faits
-    def _validate_metadata_fact_consistency(self, report: ValidationReport) -> None:
-        """Validate that ``metadata`` and ``fact_table`` describe the same columns.
+    # Méthode de validation de l'accord entre metadata et la table des faits
+    def _validate_metadata_fact_consistency(
+        self, report: ValidationReport, state: _AuditState
+    ) -> None:
+        """Check that ``metadata`` and the fact table describe the same columns.
 
         The metadata table is the contract between the database and the interface:
         it must hold exactly one row per fact table column, no more and no less.
 
         Args:
             report: Validation report collecting the issues found.
-
-        Examples:
-            >>> auditor._validate_metadata_fact_consistency(report)
+            state: State of the audited schema.
         """
-        try:
-            # Validation impossible sans les deux tables
-            if not self._table_exists("fact_table") or not self._table_exists(
-                "metadata"
-            ):
-                return
+        # Cas où les métadonnées ou la table des faits ne sont pas renseignés
+        if state.metadata is None or "fact_table" not in state.tables:
+            return
 
-            # Ensembles de colonnes des deux côtés
-            metadata_columns = set(self._get_metadata()["name"].to_list())
-            fact_columns = set(self._get_fact_table_columns())
+        # Extraction des colonnes de métadonnées
+        metadata_columns = set(state.metadata["name"].to_list())
+        # Extraction des colonnes de la table des faits
+        fact_columns = set(state.fact_columns)
 
-            # Colonnes décrites dans metadata mais absentes de la table des faits
-            for col_name in sorted(metadata_columns - fact_columns):
-                issue = ValidationIssue(
+        # Colonnes décrites dans metadata mais absentes de la table des faits
+        for column in sorted(metadata_columns - fact_columns):
+            report.add_issue(
+                ValidationIssue(
                     issue_type=IssueType.SCHEMA_INCONSISTENCY,
                     severity=IssueSeverity.HIGH,
                     table_name="metadata",
-                    column_name=col_name,
-                    description=f"Column '{col_name}' is described in metadata but"
-                    f" missing from fact_table",
-                    suggested_fix=f"Drop the metadata row for '{col_name}' or add the"
-                    f" column to fact_table",
+                    column_name=column,
+                    description=f"Column '{column}' is described in metadata but"
+                    " missing from fact_table",
+                    suggested_fix=f"Drop the metadata row of '{column}' or add the"
+                    " column to fact_table",
                 )
-                report.add_issue(issue)
+            )
 
-            # Colonnes présentes dans la table des faits mais non décrites
-            for col_name in sorted(fact_columns - metadata_columns):
-                issue = ValidationIssue(
+        # Colonnes de la table des faits sans ligne de metadata
+        for column in sorted(fact_columns - metadata_columns):
+            report.add_issue(
+                ValidationIssue(
                     issue_type=IssueType.MISSING_METADATA,
                     severity=IssueSeverity.HIGH,
                     table_name="fact_table",
-                    column_name=col_name,
-                    description=f"Column '{col_name}' exists in fact_table but has no"
-                    f" metadata row",
-                    suggested_fix=f"Add a metadata row describing '{col_name}'",
+                    column_name=column,
+                    description=f"Column '{column}' exists in fact_table but has no"
+                    " metadata row",
+                    suggested_fix=f"Add a metadata row describing '{column}'",
                 )
-                report.add_issue(issue)
-
-        except Exception as e:
-            # Création d'un problème dans le rapport associé à l'erreur
-            issue = ValidationIssue(
-                issue_type=IssueType.SCHEMA_INCONSISTENCY,
-                severity=IssueSeverity.HIGH,
-                table_name="fact_table",
-                description=f"Error validating metadata/fact_table consistency:"
-                f" {str(e)}",
-                suggested_fix="Check metadata and fact_table structure",
             )
-            report.add_issue(issue)
 
-    # Méthode de validation de la cohérence des types de données entre la table des
-    # méta-données et la table des faits
-    def _validate_data_types_consistency(self, report: ValidationReport) -> None:
-        """Validate data type consistency."""
-        try:
-            if not self._table_exists("fact_table"):
-                return
+    # Méthode de validation de la cohérence des types déclarés et physiques
+    def _validate_data_types_consistency(
+        self, report: ValidationReport, state: _AuditState
+    ) -> None:
+        """Check that ``metadata.sql_type`` matches the physical column types.
 
-            # Récupération des métadonnées et de la structure de fact_table
-            metadata_df = self._get_metadata()
-            fact_structure = self._get_table_structure("fact_table")
-            # Parcours des colonnes de méta-données
-            for metadata_row in metadata_df.iter_rows(named=True):
-                # Extraction du nom de la colonne
-                col_name = metadata_row["name"]
-                # Extraction du type SQL attendu
-                expected_sql_type = metadata_row["sql_type"]
-
-                # Recherche du type actuel dans fact_table
-                actual_sql_type = None
-                for col_info in fact_structure:
-                    if col_info[0] == col_name:
-                        actual_sql_type = col_info[1]
-                        break
-
-                if actual_sql_type is None:
-                    # Colonne manquante dans fact_table (déjà signalée dans
-                    # _validate_metadata_fact_consistency)
-                    continue
-
-                # Comparaison des types (normalisation pour éviter les faux positifs)
-                if not self._types_are_compatible(expected_sql_type, actual_sql_type):
-                    issue = ValidationIssue(
-                        issue_type=IssueType.TYPE_MISMATCH,
-                        severity=IssueSeverity.MEDIUM,
-                        table_name="fact_table",
-                        column_name=col_name,
-                        description=f"Type mismatch for column '{col_name}': expected"
-                        f" {expected_sql_type}, got {actual_sql_type}",
-                        suggested_fix="Update metadata or alter column type in"
-                        " fact_table",
-                        additional_info={
-                            "expected_type": expected_sql_type,
-                            "actual_type": actual_sql_type,
-                        },
-                    )
-                    report.add_issue(issue)
-
-        except Exception as e:
-            # Création d'un problème dans le rapport associé à l'erreur
-            issue = ValidationIssue(
-                issue_type=IssueType.TYPE_MISMATCH,
-                severity=IssueSeverity.MEDIUM,
-                table_name="fact_table",
-                description=f"Error validating data types consistency: {str(e)}",
-                suggested_fix="Check metadata and fact_table structure",
-            )
-            report.add_issue(issue)
-
-    # Méthode de validation des colonnes de libellés
-    def _validate_value_labels_consistency(self, report: ValidationReport) -> None:
-        """Validate every declared code/label column pair.
-
-        Runs the same structural checks as ``validate_value_labels`` (target
-        exists and differs from the label column, no chaining, label column is
-        VARCHAR / not a primary key / outside any hierarchy) against the current
-        ``metadata`` state, then the ``check_value_label_dependency`` functional
-        dependency check (code -> label) against the current ``fact_table`` state,
-        for every column declaring a ``label_for``. A violation should never
-        occur through the package's own write paths (validated before every write);
-        this check exists to detect a base corrupted outside of them.
+        Columns missing on one side are skipped: they are already reported by
+        :meth:`_validate_metadata_fact_consistency`.
 
         Args:
             report: Validation report collecting the issues found.
-
-        Examples:
-            >>> auditor._validate_value_labels_consistency(report)
+            state: State of the audited schema.
         """
-        try:
-            # Vérification que les tables existent
-            if not self._table_exists("fact_table") or not self._table_exists(
-                "metadata"
-            ):
-                return
+        # Cas les métadonnées ou la table des faits ne sont pas renseignés
+        if state.metadata is None or not state.fact_columns:
+            return
 
-            # Extraction de la table de métadonnées
-            metadata_df = self._get_metadata()
-            if len(metadata_df) == 0:
-                return
-
-            # Extraction des noms de variables
-            names = metadata_df["name"].to_list()
-            # Association du type au nom de colonne
-            columns_sql_types = dict(zip(names, metadata_df["sql_type"].to_list()))
-            # Association du statut de clé primaire au nom de colonne
-            primary_keys = [
-                name
-                for name, is_pk in zip(names, metadata_df["is_primary_key"].to_list())
-                if is_pk
-            ]
-            # Association du statut de parent au nom de colonne
-            parent_of = dict(zip(names, metadata_df["parent_name"].to_list()))
-            # Association du statut de label au nom de colonne
-            label_for_map = {
-                name: label_for
-                for name, label_for in zip(names, metadata_df["label_for"].to_list())
-                if label_for is not None
-            }
-
-            if not label_for_map:
-                return
-
-            # Contrôles structurels (cible, chaînage, forme de colonne), sur l'état
-            # complet des paires déclarées
-            try:
-                validate_value_labels(
-                    label_for_map, columns_sql_types, primary_keys, parent_of
+        # Parcours des lignes de métadonnées
+        for row in state.metadata.iter_rows(named=True):
+            # Extraction du nom de la colonne et du type SQL
+            # attendus de la table des métadonnées
+            column = row["name"]
+            expected_type = row.get("sql_type")
+            # Extraction du type de la colonne dans la table des faits
+            actual_type = state.fact_columns.get(column)
+            # Vérification que les deux types sont spécifiés
+            if actual_type is None or expected_type is None:
+                continue
+            # Validation de la cohérence des types
+            if not self._types_are_compatible(expected_type, actual_type):
+                report.add_issue(
+                    ValidationIssue(
+                        issue_type=IssueType.TYPE_MISMATCH,
+                        severity=IssueSeverity.MEDIUM,
+                        table_name="fact_table",
+                        column_name=column,
+                        description=f"Type mismatch for column '{column}': metadata"
+                        f" declares {expected_type}, fact_table holds {actual_type}",
+                        suggested_fix="Align metadata.sql_type on the fact_table"
+                        " column type",
+                        additional_info={
+                            "expected_type": expected_type,
+                            "actual_type": actual_type,
+                        },
+                    )
                 )
-            except ValueError as e:
-                issue = ValidationIssue(
+
+    # Méthode de validation des liens parent_name et label_for
+    def _validate_column_links(
+        self, report: ValidationReport, state: _AuditState
+    ) -> None:
+        """Check the ``parent_name`` forest and the ``label_for`` declarations.
+
+        ``parent_name`` must reference a column described in ``metadata`` and the
+        links must form a forest (no cycle); every ``label_for`` declaration must
+        pass the structural checks of :func:`validate_value_labels` (target
+        exists, no chaining, label column is a ``VARCHAR`` outside any hierarchy and
+        not a primary key). Only ``metadata`` is read.
+
+        Args:
+            report: Validation report collecting the issues found.
+            state: State of the audited schema.
+        """
+        # Extraction des données
+        metadata = state.metadata
+        if metadata is None or len(metadata) == 0:
+            return
+        # Vérification que les colonnes attendues sont dans la table des métadonnées
+        required = {"name", "sql_type", "is_primary_key", "parent_name", "label_for"}
+        if not required.issubset(metadata.columns):
+            return
+
+        # Extraction des lignes de la table des métadonnées
+        rows = list(metadata.iter_rows(named=True))
+        # Extraction des noms de colonne et de parents
+        names = {row["name"] for row in rows}
+        parent_of = {row["name"]: row["parent_name"] for row in rows}
+
+        # Parents déclarés inexistants
+        for column, parent in sorted(parent_of.items()):
+            if parent is not None and parent not in names:
+                report.add_issue(
+                    ValidationIssue(
+                        issue_type=IssueType.SCHEMA_INCONSISTENCY,
+                        severity=IssueSeverity.HIGH,
+                        table_name="metadata",
+                        column_name=column,
+                        description=f"parent_name of '{column}' references"
+                        f" '{parent}', which has no metadata row",
+                        suggested_fix="Clear or correct the parent_name via"
+                        " update_column_metadata",
+                    )
+                )
+
+        # Forêt : aucun cycle dans les liens de hiérarchie
+        try:
+            validate_hierarchy_forest(parent_of)
+        except ValueError as e:
+            report.add_issue(
+                ValidationIssue(
+                    issue_type=IssueType.SCHEMA_INCONSISTENCY,
+                    severity=IssueSeverity.HIGH,
+                    table_name="metadata",
+                    description=str(e),
+                    suggested_fix="Break the cycle by clearing one parent_name via"
+                    " update_column_metadata",
+                )
+            )
+
+        # Déclarations label_for : contrôles structurels sur l'état complet
+        label_for_map = {
+            row["name"]: row["label_for"]
+            for row in rows
+            if row["label_for"] is not None
+        }
+        if not label_for_map:
+            return
+        try:
+            validate_value_labels(
+                label_for_map,
+                {row["name"]: row["sql_type"] for row in rows},
+                [row["name"] for row in rows if row["is_primary_key"]],
+                parent_of,
+            )
+        except ValueError as e:
+            report.add_issue(
+                ValidationIssue(
                     issue_type=IssueType.SCHEMA_INCONSISTENCY,
                     severity=IssueSeverity.HIGH,
                     table_name="metadata",
@@ -777,630 +775,255 @@ class DatabaseAuditor(SchemaScoped):
                     suggested_fix="Correct or clear the offending label_for via"
                     " update_column_metadata",
                 )
-                report.add_issue(issue)
-
-            # Dépendance fonctionnelle, par paire : une violation est une erreur,
-            # avec les codes fautifs dans le rapport.
-            fact_table = self._qualified("fact_table")
-            for label_col, code_col in label_for_map.items():
-                try:
-                    check_value_label_dependency(
-                        self.conn, fact_table, code_col, label_col
-                    )
-                except ValueError as e:
-                    issue = ValidationIssue(
-                        issue_type=IssueType.CONSTRAINT_VIOLATION,
-                        severity=IssueSeverity.CRITICAL,
-                        table_name="fact_table",
-                        column_name=label_col,
-                        description=str(e),
-                        suggested_fix="Correct the labels via"
-                        " DatabaseUpdater.update_value_labels",
-                        additional_info={"code_column": code_col},
-                    )
-                    report.add_issue(issue)
-
-        except Exception as e:
-            # Création d'un problème dans le rapport associé à l'erreur
-            issue = ValidationIssue(
-                issue_type=IssueType.SCHEMA_INCONSISTENCY,
-                severity=IssueSeverity.HIGH,
-                table_name="metadata",
-                description=f"Error validating value-label columns: {str(e)}",
-                suggested_fix="Check metadata and fact_table structure",
             )
-            report.add_issue(issue)
 
-    # Méthode de validation de la configuration de partitionnement de la table des faits
-    def _validate_partition_configuration(self, report: ValidationReport) -> None:
-        """Validate that fact_table has a Ducklake partition configuration.
+    # ---------------------------------------------------------------------------
+    # Contrôles des données (niveau COMPREHENSIVE)
+    # ---------------------------------------------------------------------------
 
-        In Ducklake, Hive-style partitioning is the primary query optimisation
-        mechanism (replaces DuckDB ART indexes). The absence of a partition key
-        on fact_table is reported as a LOW-severity PERFORMANCE_ISSUE so that
-        the operator knows to add ``PARTITION BY`` when recreating the table.
+    # Méthode de vérification de l'unicité de la clé primaire
+    def _validate_primary_key_uniqueness(
+        self, report: ValidationReport, state: _AuditState
+    ) -> None:
+        """Check that the fact table is unique on its primary key columns.
 
-        Args:
-            report: The ValidationReport to which issues are appended.
-
-        Example:
-            >>> auditor._validate_partition_configuration(report)
-            >>> perf_issues = report.get_issues_by_type(IssueType.PERFORMANCE_ISSUE)
-        """
-        try:
-            # Vérification de l'existence de la table des faits avant tout contrôle
-            if not self._table_exists("fact_table"):
-                return
-
-            # Tentative de récupération de la clé de partition via duckdb_tables().
-            # Filtrage par schéma : plusieurs schémas peuvent avoir une 'fact_table'.
-            partition_key: str | None = None
-            try:
-                result = self.conn.execute(
-                    "SELECT partition_key FROM duckdb_tables() "
-                    "WHERE table_name = 'fact_table' AND schema_name = ?",
-                    [self.schema],
-                ).fetchone()
-                if result is not None:
-                    partition_key = result[0]
-            except Exception:
-                # Indisponibilité de duckdb_tables() sur cette connexion — utilisation
-                # du fallback
-                partition_key = None
-
-            # Tentative de détection via SHOW CREATE TABLE en cas d'échec de la méthode
-            # principale
-            if not partition_key:
-                try:
-                    ddl_result = self.conn.execute(
-                        f"SHOW CREATE TABLE {self._qualified('fact_table')}"
-                    ).fetchone()
-                    ddl_text: str = ddl_result[0] if ddl_result else ""
-                    if "PARTITION BY" in ddl_text.upper():
-                        # Partitionnement détecté dans le DDL — aucun problème
-                        return
-                except Exception:
-                    pass
-
-            # Signalement de l'absence de partitionnement comme problème de performance
-            # mineur
-            if not partition_key:
-                issue = ValidationIssue(
-                    issue_type=IssueType.PERFORMANCE_ISSUE,
-                    severity=IssueSeverity.LOW,
-                    table_name="fact_table",
-                    description=(
-                        "No Ducklake partition key configured on fact_table. "
-                        "Hive-style partitioning is the primary optimisation mechanism"
-                        " in Ducklake."
-                    ),
-                    suggested_fix=(
-                        "Recreate fact_table with PARTITION BY on the most frequently"
-                        " filtered column "
-                        "(e.g. a date or category column) to improve query performance."
-                    ),
-                )
-                report.add_issue(issue)
-
-        except Exception as e:
-            # Création d'un problème dans le rapport associé à l'erreur de vérification
-            issue = ValidationIssue(
-                issue_type=IssueType.PERFORMANCE_ISSUE,
-                severity=IssueSeverity.LOW,
-                table_name="fact_table",
-                description=f"Error validating partition configuration: {str(e)}",
-                suggested_fix="Check fact_table definition and DuckDB version"
-                " compatibility",
-            )
-            report.add_issue(issue)
-
-    # Méthode de vérification de l'état de maintenance du catalogue Ducklake
-    def _validate_ducklake_maintenance(self, report: ValidationReport) -> None:
-        """Validate that Ducklake maintenance tasks are not overdue.
-
-        Checks snapshot accumulation and data file fragmentation via Ducklake
-        catalog functions. These queries are silently skipped on in-memory or
-        non-Ducklake connections where catalog functions are unavailable.
-
-        Args:
-            report: The ValidationReport to which issues are appended.
-
-        Example:
-            >>> auditor._validate_ducklake_maintenance(report)
-            >>> perf_issues = report.get_issues_by_type(IssueType.PERFORMANCE_ISSUE)
-        """
-        # Seuils déclenchant une recommandation de maintenance
-        snapshot_threshold: int = 100
-        data_files_threshold: int = 500
-
-        # Vérification du nombre de snapshots accumulés dans le catalogue Ducklake
-        try:
-            result = self.conn.execute(
-                "SELECT COUNT(*) FROM ducklake_snapshots()"
-            ).fetchone()
-            snapshot_count: int = result[0] if result else 0
-            if snapshot_count > snapshot_threshold:
-                issue = ValidationIssue(
-                    issue_type=IssueType.PERFORMANCE_ISSUE,
-                    severity=IssueSeverity.LOW,
-                    table_name="fact_table",
-                    description=(
-                        f"Ducklake snapshot history is large ({snapshot_count}"
-                        f" snapshots). "
-                        f"Threshold: {snapshot_threshold}."
-                    ),
-                    suggested_fix=(
-                        "Run ducklake_expire_snapshots() to purge old snapshots "
-                        "and then ducklake_cleanup_old_files() to reclaim storage."
-                    ),
-                    additional_info={
-                        "snapshot_count": snapshot_count,
-                        "threshold": snapshot_threshold,
-                    },
-                )
-                report.add_issue(issue)
-        except Exception:
-            # Indisponibilité de ducklake_snapshots() sur connexion in-memory ou
-            # non-Ducklake — ignoré silencieusement
-            pass
-
-        # Vérification de la fragmentation des fichiers de données Ducklake
-        try:
-            result = self.conn.execute(
-                "SELECT COUNT(*) FROM ducklake_data_files()"
-            ).fetchone()
-            data_file_count: int = result[0] if result else 0
-            if data_file_count > data_files_threshold:
-                issue = ValidationIssue(
-                    issue_type=IssueType.PERFORMANCE_ISSUE,
-                    severity=IssueSeverity.LOW,
-                    table_name="fact_table",
-                    description=(
-                        f"Ducklake data file count is high ({data_file_count} files). "
-                        f"Excessive small files degrade scan performance. Threshold:"
-                        f"{data_files_threshold}."
-                    ),
-                    suggested_fix=(
-                        "Run ducklake_merge_adjacent_files() or"
-                        " ducklake_rewrite_data_files() "
-                        "to compact fragmented Parquet files."
-                    ),
-                    additional_info={
-                        "data_file_count": data_file_count,
-                        "threshold": data_files_threshold,
-                    },
-                )
-                report.add_issue(issue)
-        except Exception:
-            # Indisponibilité de ducklake_data_files() sur connexion in-memory ou
-            # non-Ducklake — ignoré silencieusement
-            pass
-
-    # Méthode de validation de la qualité des données
-    def _validate_data_quality(self, report: ValidationReport) -> None:
-        """Validate data quality."""
-        try:
-            # Vérification de l'existence de la table des faits
-            if not self._table_exists("fact_table"):
-                return
-
-            # Comptage total des lignes
-            _r = self.conn.execute(
-                f"SELECT COUNT(*) FROM {self._qualified('fact_table')}"
-            ).fetchone()
-            total_rows = _r[0] if _r is not None else 0
-
-            # Vérification que la table des faits n'est pas vide
-            if total_rows == 0:
-                issue = ValidationIssue(
-                    issue_type=IssueType.DATA_INTEGRITY,
-                    severity=IssueSeverity.MEDIUM,
-                    table_name="fact_table",
-                    description="Fact table is empty",
-                    suggested_fix="Check if data has been loaded properly",
-                )
-                report.add_issue(issue)
-                return
-
-            # Vérification des colonnes avec beaucoup de valeurs nulles
-            fact_columns = self._get_fact_table_columns()
-            # Parcours des colonnes
-            for col_name in fact_columns:
-                # Création de la requête de comptage du nombre de valeurs nulles dans la
-                # colonne
-                null_count_query = (
-                    f"SELECT COUNT(*) FROM {self._qualified('fact_table')} "
-                    f"WHERE {quote_ident(col_name)} IS NULL"
-                )
-                # Exécution de la requête
-                _rn = self.conn.execute(null_count_query).fetchone()
-                null_count = _rn[0] if _rn is not None else 0
-                # Calcul du pourcentage de valeurs nulles
-                null_percentage = (null_count / total_rows) * 100
-
-                # Ajout des messages au rapport
-                if null_percentage > 50:  # Plus de 50% de valeurs nulles
-                    issue = ValidationIssue(
-                        issue_type=IssueType.DATA_INTEGRITY,
-                        severity=IssueSeverity.MEDIUM,
-                        table_name="fact_table",
-                        column_name=col_name,
-                        description=f"Column '{col_name}' has {null_percentage:.1f}%"
-                        f"null values",
-                        suggested_fix=f"Review data quality for column '{col_name}' or"
-                        f" consider dropping it",
-                        affected_rows=null_count,
-                        additional_info={"null_percentage": null_percentage},
-                    )
-                    report.add_issue(issue)
-                elif null_percentage == 100:  # Colonne entièrement nulle
-                    issue = ValidationIssue(
-                        issue_type=IssueType.DATA_INTEGRITY,
-                        severity=IssueSeverity.HIGH,
-                        table_name="fact_table",
-                        column_name=col_name,
-                        description=f"Column '{col_name}' contains only null values",
-                        suggested_fix=f"Consider dropping column '{col_name}' or"
-                        f" investigate data loading",
-                        affected_rows=null_count,
-                    )
-                    report.add_issue(issue)
-
-        except Exception as e:
-            # Création d'un problème dans le rapport associé à l'erreur
-            issue = ValidationIssue(
-                issue_type=IssueType.DATA_INTEGRITY,
-                severity=IssueSeverity.MEDIUM,
-                table_name="fact_table",
-                description=f"Error validating data quality: {str(e)}",
-                suggested_fix="Check fact table structure and data",
-            )
-            report.add_issue(issue)
-
-    # Méthode de vérification de l'unicité de la clé primaire de la table des faits
-    def _validate_constraint_violations(self, report: ValidationReport) -> None:
-        """Validate the applicative uniqueness of the fact table primary key.
-
-        DuckLake supports no DDL constraint, so primary-key uniqueness is enforced
-        applicatively at build and upsert time. This check verifies it actually
+        DuckLake supports no DDL constraint, so primary key uniqueness is enforced
+        applicatively at build and upsert time; this check verifies it actually
         holds on the stored data.
 
         Args:
             report: Validation report collecting the issues found.
-
-        Examples:
-            >>> auditor._validate_constraint_violations(report)
+            state: State of the audited schema.
         """
-        try:
-            # Validation impossible sans table des faits ni clé primaire déclarée
-            if not self._table_exists("fact_table"):
-                return
-            primary_keys = self._get_primary_key_columns()
-            if not primary_keys:
-                return
+        # Vérification que les métadonnées et la table des faits sont non-vides
+        if state.metadata is None or "fact_table" not in state.tables:
+            return
+        # Liste des clés primaires
+        primary_keys = [
+            row["name"]
+            for row in state.metadata.iter_rows(named=True)
+            if row.get("is_primary_key")
+        ]
+        if not primary_keys:
+            return
 
-            # Comptage des combinaisons de clés apparaissant plus d'une fois
-            key_columns = ", ".join(quote_ident(col) for col in primary_keys)
-            duplicates_query = f"""
-                SELECT COUNT(*) FROM (
-                    SELECT {key_columns}
-                    FROM {self._qualified("fact_table")}
-                    GROUP BY {key_columns}
-                    HAVING COUNT(*) > 1
-                )
-            """
-            row = self.conn.execute(duplicates_query).fetchone()
-            duplicate_count = row[0] if row is not None else 0
+        # Combinaisons de clés présentes plus d'une fois
+        key_columns = ", ".join(quote_ident(c) for c in primary_keys)
+        row = self.conn.execute(f"""
+            SELECT COUNT(*) FROM (
+                SELECT 1 FROM {self._qualified("fact_table")}
+                GROUP BY {key_columns}
+                HAVING COUNT(*) > 1
+            )
+        """).fetchone()
 
-            # Ajout d'un message au rapport si des duplicats sont présents
-            if duplicate_count > 0:
-                issue = ValidationIssue(
+        # Comptage des duplicats de clés primaires
+        duplicate_count = int(row[0]) if row is not None else 0
+        if duplicate_count > 0:
+            report.add_issue(
+                ValidationIssue(
                     issue_type=IssueType.CONSTRAINT_VIOLATION,
                     severity=IssueSeverity.HIGH,
                     table_name="fact_table",
                     column_name=", ".join(primary_keys),
-                    description=(
-                        f"Applicative uniqueness violation: {duplicate_count}"
-                        f" duplicated primary key combinations found in fact_table"
-                        f" (no DDL constraint enforced in Ducklake)"
-                    ),
-                    suggested_fix="Deduplicate the fact table on its primary keys",
+                    description=f"{duplicate_count} primary key combination(s)"
+                    " appear more than once in fact_table",
+                    suggested_fix="Delete the duplicated rows with"
+                    " DatabaseDeleter.delete_rows, or restore a snapshot",
                     affected_rows=duplicate_count,
                     additional_info={"primary_keys": primary_keys},
                 )
-                report.add_issue(issue)
-
-        except Exception as e:
-            # Création d'un problème dans le rapport associé à l'erreur
-            issue = ValidationIssue(
-                issue_type=IssueType.CONSTRAINT_VIOLATION,
-                severity=IssueSeverity.MEDIUM,
-                table_name="SYSTEM",
-                description=f"Error validating constraint violations: {str(e)}",
-                suggested_fix="Check table constraints and data integrity",
             )
-            report.add_issue(issue)
 
-    # Méthodes de validation des préconditions d'opération
-    # Méthode de validation des conditions préalables à une opération d'insertion
-    def _validate_insert_preconditions(
-        self, report: ValidationReport, df: IntoDataFrame | None = None, **kwargs: Any
+    # Méthode de validation de la dépendance fonctionnelle code -> libellé
+    def _validate_value_label_dependencies(
+        self, report: ValidationReport, state: _AuditState
     ) -> None:
-        """Validate insert preconditions."""
-        # Vérifiation que le jeu de données est spécifié
-        if df is None:
-            issue = ValidationIssue(
-                issue_type=IssueType.DATA_INTEGRITY,
-                severity=IssueSeverity.CRITICAL,
-                table_name="fact_table",
-                description="DataFrame is None for insert operation",
-                suggested_fix="Provide a valid DataFrame for insertion",
-            )
-            report.add_issue(issue)
-            return
+        """Check the code -> label functional dependency of every declared pair.
 
-        # Conversion vers narwhals pour accéder à len() et .columns de façon sûre
-        df_nw = nw.from_native(df, eager_only=True)
-        # Vérification que le jeu de données est non vide
-        if len(df_nw) == 0:
-            issue = ValidationIssue(
-                issue_type=IssueType.DATA_INTEGRITY,
-                severity=IssueSeverity.MEDIUM,
-                table_name="fact_table",
-                description="DataFrame is empty for insert operation",
-                suggested_fix="Provide DataFrame with data for insertion",
-            )
-            report.add_issue(issue)
-
-        # Vérification des noms de colonnes valides
-        invalid_columns = [
-            col
-            for col in df_nw.columns
-            if not col.replace("_", "").replace(" ", "").isalnum()
-        ]
-        if invalid_columns:
-            issue = ValidationIssue(
-                issue_type=IssueType.SCHEMA_INCONSISTENCY,
-                severity=IssueSeverity.HIGH,
-                table_name="fact_table",
-                description=f"Invalid column names detected: {invalid_columns}",
-                suggested_fix="Use valid column names (alphanumeric and underscores"
-                " only)",
-            )
-            report.add_issue(issue)
-
-    # Méthode de validation des conditions préalables à une mise à jour de la base de
-    # données
-    def _validate_update_preconditions(
-        self, report: ValidationReport, df: IntoDataFrame | None = None, **kwargs: Any
-    ) -> None:
-        """Validate update preconditions.
-
-        Validates the preconditions for an update operation by using
-        the primary keys defined in the metadata instead of the merge_keys
-        passed as parameters.
+        Args:
+            report: Validation report collecting the issues found.
+            state: State of the audited schema.
         """
-        # Vérification des conditions d'insertions
-        self._validate_insert_preconditions(report, df, **kwargs)
-
-        # Récupération des clés primaires depuis les métadonnées
-        primary_keys = self._get_primary_key_columns()
-
-        # Si pas de clés primaires définies, pas de validation supplémentaire nécessaire
-        # (la mise à jour se fera par INSERT simple)
-        if not primary_keys:
+        # Vérification que les métadonnées et la table des faits sont spécifiés
+        if state.metadata is None or "fact_table" not in state.tables:
             return
-
-        # Vérification que les clés primaires sont présentes dans le DataFrame
-        if df is not None:
-            df_nw = nw.from_native(df, eager_only=True)
-            missing_keys = [key for key in primary_keys if key not in df_nw.columns]
-            if missing_keys:
-                issue = ValidationIssue(
-                    issue_type=IssueType.SCHEMA_INCONSISTENCY,
-                    severity=IssueSeverity.CRITICAL,
-                    table_name="fact_table",
-                    description=f"Primary keys not found in DataFrame: {missing_keys}",
-                    suggested_fix="Ensure all primary keys are present in the"
-                    " DataFrame",
+        # Vérification que les métadonnées contiennent une colonne de labels
+        if "label_for" not in state.metadata.columns:
+            return
+        # Extraction de la table des faits
+        fact_table = self._qualified("fact_table")
+        # Parcours des colonnes dans la table des métadonnées
+        for row in state.metadata.iter_rows(named=True):
+            # Extraction de la colonne des labels et de la colonne des codes
+            label_column, code_column = row["name"], row["label_for"]
+            if code_column is None:
+                continue
+            # Paire incomplète : déjà signalée par les contrôles structurels
+            if (
+                label_column not in state.fact_columns
+                or code_column not in state.fact_columns
+            ):
+                continue
+            try:
+                # Vérification des associations code/label
+                check_value_label_dependency(
+                    self.conn, fact_table, code_column, label_column
                 )
-                report.add_issue(issue)
-                return
+            except ValueError as e:
+                report.add_issue(
+                    ValidationIssue(
+                        issue_type=IssueType.CONSTRAINT_VIOLATION,
+                        severity=IssueSeverity.CRITICAL,
+                        table_name="fact_table",
+                        column_name=label_column,
+                        description=str(e),
+                        suggested_fix="Correct the labels via"
+                        " DatabaseUpdater.update_value_labels",
+                        additional_info={"code_column": code_column},
+                    )
+                )
 
-            # Vérification des doublons parmi les valeurs de clés primaires dans le
-            # DataFrame.
-            duplicate_count = (
-                nw.from_native(df, eager_only=True)
-                .select(primary_keys)
-                .is_duplicated()
-                .sum()
-            )
+    # Méthode de validation de la part de valeurs nulles par colonne
+    def _validate_data_quality(
+        self, report: ValidationReport, state: _AuditState
+    ) -> None:
+        """Report the empty fact table and the columns that are mostly null.
 
-            if duplicate_count > 0:
-                issue = ValidationIssue(
+        The non-null count of every column is read in a single scan
+        (``SELECT COUNT(*), COUNT(c1), COUNT(c2), …``). A column holding only nulls
+        is reported as high; a column more than half null as medium.
+
+        Args:
+            report: Validation report collecting the issues found.
+            state: State of the audited schema.
+        """
+        # Vérification que la table des faits est renseignée
+        if not state.fact_columns:
+            return
+        # Extraction des colonnes
+        columns = list(state.fact_columns)
+        # Comptage des modalités non nulles par colonne
+        counts = ", ".join(f"COUNT({quote_ident(c)})" for c in columns)
+        row = self.conn.execute(
+            f"SELECT COUNT(*), {counts} FROM {self._qualified('fact_table')}"
+        ).fetchone()
+        if row is None:
+            return
+        # Extraction du total
+        total_rows = int(row[0])
+
+        # Table vide
+        if total_rows == 0:
+            report.add_issue(
+                ValidationIssue(
                     issue_type=IssueType.DATA_INTEGRITY,
-                    severity=IssueSeverity.HIGH,
+                    severity=IssueSeverity.MEDIUM,
                     table_name="fact_table",
-                    description=f"Found {duplicate_count} duplicate primary key values"
-                    f" in DataFrame",
-                    suggested_fix="Remove duplicate entries based on primary key"
-                    " columns",
-                    affected_rows=int(duplicate_count),
+                    description="Fact table is empty",
+                    suggested_fix="Check that the data has been loaded",
                 )
-                report.add_issue(issue)
-
-    # Méthode de validation des conditions préalable à la suppression de données
-    def _validate_delete_preconditions(
-        self, report: ValidationReport, filters: Any = None, **kwargs: Any
-    ) -> None:
-        """Validate delete preconditions."""
-        # Vérification de l'existence du filtre de suppression des données
-        if filters is None:
-            issue = ValidationIssue(
-                issue_type=IssueType.DATA_INTEGRITY,
-                severity=IssueSeverity.CRITICAL,
-                table_name="fact_table",
-                description="No filters provided for delete operation",
-                suggested_fix="Provide valid filters for delete operation to avoid"
-                " deleting all data",
             )
-            report.add_issue(issue)
+            return
 
-    # méthode de validation des conditions préalable à un changement de schéma dans la
-    # base de données
-    def _validate_schema_change_preconditions(
-        self, report: ValidationReport, **kwargs: Any
-    ) -> None:
-        """Validate schema change preconditions."""
-        # Vérification de l'existence des tables avant modification
-        if not self._table_exists("fact_table"):
-            issue = ValidationIssue(
-                issue_type=IssueType.SCHEMA_INCONSISTENCY,
-                severity=IssueSeverity.HIGH,
-                table_name="fact_table",
-                description="Fact table does not exist for schema change operation",
-                suggested_fix="Create fact table before attempting schema changes",
-            )
-            report.add_issue(issue)
+        # Part des valeurs nulles, colonne par colonne
+        for column, non_null_count in zip(columns, row[1:], strict=True):
+            null_count = total_rows - int(non_null_count)
+            null_percentage = 100 * null_count / total_rows
+            # Colonne entièrement nulle : testée avant le seuil de 50 %, qu'elle
+            # dépasse aussi
+            if null_count == total_rows:
+                report.add_issue(
+                    ValidationIssue(
+                        issue_type=IssueType.DATA_INTEGRITY,
+                        severity=IssueSeverity.HIGH,
+                        table_name="fact_table",
+                        column_name=column,
+                        description=f"Column '{column}' contains only null values",
+                        suggested_fix=f"Drop the column '{column}' or check the data"
+                        " loading",
+                        affected_rows=null_count,
+                    )
+                )
+            elif null_percentage > 50:
+                report.add_issue(
+                    ValidationIssue(
+                        issue_type=IssueType.DATA_INTEGRITY,
+                        severity=IssueSeverity.MEDIUM,
+                        table_name="fact_table",
+                        column_name=column,
+                        description=f"Column '{column}' has {null_percentage:.1f}%"
+                        " null values",
+                        suggested_fix=f"Review the data quality of column '{column}'",
+                        affected_rows=null_count,
+                        additional_info={"null_percentage": null_percentage},
+                    )
+                )
 
-    # Méthodes utilitaires privées
-    # Méthode auxiliaire d'obtention des tables de la base de données
-    def _get_existing_tables(self) -> list[str]:
-        """Get the list of existing tables in the audited schema."""
-        try:
-            # Filtrage par schéma : SHOW TABLES ne renvoie que le schéma actif de la
-            # connexion, qui n'est pas nécessairement le schéma audité.
-            result = self.conn.execute(
-                "SELECT table_name FROM information_schema.tables "
-                "WHERE table_schema = ?",
-                [self.schema],
-            ).fetchall()
-            return [row[0] for row in result]
-        except Exception:
-            return []
-
-    # Méthode auxiliaire d'extraction des colonnes de la table des faits
-    def _get_fact_table_columns(self) -> list[str]:
-        """Get fact table columns."""
-        try:
-            result = self.conn.execute(
-                f"DESCRIBE {self._qualified('fact_table')}"
-            ).fetchall()
-            return [row[0] for row in result]
-        except Exception:
-            return []
-
-    # Méthode auxiliaire d'extraction des coonnes d'une table spécifique
-    def _get_table_columns(self, table_name: str) -> list[str]:
-        """Get columns from a specific (bare-named) table in the audited schema."""
-        try:
-            result = self.conn.execute(
-                f"DESCRIBE {self._qualified(table_name)}"
-            ).fetchall()
-            return [row[0] for row in result]
-        except Exception:
-            return []
-
-    # Méthode auxiliaire de description d'une table
-    def _get_table_structure(self, table_name: str) -> list[tuple[Any, ...]]:
-        """Get the complete structure of a (bare-named) table in the audited schema."""
-        try:
-            return self.conn.execute(
-                f"DESCRIBE {self._qualified(table_name)}"
-            ).fetchall()
-        except Exception:
-            return []
-
-    # Méthode auxiliaire d'extraction des métadonnées
-    def _get_metadata(self) -> nw.DataFrame[Any]:
-        """Get metadata table content.
-
-        Returns:
-            nw.DataFrame: The metadata rows (pyarrow backend), or an empty frame
-            when the table cannot be read.
-        """
-        try:
-            metadata: nw.DataFrame[Any] = nw.from_native(
-                self.conn.execute(
-                    f"SELECT * FROM {self._qualified('metadata')}"
-                ).to_arrow_table(),
-                eager_only=True,
-            )
-            return metadata
-        except Exception:
-            return nw.from_dict({}, backend="pyarrow")
-
-    # Méthode auxiliaire de vérification de l'existence d'une colonne dans la table des
-    # faits
-    def _column_exists_in_fact_table(self, column_name: str) -> bool:
-        """Check if a column exists in fact_table."""
-        fact_columns = self._get_fact_table_columns()
-        return column_name in fact_columns
-
-    # Méthode auxiliaire d'extraction des colonnes marquées comme clés primaires
-    def _get_primary_key_columns(self) -> list[str]:
-        """Get all column names that are marked as primary keys in metadata.
-
-        Récupère la liste des colonnes définies comme clés primaires dans la table
-        des métadonnées. Cette méthode est nécessaire car DatabaseAuditor n'hérite
-        pas de BaseSchemaManager.
-
-        Returns:
-            List of primary key column names. Empty list if no primary keys defined.
-        """
-        try:
-            result = self.conn.execute(
-                f"SELECT name FROM {self._qualified('metadata')} "
-                "WHERE is_primary_key = true"
-            ).fetchall()
-            return [row[0] for row in result]
-        except Exception:
-            return []
+    # ---------------------------------------------------------------------------
+    # Méthodes utilitaires
+    # ---------------------------------------------------------------------------
 
     # Méthode auxiliaire de vérification de la compatibilité des types entre eux
-    def _types_are_compatible(self, expected_type: str, actual_type: str) -> bool:
-        """Check if two SQL types are compatible."""
-        # Normalisation des types pour comparaison
-        expected_normalized = expected_type.upper().strip()
-        actual_normalized = actual_type.upper().strip()
+    @staticmethod
+    def _types_are_compatible(expected_type: str, actual_type: str) -> bool:
+        """Check whether a declared SQL type matches a physical one.
 
-        # Mapping des types équivalents
-        type_equivalents = {
-            "VARCHAR": ["TEXT", "STRING", "CHAR"],
-            "INTEGER": ["INT", "INT64", "BIGINT"],
-            "DOUBLE": ["FLOAT", "FLOAT64", "REAL"],
-            "BOOLEAN": ["BOOL"],
-        }
+        Types are compared case-insensitively, with a few synonyms accepted
+        (``TEXT``/``STRING`` for ``VARCHAR``, ``INT`` for ``INTEGER``, ``FLOAT8``
+        for ``DOUBLE``, ``BOOL`` for ``BOOLEAN``).
 
-        if expected_normalized == actual_normalized:
-            return True
-
-        # Vérification des équivalences
-        for base_type, equivalents in type_equivalents.items():
-            if expected_normalized == base_type and actual_normalized in equivalents:
-                return True
-            if actual_normalized == base_type and expected_normalized in equivalents:
-                return True
-            if expected_normalized in equivalents and actual_normalized in equivalents:
-                return True
-
-        return False
-
-    # Méthodes publiques pour obtenir des rapports spécialisés
-    # Méthode de vérification rapide de la base de données
-    def get_quick_health_check(self) -> dict[str, Any]:
-        """
-        Perform a quick health check of the database.
+        Args:
+            expected_type: Type declared in ``metadata.sql_type``.
+            actual_type: Type reported by ``DESCRIBE fact_table``.
 
         Returns:
-            Dictionary with basic health metrics
+            bool: True if both designate the same type.
+
+        Examples:
+            >>> DatabaseAuditor._types_are_compatible("VARCHAR", "text")
+            True
+            >>> DatabaseAuditor._types_are_compatible("INTEGER", "BIGINT")
+            False
+        """
+        # Synonymes d'un même type physique
+        synonyms = {
+            "TEXT": "VARCHAR",
+            "STRING": "VARCHAR",
+            "CHAR": "VARCHAR",
+            "INT": "INTEGER",
+            "INT4": "INTEGER",
+            "INT8": "BIGINT",
+            "FLOAT8": "DOUBLE",
+            "FLOAT4": "FLOAT",
+            "REAL": "FLOAT",
+            "BOOL": "BOOLEAN",
+        }
+        expected = expected_type.upper().strip()
+        actual = actual_type.upper().strip()
+        return synonyms.get(expected, expected) == synonyms.get(actual, actual)
+
+    # Méthode publique de vérification rapide de la base de données
+    def get_quick_health_check(self) -> dict[str, Any]:
+        """
+        Perform a quick health check of the result set.
+
+        Runs a ``BASIC`` validation and counts the fact table and metadata rows.
+
+        Returns:
+            dict[str, Any]: ``status`` (``'healthy'``, ``'warning'``,
+            ``'critical'``, ``'empty'`` or ``'error'``), ``timestamp``,
+            ``tables_count``, ``fact_table_rows``, ``metadata_entries``,
+            ``has_dataset_metadata`` and ``critical_issues``; ``error`` is added
+            when the check itself fails.
 
         Example:
             >>> health = auditor.get_quick_health_check()
-            >>> if health['status'] == 'healthy':
-            ...     print("Database is healthy")
+            >>> health['status']
+            'healthy'
         """
         try:
+            # Initialisation des informations de la base de données
             health_info: dict[str, Any] = {
                 "status": "unknown",
                 "timestamp": time.time(),
@@ -1411,40 +1034,27 @@ class DatabaseAuditor(SchemaScoped):
                 "critical_issues": 0,
             }
 
-            # Comptage des tables
-            tables = self._get_existing_tables()
-            health_info["tables_count"] = len(tables)
+            # Tables présentes et comptages
+            state = self._read_state()
+            health_info["tables_count"] = len(state.tables)
+            health_info["has_dataset_metadata"] = "dataset_metadata" in state.tables
+            health_info["fact_table_rows"] = (
+                self._count_rows("fact_table") if "fact_table" in state.tables else 0
+            )
+            health_info["metadata_entries"] = (
+                len(state.metadata) if state.metadata is not None else 0
+            )
 
-            # Comptage des lignes de fact_table
-            if "fact_table" in tables:
-                result = self.conn.execute(
-                    f"SELECT COUNT(*) FROM {self._qualified('fact_table')}"
-                ).fetchone()
-                health_info["fact_table_rows"] = result[0] if result else 0
-
-            # Présence des méta-données du jeu de résultats
-            health_info["has_dataset_metadata"] = "dataset_metadata" in tables
-
-            # Comptage des entrées de métadonnées
-            if "metadata" in tables:
-                result = self.conn.execute(
-                    f"SELECT COUNT(*) FROM {self._qualified('metadata')}"
-                ).fetchone()
-                health_info["metadata_entries"] = result[0] if result else 0
-
-            # Validation rapide pour les issues critiques
+            # Validation structurelle
             quick_report = self.validate_database(ValidationLevel.BASIC)
             health_info["critical_issues"] = quick_report.get_critical_issues_count()
 
-            # Détermination du statut global
+            # Statut global
             if health_info["critical_issues"] > 0:
                 health_info["status"] = "critical"
-            elif len(quick_report.issues) > 0:
+            elif quick_report.issues:
                 health_info["status"] = "warning"
-            elif (
-                health_info["fact_table_rows"] > 0
-                and health_info["metadata_entries"] > 0
-            ):
+            elif health_info["fact_table_rows"] > 0 and health_info["metadata_entries"]:
                 health_info["status"] = "healthy"
             else:
                 health_info["status"] = "empty"

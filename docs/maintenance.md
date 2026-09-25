@@ -35,7 +35,7 @@ option `DATA_INLINING_ROW_LIMIT` (`0` disables it entirely — useful for tests
 that inspect files directly) or set later with
 `set_option('data_inlining_row_limit', n)`. Inlined rows are written out to
 Parquet by
-[`DuckLakeMaintenance.flush_inlined_data`][dt_ducklake_manager.maintenance.compaction.DuckLakeMaintenance.flush_inlined_data],
+[`DuckLakeMaintenance.flush_inlined_data`][dt_ducklake_manager.maintenance.procedures.DuckLakeProcedures.flush_inlined_data],
 which reports `(schema, table, rows_flushed)` per table.
 
 Suggested policy: `0` for the initial build (so every row lands in Parquet
@@ -46,14 +46,14 @@ planned maintenance before any process reads the data files directly.
 
 | Operation | Effect | When | Risk |
 |---|---|---|---|
-| [`rewrite_data_files(delete_threshold)`][dt_ducklake_manager.maintenance.compaction.DuckLakeMaintenance.rewrite_data_files] | Rewrites files whose deleted-row share exceeds the threshold; **without an explicit threshold it is a true no-op**, even at 25% deletions | After every update/delete (`delete_threshold` 0.1–0.3) | None — old files stay readable via time travel |
-| [`merge_files(min_file_size)`][dt_ducklake_manager.maintenance.compaction.DuckLakeMaintenance.merge_files] | Merges adjacent files smaller than `min_file_size` | Once many small batches have accumulated; after `recluster` | None |
-| [`flush_inlined_data`][dt_ducklake_manager.maintenance.compaction.DuckLakeMaintenance.flush_inlined_data] | Writes inlined catalog rows out to Parquet | Planned maintenance; before reading files directly | None |
-| [`recluster(order_by)`][dt_ducklake_manager.maintenance.compaction.DuckLakeMaintenance.recluster] | Rewrites the whole table in `cluster_by` order | When file-range overlap degrades pruning (see [Recluster and the overlap indicator](#recluster-and-the-overlap-indicator)), typically after N updates | Full rewrite; storage doubles until cleanup |
-| [`repartition`][dt_ducklake_manager.maintenance.compaction.DuckLakeMaintenance.repartition] | Changes the partition keys and rewrites | Filter strategy change | Full rewrite; same as `recluster` |
-| [`expire_snapshots(older_than_days)`][dt_ducklake_manager.maintenance.compaction.DuckLakeMaintenance.expire_snapshots] | Makes snapshots older than the cutoff unreachable | **Planned maintenance only**, with an explicit retention | **Destroys time travel** beyond the retention |
-| [`cleanup_files`][dt_ducklake_manager.maintenance.compaction.DuckLakeMaintenance.cleanup_files] | Deletes files no live snapshot references | After `expire_snapshots` — the only step that actually frees disk space | Irreversible |
-| [`delete_orphaned_files`][dt_ducklake_manager.maintenance.compaction.DuckLakeMaintenance.delete_orphaned_files] | Deletes files under `data_path` unknown to the catalog | After an incident (interrupted transaction, manual file copy); always `dry_run` first | Irreversible |
+| [`rewrite_data_files(delete_threshold)`][dt_ducklake_manager.maintenance.procedures.DuckLakeProcedures.rewrite_data_files] | Rewrites files whose deleted-row share exceeds the threshold; **without an explicit threshold it is a true no-op**, even at 25% deletions | After every update/delete (`delete_threshold` 0.1–0.3) | None — old files stay readable via time travel |
+| [`merge_files(max_file_size)`][dt_ducklake_manager.maintenance.procedures.DuckLakeProcedures.merge_files] | Merges adjacent files into files of at most `max_file_size` bytes (the catalog's `target_file_size` by default). `min_file_size` is a **lower** bound: files *smaller* than it are left out of the merge, so it is not set by default | After every write (through `compact`); after `recluster` | None |
+| [`flush_inlined_data`][dt_ducklake_manager.maintenance.procedures.DuckLakeProcedures.flush_inlined_data] | Writes inlined catalog rows out to Parquet | Planned maintenance; before reading files directly | None |
+| [`recluster(order_by)`][dt_ducklake_manager.maintenance.policy.DuckLakeMaintenance.recluster] | Rewrites the whole table in `cluster_by` order | When file-range overlap degrades pruning (see [Recluster and the overlap indicator](#recluster-and-the-overlap-indicator)), typically after N updates | Full rewrite; storage doubles until cleanup |
+| [`set_partitioned_by` / `repartition`][dt_ducklake_manager.maintenance.procedures.DuckLakeProcedures.repartition] | Changes the partition keys (future writes only, or with a rewrite) | Filter strategy change on a very low cardinality column (see [Partitioning](#partitioning)) | `repartition`: full rewrite, same as `recluster` |
+| [`expire_snapshots(older_than_days)`][dt_ducklake_manager.maintenance.procedures.DuckLakeProcedures.expire_snapshots] | Makes snapshots older than the cutoff unreachable | **Planned maintenance only**, with an explicit retention | **Destroys time travel** beyond the retention |
+| [`cleanup_files`][dt_ducklake_manager.maintenance.procedures.DuckLakeProcedures.cleanup_files] | Deletes files no live snapshot references | After `expire_snapshots` — the only step that actually frees disk space | Irreversible |
+| [`delete_orphaned_files`][dt_ducklake_manager.maintenance.procedures.DuckLakeProcedures.delete_orphaned_files] | Deletes files under `data_path` unknown to the catalog | After an incident (interrupted transaction, manual file copy); always `dry_run` first | Irreversible |
 
 ## The cycle: rewrite → merge → expire → cleanup
 
@@ -65,9 +65,11 @@ recoverability and free space.
 The write operations (`DatabaseUpdater.update_database`,
 `DatabaseUpdater.add_columns`, `DatabaseDeleter.delete_rows`) call only the
 safe half of this cycle automatically, right after their own commit, through
-[`DuckLakeMaintenance.compact`][dt_ducklake_manager.maintenance.compaction.DuckLakeMaintenance.compact]
-(`merge_files` + `rewrite_data_files`; `compact_after_update=True` by
-default). They never call `expire_snapshots`, `cleanup_files` or
+[`DuckLakeMaintenance.compact`][dt_ducklake_manager.maintenance.procedures.DuckLakeProcedures.compact]
+(`merge_files` up to the catalog's `target_file_size`, then
+`rewrite_data_files`; `compact_after_update=True` by default). On a
+connection with no DuckLake catalog attached (in-memory tests), the compaction
+is skipped. They never call `expire_snapshots`, `cleanup_files` or
 `delete_orphaned_files` — those are only ever triggered by a deliberate,
 policy-driven call to `maintain`.
 
@@ -81,21 +83,49 @@ successive updates degrade: each batch is sorted *within itself* at write
 time, but not merged into the table's global order, so file ranges
 progressively overlap.
 
-[`storage_report()`][dt_ducklake_manager.maintenance.compaction.DuckLakeMaintenance.storage_report]
+[`storage_report()`][dt_ducklake_manager.maintenance.policy.DuckLakeMaintenance.storage_report]
 measures `overlap_ratio` — the share of active, non-empty files whose
 `[min, max]` range on the first `cluster_by` column overlaps another file's
 range (strict inequalities: two files that merely share a boundary value do
 not count as overlapping; identical ranges do). This is the indicator that
-decides when [`recluster`][dt_ducklake_manager.maintenance.compaction.DuckLakeMaintenance.recluster]
+decides when [`recluster`][dt_ducklake_manager.maintenance.policy.DuckLakeMaintenance.recluster]
 is worth its cost: a full-table rewrite (`CREATE TEMP TABLE … AS SELECT *`,
 `DELETE FROM table`, `INSERT … ORDER BY cluster_by`, single transaction,
 `threads = 1` for the insert so files come out disjoint and monotone rather
 than interleaved) that temporarily doubles storage until the previous files
 are released by `expire_snapshots` + `cleanup_files`.
 
+**Recluster only matters beyond a few million rows.** File-level
+pruning only starts once the table spans several files, i.e. beyond roughly
+5.5 million rows. Even with the target forced down to 2 MB (25 files after 10
+updates), dashboard queries stayed between 13 and 36 ms whether they read 1 file
+or 25. Below a few million rows, leave `recluster=False` and let
+`storage_report().overlap_ratio` grow: it is harmless.
+
+## Partitioning
+
+Partitioning complements the physical sort on `cluster_by`; it is not a
+substitute for it. DuckLake writes one directory per partition value, so it only
+pays off on a column of **very low cardinality** that nearly every query filters
+on (e.g. a model version or a year), and it multiplies small files on anything
+else. The build accepts `partition_by`; on an existing table:
+
+```python
+maintenance.set_partitioned_by("fact_table", partition_by=["model_version"])
+maintenance.reset_partitioned_by("fact_table")              # future writes only
+maintenance.repartition("fact_table", partition_by=["year(date)"])  # + rewrite
+```
+
+`set_partitioned_by` and `reset_partitioned_by` only affect the files written
+afterwards; `repartition` resets, applies the new keys and, unless
+`run_maintenance=False`, merges and rewrites the existing files so that they
+adopt the new layout — a full rewrite, with the same storage cost as
+`recluster`. Partition expressions are passed as is (`'country'`,
+`'year(ts)'`, `'month(ts)'`, `'bucket(8, user_id)'`).
+
 ## `MaintenancePolicy` and `maintain`
 
-[`MaintenancePolicy`][dt_ducklake_manager.maintenance.compaction.MaintenancePolicy]
+[`MaintenancePolicy`][dt_ducklake_manager.maintenance.policy.MaintenancePolicy]
 groups every threshold that decides which maintenance step is worth running.
 Every destructive or costly behaviour is opt-in — by default nothing expires,
 nothing is deleted, and the table is never reclustered:
@@ -103,7 +133,7 @@ nothing is deleted, and the table is never reclustered:
 | Field | Default | Meaning |
 |---|---|---|
 | `delete_threshold` | `0.1` | Passed to `rewrite_data_files` |
-| `min_file_size_bytes` | `100_000_000` | Below this a data file counts as "small" |
+| `min_file_size_bytes` | `100_000_000` | Below this a data file counts as "small"; only decides whether the merge step runs (the merge itself goes up to the catalog's `target_file_size`) |
 | `max_small_files` | `10` | `merge_files` runs when more small files than this exist |
 | `flush_inlined` | `True` | Flush inlined rows when some exist |
 | `max_overlap_ratio` | `0.5` | `recluster` runs when `overlap_ratio` exceeds this (and `recluster=True`) |
@@ -112,7 +142,7 @@ nothing is deleted, and the table is never reclustered:
 | `delete_orphaned` | `False` | Opt-in: run `delete_orphaned_files` |
 | `dry_run` | `False` | Log what would run without changing anything |
 
-[`DuckLakeMaintenance.maintain(policy)`][dt_ducklake_manager.maintenance.compaction.DuckLakeMaintenance.maintain]
+[`DuckLakeMaintenance.maintain(policy)`][dt_ducklake_manager.maintenance.policy.DuckLakeMaintenance.maintain]
 reads a fresh `storage_report()`, then considers each step in order — flush →
 rewrite → merge → recluster → expire → cleanup → delete_orphaned — running it
 only when its own indicator justifies it under the policy:
@@ -199,17 +229,25 @@ print(recovery.list_ducklake_snapshots())  # snapshot_id, author (run_id), commi
 See [Traceability of runs](schema.md#traceability-of-runs) for how `run_id` and
 `commit_message` land on a snapshot in the first place.
 
-### Time travel (reading a past state)
+### Time travel (reading or restoring a past state)
 
 ```python
-old = DuckLakeConnector(catalog_path, data_path, snapshot_version=17).connect()
-# read tables from `old`, then reinsert into the current catalog if recovering
+# Reading a past state on the connection already open
+at = DuckLakeConnector(catalog_path, data_path, snapshot_version=17).at_clause()
+conn.execute(f"SELECT * FROM fact_table {at}")
+
+# Restoring the result set to that state (a new, authored snapshot)
+DatabaseRecoveryManager(conn).restore_snapshot(17, run_id="rollback-run-42")
 ```
 
-With the file-based DuckDB backend, a snapshot connection cannot coexist with
-an already-open connection to the same catalog (the catalog file is locked at
-the process level); when a connection is already open, build an
-`AT (VERSION => n)` clause instead (`DuckLakeConnector.at_clause`).
+With the file-based DuckDB backend, a snapshot connection
+(`DuckLakeConnector(..., snapshot_version=17).connect()`) cannot coexist with an
+already-open connection to the same catalog (the catalog file is locked at the
+process level): on an open connection, use the `AT (VERSION => n)` clause built
+by `DuckLakeConnector.at_clause`. `restore_snapshot` copies the rows of each
+table as they were at the snapshot into temporary tables, then empties and
+refills the live tables in one transaction; a table whose columns changed since
+the snapshot is refused, and is read with the `AT` clause instead.
 
 ### Explicit broadcast of a partial-key column
 
@@ -251,7 +289,7 @@ for logging pipelines.
 
 ## Reading a `StorageReport`
 
-[`StorageReport`][dt_ducklake_manager.maintenance.compaction.StorageReport],
+[`StorageReport`][dt_ducklake_manager.maintenance.policy.StorageReport],
 returned by `storage_report()`, is the decision input behind `maintain`:
 `file_count`, `total_bytes`, `delete_file_count`, `delete_ratio`,
 `small_file_count`, `inlined_rows` / `has_inlined_data`, `snapshot_count` /

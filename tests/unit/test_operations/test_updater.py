@@ -1,5 +1,6 @@
 # Importation des modules
 # Modules de base
+import logging
 import os
 import warnings
 from datetime import datetime
@@ -13,21 +14,11 @@ import pytest
 
 # Modules du package à tester
 from dt_ducklake_manager.connection import DuckLakeConnector
+from dt_ducklake_manager.maintenance import IssueSeverity, ValidationLevel
 from dt_ducklake_manager.operations import DatabaseUpdater
 from dt_ducklake_manager.reporting import OperationReport
 from dt_ducklake_manager.schema import DuckLakeTablesBuilder
-
-
-def _ducklake_available() -> bool:
-    """Vérifie si l'extension DuckLake est disponible dans l'environnement de test."""
-    try:
-        conn = duckdb.connect(":memory:")
-        conn.execute("INSTALL ducklake; LOAD ducklake;")
-        conn.close()
-        return True
-    except Exception:
-        return False
-
+from tests.utils.ducklake import requires_ducklake
 
 # ---------------------------------------------------------------------------
 # Tests de l'initialisation
@@ -36,33 +27,57 @@ def _ducklake_available() -> bool:
 
 # Test de l'initialisation correcte de DatabaseUpdater
 def test_updater_initialization(built_ducklake_schema: Any) -> None:
-    """Test that DatabaseUpdater initializes without errors.
+    """Test that DatabaseUpdater initializes with a BASIC post-write audit.
 
     Args:
         built_ducklake_schema: Fixture providing a DuckDB connection with a built
         schema.
     """
     updater = DatabaseUpdater(connection=built_ducklake_schema, categorical_threshold=4)
-    assert updater is not None
     assert updater.categorical_threshold == 4
-    assert updater.batch_size > 0
+    assert updater.audit_level == ValidationLevel.BASIC
+    assert updater.auditor is not None
 
 
-# Test de l'initialisation avec enable_validation=False
-def test_updater_initialization_without_validation(built_ducklake_schema: Any) -> None:
-    """Test that DatabaseUpdater can be initialized with validation disabled.
+# Test de la désactivation de l'audit post-écriture
+def test_updater_initialization_without_audit(built_ducklake_schema: Any) -> None:
+    """Test that the post-write audit can be disabled with audit_level=None.
 
     Args:
         built_ducklake_schema: Fixture providing a DuckDB connection with a built
         schema.
     """
-    updater = DatabaseUpdater(connection=built_ducklake_schema, enable_validation=False)
-    assert updater.auditor is None
+    updater = DatabaseUpdater(connection=built_ducklake_schema, audit_level=None)
+    assert updater.audit_level is None
 
 
-# Test que catalog_alias est propagé à tous les sous-gestionnaires
+# Test que batch_size est accepté mais signalé comme obsolète
+def test_updater_batch_size_is_deprecated(built_ducklake_schema: Any) -> None:
+    """Test that passing batch_size emits a DeprecationWarning.
+
+    Args:
+        built_ducklake_schema: Fixture providing a DuckDB connection with a built
+        schema.
+    """
+    with pytest.warns(DeprecationWarning, match="batch_size"):
+        DatabaseUpdater(connection=built_ducklake_schema, batch_size=10)
+
+
+# Test que l'updater n'expose plus de gestionnaire de données public
+def test_updater_has_no_public_data_manager(built_ducklake_schema: Any) -> None:
+    """Test that no public sub-manager can add columns behind allow_new_columns.
+
+    Args:
+        built_ducklake_schema: Fixture providing a DuckDB connection with a built
+        schema.
+    """
+    updater = DatabaseUpdater(connection=built_ducklake_schema)
+    assert not hasattr(updater, "data_mgr")
+
+
+# Test que catalog_alias est propagé à l'auditeur et à la maintenance
 def test_updater_propagates_catalog_alias(built_ducklake_schema: Any) -> None:
-    """Test that ``catalog_alias`` reaches every specialized sub-manager.
+    """Test that ``catalog_alias`` reaches the auditor and the maintenance helper.
 
     Args:
         built_ducklake_schema: Fixture providing a DuckDB connection with a built
@@ -74,9 +89,9 @@ def test_updater_propagates_catalog_alias(built_ducklake_schema: Any) -> None:
         schema="predictions",
     )
     assert updater.catalog_alias == "my_lake"
-    assert updater.data_mgr.catalog_alias == "my_lake"
     assert updater.auditor is not None
     assert updater.auditor.catalog_alias == "my_lake"
+    assert updater.maintenance.catalog_alias == "my_lake"
 
 
 # Test que catalog_alias vaut 'db' par défaut
@@ -89,42 +104,6 @@ def test_updater_default_catalog_alias(built_ducklake_schema: Any) -> None:
     """
     updater = DatabaseUpdater(connection=built_ducklake_schema)
     assert updater.catalog_alias == "db"
-    assert updater.data_mgr.catalog_alias == "db"
-
-
-# ---------------------------------------------------------------------------
-# Tests de validate_operation()
-# ---------------------------------------------------------------------------
-
-
-# Test que validate_operation retourne True pour une insertion valide
-def test_validate_operation_insert_returns_bool(
-    updater: DatabaseUpdater, update_df: pl.DataFrame
-) -> None:
-    """Test that validate_operation returns a boolean for an insert operation.
-
-    Args:
-        updater: DatabaseUpdater fixture.
-        update_df: DataFrame with new rows.
-    """
-    result = updater.validate_operation("insert", df=update_df)
-    assert isinstance(result, bool)
-
-
-# Test que validate_operation retourne True quand la validation est désactivée
-def test_validate_operation_disabled_returns_true(
-    built_ducklake_schema: Any, update_df: pl.DataFrame
-) -> None:
-    """Test that validate_operation always returns True when validation is disabled.
-
-    Args:
-        built_ducklake_schema: Fixture providing a DuckDB connection with a built
-        schema.
-        update_df: DataFrame with new rows.
-    """
-    updater = DatabaseUpdater(connection=built_ducklake_schema, enable_validation=False)
-    result = updater.validate_operation("insert", df=update_df)
-    assert result is True
 
 
 # ---------------------------------------------------------------------------
@@ -509,10 +488,7 @@ def test_update_database_allow_new_columns_invalid_metadata_raises(
 
 
 # Test que update_database réussit avec compaction réelle sur un catalogue sur disque
-@pytest.mark.skipif(
-    not _ducklake_available(),
-    reason="Extension ducklake non disponible dans cet environnement",
-)
+@requires_ducklake
 def test_update_database_compacts_on_real_ducklake_catalog(tmp_path: Any) -> None:
     """Test that update_database succeeds end-to-end against a real DuckLake catalog.
 
@@ -929,10 +905,7 @@ def test_get_key_combinations_explicit_broadcast_recipe(
 
 
 # Test qu'add_columns réussit avec compaction réelle sur un catalogue sur disque
-@pytest.mark.skipif(
-    not _ducklake_available(),
-    reason="Extension ducklake non disponible dans cet environnement",
-)
+@requires_ducklake
 def test_add_columns_on_real_ducklake_catalog(tmp_path: Any) -> None:
     """Test that add_columns succeeds end-to-end against a real DuckLake catalog.
 
@@ -1005,8 +978,8 @@ def test_update_rolls_back_on_fact_table_failure(
 ) -> None:
     """Test that a failed fact table step leaves the database untouched.
 
-    The fact table update is the 4th of six steps: the metadata update that
-    precedes it must be rolled back too.
+    The type widening of the metadata precedes the upsert: it must be rolled back
+    too.
 
     Args:
         updater: DatabaseUpdater fixture.
@@ -1014,8 +987,11 @@ def test_update_rolls_back_on_fact_table_failure(
     """
     before = _snapshot_state(updater.conn)
 
-    # Échec simulé de l'étape de mise à jour de la table des faits
-    setattr(updater, "_update_fact_table_direct", lambda df, report: False)
+    # Échec simulé de l'étape d'écriture de la table des faits
+    def _fail(*args: object, **kwargs: object) -> None:
+        raise duckdb.IOException("simulated I/O error")
+
+    setattr(updater, "_upsert_fact_table", _fail)
 
     assert updater.update_database(update_df, keep="first") is False
 
@@ -1036,10 +1012,10 @@ def test_update_rolls_back_on_exception(
     before = _snapshot_state(updater.conn)
 
     # Exception simulée au sein de l'étape de mise à jour de la table des faits
-    def _boom(df: Any, report: Any) -> bool:
+    def _boom(*args: object, **kwargs: object) -> None:
         raise RuntimeError("disque plein")
 
-    setattr(updater, "_update_fact_table_direct", _boom)
+    setattr(updater, "_upsert_fact_table", _boom)
 
     assert updater.update_database(update_df, keep="first") is False
     assert _snapshot_state(updater.conn) == before
@@ -1051,8 +1027,8 @@ def test_update_rolls_back_on_last_step_failure(
 ) -> None:
     """Test that a failure on the last step also rolls the fact upsert back.
 
-    Post-update validation runs after the rows have been written: its failure
-    must undo them.
+    The post-write audit runs after the rows have been written: its failure must
+    undo them.
 
     Args:
         updater: DatabaseUpdater fixture.
@@ -1082,13 +1058,13 @@ def test_update_rolls_back_on_critical_validation_issues(
     """
     before = _snapshot_state(updater.conn)
 
-    # Rapport de validation simulant deux problèmes critiques
-    class _CriticalReport:
-        def get_critical_issues_count(self) -> int:
-            return 2
+    # Rapport de validation simulant un problème critique
+    class _Issue:
+        description = "fact_table is missing"
 
+    class _CriticalReport:
         def get_issues_by_severity(self, severity: Any) -> list[Any]:
-            return []
+            return [_Issue()] if severity == IssueSeverity.CRITICAL else []
 
     assert updater.auditor is not None
     setattr(updater.auditor, "validate_database", lambda level=None: _CriticalReport())
@@ -1110,25 +1086,23 @@ def test_update_without_transaction_keeps_partial_state(
         updater: DatabaseUpdater fixture.
         update_df: DataFrame with two new rows.
     """
-    # Doublons présents en base : leur suppression précède l'étape des faits
-    updater.conn.execute(
-        "INSERT INTO fact_table (id, category, value, date, status,"
-        " high_cardinality) SELECT id, category, value, date, status,"
-        " high_cardinality FROM fact_table WHERE id = 1"
-    )
-    count_with_duplicate = updater.conn.execute(
-        "SELECT COUNT(*) FROM fact_table"
-    ).fetchone()[0]
 
-    setattr(updater, "_update_fact_table_direct", lambda d, report: False)
+    # Nouvelle colonne ajoutée avant l'étape d'écriture des faits, qui échoue
+    def _fail(*args: object, **kwargs: object) -> None:
+        raise duckdb.IOException("simulated I/O error")
+
+    setattr(updater, "_upsert_fact_table", _fail)
+    with_score = update_df.with_columns(pl.lit(1.0).alias("score"))
 
     assert (
-        updater.update_database(update_df, keep="first", use_transaction=False) is False
+        updater.update_database(
+            with_score, allow_new_columns=True, use_transaction=False
+        )
+        is False
     )
 
-    # La déduplication, elle, a bien persisté : l'état est partiel
-    count_after = updater.conn.execute("SELECT COUNT(*) FROM fact_table").fetchone()[0]
-    assert count_after < count_with_duplicate
+    # La colonne ajoutée, elle, a bien persisté : l'état est partiel
+    assert "score" in updater._get_fact_table_columns()
 
 
 # Test que les deux modes produisent le même état final en cas de succès
@@ -1228,9 +1202,7 @@ def value_label_conn() -> Any:
 @pytest.fixture
 def value_label_updater(value_label_conn: Any) -> DatabaseUpdater:
     """Create a DatabaseUpdater over the code/label schema fixture."""
-    return DatabaseUpdater(
-        connection=value_label_conn, categorical_threshold=10, enable_validation=True
-    )
+    return DatabaseUpdater(connection=value_label_conn, categorical_threshold=10)
 
 
 # Test qu'update_database refuse un nouveau libellé partiel pour un code existant
@@ -1248,7 +1220,8 @@ def test_update_database_refuses_partial_new_label(
     before = _snapshot_state(value_label_updater.conn)
 
     df = pl.DataFrame({"id": [1], "nc8_libelle": ["NewLabel"]})
-    assert value_label_updater.update_database(df) is False
+    with pytest.raises(ValueError, match="update_value_labels"):
+        value_label_updater.update_database(df)
 
     after = _snapshot_state(value_label_updater.conn)
     assert after["facts"] == before["facts"]
@@ -1267,7 +1240,8 @@ def test_update_database_refuses_new_row_without_label_for_existing_code(
     before = _snapshot_state(value_label_updater.conn)
 
     df = pl.DataFrame({"id": [4], "nc8": ["01"], "value": [4.0]})
-    assert value_label_updater.update_database(df, allow_new_columns=False) is False
+    with pytest.raises(ValueError):
+        value_label_updater.update_database(df, allow_new_columns=False)
 
     after = _snapshot_state(value_label_updater.conn)
     assert after["facts"] == before["facts"]
@@ -1281,7 +1255,8 @@ def test_update_database_refuses_code_change_without_label(
     """Test that changing a non-primary-key code without its label is refused.
 
     Moving id=1 into code '02' keeps its stale label 'Chevaux', conflicting with
-    the label already carried by '02' ('Bovins').
+    the label already carried by '02' ('Bovins'). The error is an input error:
+    it is raised (after rollback), not turned into a False return value.
 
     Args:
         value_label_updater: DatabaseUpdater over the code/label schema fixture.
@@ -1289,7 +1264,8 @@ def test_update_database_refuses_code_change_without_label(
     before = _snapshot_state(value_label_updater.conn)
 
     df = pl.DataFrame({"id": [1], "nc8": ["02"]})
-    assert value_label_updater.update_database(df) is False
+    with pytest.raises(ValueError):
+        value_label_updater.update_database(df)
 
     after = _snapshot_state(value_label_updater.conn)
     assert after["facts"] == before["facts"]
@@ -1417,3 +1393,94 @@ def test_add_columns_declares_new_label_column(
         "SELECT label_for FROM metadata WHERE name = 'category_libelle'"
     ).fetchone()
     assert meta[0] == "category"
+
+
+# Test qu'un code absent est signalé même quand la colonne de code contient NULL
+def test_update_value_labels_warns_on_absent_code_with_null_codes() -> None:
+    """Test that an absent code is reported although the fact table holds a NULL.
+
+    ``x NOT IN (subquery containing NULL)`` is never true: the detection must not
+    depend on the absence of null codes in the fact table.
+    """
+    df = pl.DataFrame(
+        {
+            "id": [1, 2, 3],
+            "nc8": ["01", None, "02"],
+            "nc8_libelle": ["Chevaux", None, "Bovins"],
+        }
+    )
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        builder = DuckLakeTablesBuilder(
+            df,
+            categorical_threshold=10,
+            primary_keys=["id"],
+            value_labels={"nc8_libelle": "nc8"},
+        )
+    builder.build_schema()
+    updater = DatabaseUpdater(connection=builder.conn, categorical_threshold=10)
+
+    labels = pl.DataFrame({"nc8": ["ZZZ"], "nc8_libelle": ["Inconnu"]})
+    report = updater.update_value_labels("nc8_libelle", labels)
+
+    assert any("ZZZ" in w and "1 code(s)" in w for w in report.warnings)
+    assert report.rows_updated == 0
+
+
+# Test qu'un libellé inchangé ne réécrit aucune ligne
+def test_update_value_labels_same_label_rewrites_nothing(
+    value_label_updater: DatabaseUpdater,
+) -> None:
+    """Test that relabeling a code with its current label rewrites no row.
+
+    Args:
+        value_label_updater: DatabaseUpdater over the code/label schema fixture.
+    """
+    labels = pl.DataFrame({"nc8": ["01"], "nc8_libelle": ["Chevaux"]})
+    report = value_label_updater.update_value_labels("nc8_libelle", labels)
+    assert report.rows_updated == 0
+    assert report.warnings == []
+
+
+# Test qu'un code nul dans le lot de libellés est refusé
+def test_update_value_labels_null_code_raises(
+    value_label_updater: DatabaseUpdater,
+) -> None:
+    """Test that a null code in labels raises ValueError before any write.
+
+    Args:
+        value_label_updater: DatabaseUpdater over the code/label schema fixture.
+    """
+    labels = pl.DataFrame({"nc8": [None], "nc8_libelle": ["Rien"]})
+    with pytest.raises(ValueError, match="null"):
+        value_label_updater.update_value_labels("nc8_libelle", labels)
+
+
+# Test qu'add_columns ne compte comme mises à jour que les lignes modifiées
+def test_add_columns_overwrite_counts_only_changed_rows(
+    updater: DatabaseUpdater,
+) -> None:
+    """Test that overwriting a column with its current values rewrites no row.
+
+    Args:
+        updater: DatabaseUpdater fixture.
+    """
+    values = pl.DataFrame({"id": [1, 2, 3], "value": [0.1, 0.2, 99.0]})
+    report = updater.add_columns(values, overwrite=True)
+    assert report.rows_updated == 1
+    assert report.rows_inserted == 0
+
+
+# Test qu'add_columns journalise les lignes restées sans valeur
+def test_add_columns_logs_rows_left_null(updater: DatabaseUpdater, caplog: Any) -> None:
+    """Test that the rows of the base absent from df are counted in the log.
+
+    Args:
+        updater: DatabaseUpdater fixture.
+        caplog: pytest log capture.
+    """
+    with caplog.at_level(logging.DEBUG, logger="base_schema_manager"):
+        updater.add_columns(pl.DataFrame({"id": [1, 2], "score": [1.0, 2.0]}))
+    assert any(
+        "3 fact_table row(s) left NULL" in r.getMessage() for r in caplog.records
+    )

@@ -6,7 +6,6 @@ from datetime import datetime
 from typing import Any
 
 # DuckDB
-import duckdb
 import polars as pl
 
 # Module de tests
@@ -18,24 +17,7 @@ from dt_ducklake_manager.maintenance import DatabaseRecoveryManager
 from dt_ducklake_manager.operations import DatabaseDeleter, DatabaseUpdater
 from dt_ducklake_manager.reporting import OperationReport
 from dt_ducklake_manager.schema import DuckLakeTablesBuilder
-
-
-def _ducklake_available() -> bool:
-    """Vérifie si l'extension DuckLake est disponible dans l'environnement de test."""
-    try:
-        conn = duckdb.connect(":memory:")
-        conn.execute("INSTALL ducklake; LOAD ducklake;")
-        conn.close()
-        return True
-    except Exception:
-        return False
-
-
-_requires_ducklake = pytest.mark.skipif(
-    not _ducklake_available(),
-    reason="Extension ducklake non disponible dans cet environnement",
-)
-
+from tests.utils.ducklake import requires_ducklake
 
 # ---------------------------------------------------------------------------
 # Tests de OperationReport.summary() / to_dict() (aucune base requise)
@@ -140,7 +122,7 @@ def test_failure_produces_partial_report(built_ducklake_schema: Any) -> None:
     def _boom(*args: Any, **kwargs: Any) -> bool:
         raise RuntimeError("panne simulée")
 
-    updater._update_fact_table_direct = _boom  # type: ignore[method-assign]
+    updater._upsert_fact_table = _boom  # type: ignore[assignment]
 
     update_df = pl.DataFrame({"id": [200], "category": ["A"], "value": [1.0]})
     success = updater.update_database(update_df)
@@ -191,7 +173,7 @@ def real_catalog_conn(tmp_path: Any) -> Any:
 
 
 # Test que les comptages de lignes d'un update sont exacts (table_changes)
-@_requires_ducklake
+@requires_ducklake
 def test_update_row_counts_from_table_changes(real_catalog_conn: Any) -> None:
     """Test that rows_inserted/rows_updated are exact, measured via table_changes.
 
@@ -220,7 +202,7 @@ def test_update_row_counts_from_table_changes(real_catalog_conn: Any) -> None:
 
 
 # Test que add_columns mesure mises à jour et insertions sur un catalogue réel
-@_requires_ducklake
+@requires_ducklake
 def test_add_columns_row_counts_from_table_changes(real_catalog_conn: Any) -> None:
     """Test that add_columns' outer merge reports exact updated/inserted counts.
 
@@ -247,15 +229,15 @@ def test_add_columns_row_counts_from_table_changes(real_catalog_conn: Any) -> No
 
 
 # Test qu'une compaction sans effet journalise des compteurs explicitement à zéro
-@_requires_ducklake
-def test_maintenance_no_effect_explicit_zero(
-    real_catalog_conn: Any, caplog: Any
-) -> None:
-    """Test that a no-op compaction reports explicit zeros, not silent absence.
+@requires_ducklake
+def test_maintenance_no_effect_explicit_zero(real_catalog_conn: Any) -> None:
+    """Test that a no-op rewrite reports explicit zeros, not silent absence.
+
+    The zero is asserted on the counters of the report, not on the wording of the
+    log line.
 
     Args:
         real_catalog_conn: Fixture providing a real, on-disk DuckLake catalog.
-        caplog: pytest fixture capturing log records.
     """
     updater = DatabaseUpdater(connection=real_catalog_conn, categorical_threshold=4)
     # Une seule ligne nouvelle : pas de suppression, rewrite_data_files ne peut
@@ -268,15 +250,11 @@ def test_maintenance_no_effect_explicit_zero(
     report = updater.last_report
     assert report is not None
     assert report.maintenance["rewrite_files_processed"] == 0
-    assert any(
-        "seuil de suppression" in record.message
-        or "threshold" in record.message.lower()
-        for record in caplog.records
-    )
+    assert report.maintenance["rewrite_files_created"] == 0
 
 
 # Test que run_id/commit_message se retrouvent dans ducklake_snapshots
-@_requires_ducklake
+@requires_ducklake
 def test_run_id_visible_in_snapshots(real_catalog_conn: Any) -> None:
     """Test that run_id/commit_message land on the resulting DuckLake snapshot.
 
@@ -308,7 +286,7 @@ def test_run_id_visible_in_snapshots(real_catalog_conn: Any) -> None:
 
 
 # Test que delete_columns (métadonnées seules) laisse rows_inserted/deleted à zéro
-@_requires_ducklake
+@requires_ducklake
 def test_delete_columns_report_has_no_row_changes(real_catalog_conn: Any) -> None:
     """Test that a metadata-only delete_columns reports zero row changes.
 

@@ -247,7 +247,7 @@ class DuckLakeTablesBuilder(SchemaScoped):
         self.conn.execute("DROP VIEW temp_metadata")
 
         # Logging
-        self.logger.info("Successfully registered duckdb meta-data table")
+        self.logger.debug("Successfully registered duckdb meta-data table")
 
     # Méthode de création de la table d'informations
     def create_duckdb_fact_table(
@@ -341,8 +341,8 @@ class DuckLakeTablesBuilder(SchemaScoped):
                 )
 
                 # Logging
-                self.logger.info(
-                    f"The fact_table is successfully partitionned on"
+                self.logger.debug(
+                    f"The fact_table is successfully partitioned on"
                     f" the following keys : ({partition_by})"
                 )
 
@@ -359,7 +359,7 @@ class DuckLakeTablesBuilder(SchemaScoped):
             # Logging des clés logiques (non contraintes DDL)
             if primary_keys and len(primary_keys) > 0:
                 pk_columns = ", ".join(primary_keys)
-                self.logger.info(
+                self.logger.debug(
                     f"Logical primary keys registered in the metadata table for the"
                     f" fact_table : ({pk_columns})"
                 )
@@ -379,7 +379,7 @@ class DuckLakeTablesBuilder(SchemaScoped):
         self.conn.execute("DROP VIEW temp_fact")
 
         # Logging
-        self.logger.info("Successfully registered duckdb fact table")
+        self.logger.debug("Successfully registered duckdb fact table")
 
     # Méthode de création de la table des méta-données du jeu de résultats
     def create_duckdb_dataset_metadata_table(
@@ -442,7 +442,7 @@ class DuckLakeTablesBuilder(SchemaScoped):
         )
 
         # Logging
-        self.logger.info(
+        self.logger.debug(
             f"Successfully registered duckdb dataset meta-data table"
             f" (schema_version={SCHEMA_VERSION})"
         )

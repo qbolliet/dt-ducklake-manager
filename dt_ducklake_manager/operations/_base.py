@@ -5,7 +5,6 @@ import os
 import threading
 import time
 import warnings
-from abc import ABC, abstractmethod
 from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import datetime
@@ -17,8 +16,8 @@ import narwhals as nw
 from narwhals.typing import IntoDataFrame
 
 # Import des gestionnaires de maintenance
-from ..maintenance.auditor import DatabaseAuditor, ValidationLevel, ValidationReport
-from ..maintenance.compaction import DuckLakeMaintenance
+from ..maintenance.auditor import DatabaseAuditor, IssueSeverity, ValidationLevel
+from ..maintenance.policy import DuckLakeMaintenance
 
 # Import des utilitaires
 from ..reporting import (
@@ -44,12 +43,15 @@ from ..utils.value_labels import check_value_label_dependency, validate_value_la
 
 # Classe contenant des opérations utilitaires de base sur la base de données au schéma
 # (table des faits - méta-données - méta-données du jeu de résultats)
-class BaseSchemaManager(SchemaScoped, ABC):
+class BaseSchemaManager(SchemaScoped):
     """
     Base class for database schema management operations.
 
     Provides common functionality for metadata management, column operations,
-    and database introspection. All concrete managers should inherit from this class.
+    database introspection, the transaction hook shared by every public write
+    (:meth:`_transaction`) and the structural audit run after a write
+    (:meth:`_post_write_audit`). The concrete managers (``DatabaseUpdater``,
+    ``DatabaseDeleter``) inherit from this class.
 
     Attributes:
         conn (duckdb.DuckDBPyConnection): Database connection
@@ -60,12 +62,17 @@ class BaseSchemaManager(SchemaScoped, ABC):
             AS <alias>``), carried alongside ``schema`` so table references can be
             fully qualified by the catalog.
         logger: Logger instance for operation tracking
-        auditor (DatabaseAuditor | None): Auditor used for validation, set by the
-            concrete managers (None when validation is disabled)
+        auditor (DatabaseAuditor | None): Auditor of the schema, set by the
+            concrete managers.
+        audit_level (ValidationLevel | None): Level of the audit run inside the
+            transaction of a write, set by the concrete managers (None disables
+            it).
     """
 
-    # Auditeur de la base, renseigné par les gestionnaires concrets
+    # Auditeur de la base et niveau de l'audit post-écriture, renseignés par les
+    # gestionnaires concrets
     auditor: DatabaseAuditor | None = None
+    audit_level: ValidationLevel | None = None
 
     # Initialisation
     def __init__(
@@ -98,9 +105,9 @@ class BaseSchemaManager(SchemaScoped, ABC):
 
         Example:
             >>> conn = DuckLakeConnector('catalog.ducklake', 'data/').connect()
-            >>> manager = ConcreteManager(conn, categorical_threshold=30)
+            >>> manager = BaseSchemaManager(conn, categorical_threshold=30)
             >>> # Cibler un schéma dédié dans le même catalogue
-            >>> manager = ConcreteManager(conn, schema='predictions')
+            >>> manager = BaseSchemaManager(conn, schema='predictions')
         """
         # Initialisation de la connexion DuckLake.
         # Le fallback :memory: est réservé aux tests unitaires ; en production la
@@ -136,7 +143,9 @@ class BaseSchemaManager(SchemaScoped, ABC):
             self.conn, catalog_alias=self.catalog_alias, schema=self.schema
         )
 
-        # Cache thread-safe pour optimiser les accès aux métadonnées
+        # Cache thread-safe des métadonnées. Vidé à l'ouverture de chaque transaction
+        # et après chaque écriture de metadata : un autre gestionnaire partageant
+        # la connexion peut avoir modifié la table entre deux opérations.
         self._metadata_cache: nw.DataFrame[Any] | None = None
         self._cache_lock = threading.RLock()
 
@@ -258,6 +267,7 @@ class BaseSchemaManager(SchemaScoped, ABC):
         files_before, bytes_before, _, _ = self._table_info(table) or (0, 0, 0, 0)
         snapshot_before = self._current_snapshot()
 
+        # Initialisation du rapport
         report = OperationReport(
             operation=operation,
             schema=self.schema,
@@ -271,6 +281,10 @@ class BaseSchemaManager(SchemaScoped, ABC):
         )
         self._current_report = report
 
+        # Métadonnées relues depuis la base au sein de l'opération : le cache a pu
+        # vieillir depuis la précédente
+        self._invalidate_metadata_cache()
+
         # Connexion
         self.conn.begin()
         self._in_transaction = True
@@ -280,10 +294,12 @@ class BaseSchemaManager(SchemaScoped, ABC):
         try:
             yield report
         except Exception as e:
-            # Annulation : la base revient à son état d'avant le BEGIN
+            # Annulation : la base revient à son état d'avant le BEGIN, cache des
+            # métadonnées compris
             self.conn.rollback()
             self._in_transaction = False
             self._current_report = None
+            self._invalidate_metadata_cache()
             report.duration_seconds = time.time() - start_time
             report.warnings.append(f"{operation} failed: {e}")
             self.last_report = report
@@ -395,25 +411,29 @@ class BaseSchemaManager(SchemaScoped, ABC):
         if snapshot is not None:
             report.snapshot_after = snapshot
 
-    # Méthode de construction d'un rapport minimal pour un échec précoce
-    def _early_failure_report(
+    # Méthode de construction d'un rapport pour une opération arrêtée avant écriture
+    def _early_report(
         self, operation: str, run_id: str | None, warning: str
     ) -> OperationReport:
-        """Build and store a minimal report for a failure before any transaction.
+        """Build and store a minimal report for an operation stopped before writing.
 
-        Used by validation checks that reject an operation before
-        ``_transaction`` ever opens (e.g. pre-operation auditor validation),
-        so ``self.last_report``/the method's return value never sits at ``None``
-        even on the earliest possible failure.
+        Used when an operation decides not to open any transaction (e.g. an
+        ``update_database`` called with an empty DataFrame), so that
+        ``self.last_report`` always describes the last call.
 
         Args:
-            operation: Name of the operation that failed.
+            operation: Name of the operation.
             run_id: Run identifier the caller was about to use, if any.
             warning: Human-readable reason, appended to ``report.warnings`` and
                 logged at WARNING.
 
         Returns:
             OperationReport: the minimal report, also stored on ``self.last_report``.
+
+        Examples:
+            >>> report = manager._early_report('update', None, 'empty update_df')
+            >>> report.warnings
+            ['empty update_df']
         """
         # Création du rapport
         report = OperationReport(
@@ -429,6 +449,80 @@ class BaseSchemaManager(SchemaScoped, ABC):
         # Mise à jour du dernier rapport
         self.last_report = report
         return report
+
+    # Méthode de compaction post-écriture, après le commit
+    def _compact_after_write(
+        self, report: OperationReport, delete_threshold: float | None = None
+    ) -> None:
+        """Run the post-write compaction of the fact table, after the commit.
+
+        Merges the small files and rewrites the files carrying deletions
+        (``DuckLakeMaintenance.compact``), and records the counters in
+        ``report.maintenance``. Skipped with a DEBUG line on a connection with no
+        DuckLake catalog attached, where the DuckLake procedures do not exist.
+
+        Args:
+            report: Report of the committed operation, updated in place.
+            delete_threshold: Deleted-row share above which a file is rewritten.
+                Defaults to None (the procedure's default, 0.1).
+
+        Examples:
+            >>> manager._compact_after_write(manager.last_report)
+        """
+        # Aucun catalogue DuckLake attaché : pas de procédure de maintenance
+        if self._catalog is None:
+            self.logger.debug("Post-write compaction skipped: no DuckLake catalog")
+            return
+        # Compaction du schéma du gestionnaire
+        if delete_threshold is None:
+            self.maintenance.compact(schema=self.schema, report=report)
+        else:
+            self.maintenance.compact(
+                schema=self.schema, delete_threshold=delete_threshold, report=report
+            )
+
+    # Méthode d'audit structurel de la base à l'intérieur d'une écriture
+    def _post_write_audit(self, report: OperationReport) -> None:
+        """Audit the schema at ``audit_level`` from inside a write transaction.
+
+        Run by the write operations right before their commit, so that a write
+        leaving the result set structurally broken is rolled back. Critical issues
+        raise; high-severity issues are appended to ``report.warnings`` without
+        blocking the write. Does nothing when ``audit_level`` or ``auditor`` is
+        None.
+
+        Args:
+            report: In-progress report of the enclosing transaction.
+
+        Raises:
+            RuntimeError: If the audit finds at least one critical issue, whose
+                descriptions are listed in the message.
+
+        Examples:
+            >>> with manager._transaction('update') as report:
+            ...     manager._post_write_audit(report)
+        """
+        # Audit désactivé
+        if self.audit_level is None or self.auditor is None:
+            return
+
+        # Audit structurel
+        audit = self.auditor.validate_database(self.audit_level)
+
+        # Problèmes critiques : annulation de l'écriture
+        critical = audit.get_issues_by_severity(IssueSeverity.CRITICAL)
+        if critical:
+            descriptions = "; ".join(issue.description for issue in critical)
+            raise RuntimeError(
+                f"post-write audit ({self.audit_level.value}) found {len(critical)}"
+                f" critical issue(s): {descriptions}"
+            )
+
+        # Problèmes de sévérité haute : signalés sans bloquer l'écriture
+        for issue in audit.get_issues_by_severity(IssueSeverity.HIGH):
+            warning = f"post-write audit: {issue.description}"
+            self.logger.warning(warning)
+            report.warnings.append(warning)
 
     # Méthodes de gestion du cache des métadonnées
     # Méthode de chargement des méta-données
@@ -609,6 +703,46 @@ class BaseSchemaManager(SchemaScoped, ABC):
         decoded: list[str] = json.loads(result[0])
         return decoded
 
+    # Méthode de construction de la clause ORDER BY d'un lot d'écriture
+    @staticmethod
+    def _cluster_by_order_clause(
+        batch_columns: list[str], cluster_by: list[str] | None
+    ) -> str:
+        """
+        Build the ``ORDER BY`` clause sorting a write batch by ``cluster_by``.
+
+        Keeps only the ``cluster_by`` columns actually present in the batch (a
+        partial-column batch, e.g. from ``add_columns``, may not carry every sort
+        column), in the declared ``cluster_by`` order. Sorting the whole batch
+        before writing it is what lets DuckLake prune files and row groups on
+        these columns.
+
+        Args:
+            batch_columns: Columns present in the DataFrame being written.
+            cluster_by: Physical sort key read from ``dataset_metadata``, or None
+                when none is defined.
+
+        Returns:
+            str: The ``ORDER BY ...`` SQL clause, or ``""`` when no ``cluster_by``
+            column is present in the batch.
+
+        Examples:
+            >>> BaseSchemaManager._cluster_by_order_clause(
+            ...     ['id', 'value'], ['date', 'id'])
+            'ORDER BY "id"'
+            >>> BaseSchemaManager._cluster_by_order_clause(['value'], None)
+            ''
+        """
+        # Aucun tri déclaré
+        if not cluster_by:
+            return ""
+        # Restriction aux colonnes présentes dans le lot, dans l'ordre de cluster_by
+        batch_columns_set = set(batch_columns)
+        applicable = [c for c in cluster_by if c in batch_columns_set]
+        if not applicable:
+            return ""
+        return f"ORDER BY {', '.join(quote_ident(c) for c in applicable)}"
+
     # Méthode de mise à jour du tri physique (cluster_by) sur une base existante
     def update_cluster_by(self, columns: list[str]) -> None:
         """
@@ -775,7 +909,7 @@ class BaseSchemaManager(SchemaScoped, ABC):
         self._invalidate_metadata_cache()
 
         # Logging
-        self.logger.info(f"Added/updated column {column} in metadata")
+        self.logger.debug(f"Added/updated column {column} in metadata")
 
     # Méthode de renseignement ou de correction des champs d'UI d'une colonne
     def update_column_metadata(self, column: str, **fields: str | bool | None) -> None:
@@ -1021,7 +1155,7 @@ class BaseSchemaManager(SchemaScoped, ABC):
                         stacklevel=2,
                     )
                     # Logging
-                    self.logger.info(
+                    self.logger.debug(
                         f"Forced is_categorical=True for hierarchy column"
                         f" {hierarchy_col!r}"
                     )
@@ -1039,27 +1173,29 @@ class BaseSchemaManager(SchemaScoped, ABC):
         """
         Delete metadata for a specific column.
 
+        Only the ``metadata`` row is removed: the fact table column, its
+        ``cluster_by`` entry and the references to it are left untouched (see
+        ``_drop_column_with_references``).
+
         Args:
             column_name: Name of the column
+
+        Raises:
+            duckdb.Error: If the ``metadata`` table cannot be written.
+
+        Example:
+            >>> manager.delete_column_metadata('old_col')
         """
-        try:
-            # Requête de suppression des méta-données
-            delete_query = f"DELETE FROM {self._qualified('metadata')} WHERE name = ?"
-            # Exécution de la requête
-            self.conn.execute(delete_query, [column_name])
+        # Suppression de la ligne de méta-données
+        self.conn.execute(
+            f"DELETE FROM {self._qualified('metadata')} WHERE name = ?", [column_name]
+        )
 
-            # Invalidation du cache
-            self._invalidate_metadata_cache()
+        # Invalidation du cache
+        self._invalidate_metadata_cache()
 
-            # Logging
-            self.logger.info(f"Deleted metadata for column {column_name}")
-
-        except Exception as e:
-            # Logging
-            self.logger.error(
-                f"Failed to delete metadata for column {column_name}: {e}"
-            )
-            raise
+        # Logging
+        self.logger.debug(f"Deleted metadata for column {column_name}")
 
     # Méthode de détachement des colonnes enfants d'une colonne parente supprimée
     def _clear_child_parent_references(self, column: str) -> list[str]:
@@ -1164,40 +1300,35 @@ class BaseSchemaManager(SchemaScoped, ABC):
         self._clear_label_for_references(column)
 
     # Méthode auxiliaire de suppression physique d'une colonne de la table des faits
-    def _drop_fact_table_column(self, column: str) -> bool:
+    def _drop_fact_table_column(self, column: str) -> None:
         """
         Drop a column from the fact table (``ALTER TABLE ... DROP COLUMN``).
 
         Only the physical column is dropped: its ``metadata`` row, ``cluster_by``
         and ``parent_name`` references are handled by
-        ``_drop_column_with_references``.
+        ``_drop_column_with_references``. A failure is never swallowed: inside a
+        DuckDB transaction a failed statement aborts the whole transaction, which
+        must then be rolled back by the caller.
 
         Args:
             column: Name of the column to drop.
 
-        Returns:
-            bool: True if the column was dropped, False on failure (logged).
+        Raises:
+            duckdb.Error: If the column does not exist or cannot be dropped.
 
         Example:
             >>> manager._drop_fact_table_column('old_col')
-            True
         """
-        try:
-            # Exécution de la requête de suppression de la colonne sur la table
-            self.conn.execute(
-                f"ALTER TABLE {self._qualified('fact_table')}"
-                f" DROP COLUMN {quote_ident(column)}"
-            )
-            # Logging
-            self.logger.info(f"Dropped column {column} from fact table")
-            return True
-        except Exception as e:
-            # Logging
-            self.logger.error(f"Error dropping fact table column {column}: {e}")
-            return False
+        # Suppression de la colonne de la table des faits
+        self.conn.execute(
+            f"ALTER TABLE {self._qualified('fact_table')}"
+            f" DROP COLUMN {quote_ident(column)}"
+        )
+        # Logging
+        self.logger.debug(f"Dropped column {column} from fact table")
 
     # Méthode de suppression d'une colonne et de toutes ses références
-    def _drop_column_with_references(self, column: str, cascade: bool = False) -> bool:
+    def _drop_column_with_references(self, column: str, cascade: bool = False) -> None:
         """
         Drop a fact table column together with every reference to it.
 
@@ -1214,32 +1345,26 @@ class BaseSchemaManager(SchemaScoped, ABC):
             cascade: Whether to detach the hierarchy children and label columns of
                 ``column`` before dropping it. Defaults to False.
 
-        Returns:
-            bool: True if the column was dropped, False if the ``DROP COLUMN``
-            failed (nothing else is then modified, except detached references).
-
         Raises:
-            Exception: Any error raised while removing the metadata row or updating
-                ``cluster_by``, re-raised as is.
+            duckdb.Error: If the column cannot be dropped, or its metadata row or
+                ``cluster_by`` entry cannot be updated; the caller's transaction
+                must then be rolled back.
 
         Example:
             >>> manager._drop_column_with_references('region', cascade=True)
-            True
         """
         # Détachement des références (hiérarchie et libellés), cascade uniquement
         if cascade:
             self._clear_references_to(column)
 
         # Suppression physique de la colonne
-        if not self._drop_fact_table_column(column):
-            return False
+        self._drop_fact_table_column(column)
 
         # Suppression de la ligne de méta-données correspondante
         self.delete_column_metadata(column)
 
         # Retrait de la colonne de cluster_by si elle en faisait partie
         self._remove_from_cluster_by(column)
-        return True
 
     # Méthode de nettoyage des colonnes ne contenant que des valeurs nulles
     def _cleanup_null_only_columns(self, use_transaction: bool = True) -> list[str]:
@@ -1281,18 +1406,17 @@ class BaseSchemaManager(SchemaScoped, ABC):
         with self._transaction(
             "cleanup_null_only_columns", use_transaction=use_transaction
         ) as report:
-            # Table vide : toutes les colonnes sont trivialement nulles, rien à
-            # décider
-            if self._count_rows("fact_table") == 0:
+            # Colonnes entièrement nulles, en une seule lecture de la table ; table
+            # vide : toutes les colonnes sont trivialement nulles, rien à décider
+            null_only_columns = self._get_null_only_columns()
+            if null_only_columns is None:
                 # Logging
-                self.logger.info("Fact table is empty: null-only cleanup skipped")
+                self.logger.debug("Fact table is empty: null-only cleanup skipped")
                 return []
 
             # Colonnes candidates, clés primaires exclues
             primary_keys = set(self._get_primary_key_columns())
-            pending = [
-                c for c in self._get_null_only_columns() if c not in primary_keys
-            ]
+            pending = [c for c in null_only_columns if c not in primary_keys]
 
             # Suppression itérative : une colonne parente (hiérarchie) ou de code
             # (libellés) devient supprimable dès que ses enfants / colonnes de
@@ -1308,13 +1432,9 @@ class BaseSchemaManager(SchemaScoped, ABC):
                     ) or self._get_label_columns_for_code(column):
                         continue
                     pending.remove(column)
-                    if self._drop_column_with_references(column):
-                        dropped.append(column)
-                        progress = True
-                    else:
-                        report.warnings.append(
-                            f"Null-only column '{column}' could not be dropped"
-                        )
+                    self._drop_column_with_references(column)
+                    dropped.append(column)
+                    progress = True
 
             # Colonnes conservées : enfants de hiérarchie ou colonnes de libellés non
             # nulles
@@ -1338,7 +1458,7 @@ class BaseSchemaManager(SchemaScoped, ABC):
                 report.columns_dropped.extend(dropped)
                 self._touch_dataset_metadata()
                 # Logging
-                self.logger.info(f"Dropped null-only columns: {dropped}")
+                self.logger.debug(f"Dropped null-only columns: {dropped}")
 
             return dropped
 
@@ -1413,6 +1533,10 @@ class BaseSchemaManager(SchemaScoped, ABC):
             report: When given and the type is actually widened, appended to
                 ``report.metadata_changes``.
 
+        Raises:
+            duckdb.Error: If the fact table column cannot be widened to the
+                resolved type.
+
         Example:
             >>> manager._resolve_type_conflicts('amount', df, metadata)
         """
@@ -1438,7 +1562,7 @@ class BaseSchemaManager(SchemaScoped, ABC):
         resolved_type = resolve_sql_type_conflict(current_type, new_type)
         if resolved_type is None:
             # Type non ordonné ou lot plus étroit : le type enregistré est conservé
-            self.logger.info(
+            self.logger.debug(
                 f"Type conflict for {column}: incoming {new_type} does not widen"
                 f" stored {current_type}; metadata left unchanged"
             )
@@ -1446,16 +1570,12 @@ class BaseSchemaManager(SchemaScoped, ABC):
 
         # Élargissement de la colonne de la table des faits, pour que le type
         # enregistré et le type physique restent cohérents (contrôlé par l'auditeur).
-        # Échec non bloquant : la métadonnée reste la référence déclarative.
-        try:
-            self.conn.execute(
-                f"ALTER TABLE {self._qualified('fact_table')}"
-                f" ALTER {quote_ident(column)} SET DATA TYPE {resolved_type}"
-            )
-        except Exception as e:
-            self.logger.warning(
-                f"Could not widen fact_table.{column} to {resolved_type}: {e}"
-            )
+        # Un échec n'est pas avalé : dans une transaction DuckDB, une instruction en
+        # échec invalide toute la transaction, qui doit alors être annulée.
+        self.conn.execute(
+            f"ALTER TABLE {self._qualified('fact_table')}"
+            f" ALTER {quote_ident(column)} SET DATA TYPE {resolved_type}"
+        )
 
         # Mise à jour du type SQL enregistré
         self.conn.execute(
@@ -1469,7 +1589,7 @@ class BaseSchemaManager(SchemaScoped, ABC):
         # Invalidation du cache
         self._invalidate_metadata_cache()
         # Logging
-        self.logger.info(
+        self.logger.debug(
             f"Type conflict resolution for {column}: {current_type} -> {resolved_type}"
         )
         # Ajout au rapport
@@ -1479,101 +1599,73 @@ class BaseSchemaManager(SchemaScoped, ABC):
             )
 
     # Méthode utilitaire pour les colonnes contenant uniquement des valeurs nulles
-    def _get_null_only_columns(self) -> list[str]:
+    def _get_null_only_columns(self) -> list[str] | None:
         """
-        Get list of columns that contain only null values in the fact table.
+        Get the fact table columns holding only null values, in a single scan.
+
+        Every column's non-null count is read by one query
+        (``SELECT COUNT(*), COUNT(c1), COUNT(c2), … FROM fact_table``) rather than
+        one scan per column.
 
         Returns:
-            List of column names that contain only null values
+            list[str] | None: Names of the null-only columns, in column order, or
+            None when the fact table is empty (every column is then trivially
+            null-only and nothing can be decided).
+
+        Raises:
+            duckdb.Error: If the fact table cannot be read.
+
+        Examples:
+            >>> manager._get_null_only_columns()
+            ['score']
         """
-        # Initialisation de la liste des colonnes vides
-        null_only_columns = []
-
-        try:
-            # Récupération des colonnes de la fact table
-            columns = self._get_fact_table_columns()
-            # Parcours des données
-            for column in columns:
-                # Vérification si la colonne ne contient que des valeurs nulles
-                query = (
-                    f"SELECT COUNT(*) FROM {self._qualified('fact_table')} "
-                    f"WHERE {quote_ident(column)} IS NOT NULL"
-                )
-                _row = self.conn.execute(query).fetchone()
-                non_null_count = _row[0] if _row is not None else 0
-                # Ajout à la liste si ne contient que des colonnes nulles
-                if non_null_count == 0:
-                    null_only_columns.append(column)
-            # Logging
-            if null_only_columns:
-                self.logger.info(
-                    f"Columns containing only null values detected: {null_only_columns}"
-                )
-            return null_only_columns
-
-        except Exception as e:
-            self.logger.error(f"An error occurred while detecting null values: {e}")
-            raise
+        # Comptage de toutes les colonnes en une lecture
+        columns = self._get_fact_table_columns()
+        counts = ", ".join(f"COUNT({quote_ident(c)})" for c in columns)
+        row = self.conn.execute(
+            f"SELECT COUNT(*), {counts} FROM {self._qualified('fact_table')}"
+        ).fetchone()
+        # Table vide : aucune décision possible
+        if row is None or row[0] == 0:
+            return None
+        null_only_columns = [
+            column
+            for column, non_null in zip(columns, row[1:], strict=True)
+            if non_null == 0
+        ]
+        # Logging
+        if null_only_columns:
+            self.logger.debug(
+                f"Columns containing only null values detected: {null_only_columns}"
+            )
+        return null_only_columns
 
     # Méthode d'horodatage de la dernière écriture réussie
     def _touch_dataset_metadata(self) -> None:
         """
         Stamp ``dataset_metadata.updated_at`` with the current timestamp.
 
-        The table holds exactly one row per schema, so no ``WHERE`` clause is
-        needed. Failure is non-blocking: the timestamp is descriptive metadata and
-        must never invalidate an otherwise successful write.
+        Called inside the transaction of every write, so that the timestamp is
+        atomic with the write it describes and lands in the same DuckLake snapshot
+        (with the same ``run_id``). The table holds exactly one row per schema, so
+        no ``WHERE`` clause is needed; a schema without ``dataset_metadata`` is
+        left as is.
+
+        Raises:
+            duckdb.Error: If ``dataset_metadata`` exists but cannot be updated; the
+                enclosing write is then rolled back, like any other failed step.
 
         Example:
             >>> manager._touch_dataset_metadata()
         """
-        try:
-            # Horodatage de la dernière écriture réussie.
-            # Valeur liée en Python plutôt que via now() : la colonne est un
-            # TIMESTAMP sans fuseau, là où now() renvoie un TIMESTAMP WITH TIME ZONE.
-            self.conn.execute(
-                f"UPDATE {self._qualified('dataset_metadata')} SET updated_at = ?",
-                [datetime.now()],
-            )
-        except Exception as e:
-            # Erreur non bloquante : l'horodatage ne conditionne pas l'écriture
-            self.logger.warning(f"Could not stamp dataset_metadata.updated_at: {e}")
-
-    # Méthode de validation de l'état de la base de données
-    def validate_database_state(
-        self, validation_level: ValidationLevel = ValidationLevel.STANDARD
-    ) -> ValidationReport | None:
-        """
-        Validate the current state of the database.
-
-        Args:
-            validation_level: Level of validation to perform.
-
-        Returns:
-            ValidationReport | None: The auditor's report, or None when validation
-            is disabled (no auditor).
-
-        Example:
-            >>> report = updater.validate_database_state(ValidationLevel.COMPREHENSIVE)
-            >>> if report is not None and report.get_critical_issues_count() > 0:
-            ...     print("Critical issues detected!")
-        """
-        # Vérification qu'un auditeur est renseigné
-        if self.auditor is None:
-            self.logger.warning("Validation disabled - no auditor available")
-            return None
-        return self.auditor.validate_database(validation_level)
-
-    @abstractmethod
-    def validate_operation(self, operation_type: str, **kwargs: Any) -> bool:
-        """
-        Abstract method to validate operations before execution.
-
-        Args:
-            operation_type: Type of operation to validate
-            **kwargs: Operation-specific parameters
-
-        Returns:
-            True if operation is valid
-        """
-        pass
+        # Schéma sans table dataset_metadata : rien à horodater
+        if not self._table_exists("dataset_metadata"):
+            self.logger.debug("No dataset_metadata table: updated_at not stamped")
+            return
+        # Horodatage de la dernière écriture réussie.
+        # Valeur liée en Python plutôt que via now() : la colonne est un
+        # TIMESTAMP sans fuseau, là où now() renvoie un TIMESTAMP WITH TIME ZONE.
+        self.conn.execute(
+            f"UPDATE {self._qualified('dataset_metadata')} SET updated_at = ?",
+            [datetime.now()],
+        )

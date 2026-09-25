@@ -32,7 +32,6 @@ def updater(built_ducklake_schema: Any) -> DatabaseUpdater:
     return DatabaseUpdater(
         connection=built_ducklake_schema,
         categorical_threshold=4,
-        enable_validation=True,
     )
 
 
@@ -46,12 +45,11 @@ def deleter(built_ducklake_schema: Any) -> DatabaseDeleter:
         schema.
 
     Returns:
-        DatabaseDeleter: initialized with the test connection, categorical_threshold=4
-        and auto_cleanup enabled.
+        DatabaseDeleter: initialized with the test connection and auto_cleanup
+        enabled.
     """
     return DatabaseDeleter(
         connection=built_ducklake_schema,
-        enable_validation=True,
         auto_cleanup=True,
     )
 

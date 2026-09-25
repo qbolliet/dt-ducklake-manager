@@ -2,6 +2,7 @@
 # Modules de base
 import os
 import warnings
+from collections.abc import Generator
 from typing import Any
 
 import duckdb
@@ -12,267 +13,249 @@ import pytest
 
 # Modules du package à tester
 from dt_ducklake_manager.connection import DuckLakeConnector
-from dt_ducklake_manager.maintenance import (
-    DatabaseRecoveryManager,
-    RecoveryOperation,
-    RecoveryStrategy,
-)
-from dt_ducklake_manager.maintenance.recovery import RecoveryResult
+from dt_ducklake_manager.maintenance import DatabaseRecoveryManager
+from dt_ducklake_manager.operations import DatabaseDeleter, DatabaseUpdater
 from dt_ducklake_manager.schema import DuckLakeTablesBuilder
+from tests.utils.ducklake import requires_ducklake
+
+# ---------------------------------------------------------------------------
+# Fixtures
+# ---------------------------------------------------------------------------
 
 
-def _ducklake_available() -> bool:
-    """Vérifie si l'extension DuckLake est disponible dans l'environnement de test."""
-    try:
-        conn = duckdb.connect(":memory:")
-        conn.execute("INSTALL ducklake; LOAD ducklake;")
-        conn.close()
-        return True
-    except Exception:
-        return False
-
-
-# ===========================================================================
-# Tests des dataclasses
-# ===========================================================================
-
-
-# Test de l'initialisation de RecoveryOperation
-def test_recovery_operation_initialization() -> None:
-    """Test that RecoveryOperation is correctly initialized with default values.
-
-    Examples:
-        >>> op = RecoveryOperation(strategy=RecoveryStrategy.VALIDATE_AND_FIX)
-        >>> op.auto_validate
-        True
-    """
-    op = RecoveryOperation(strategy=RecoveryStrategy.VALIDATE_AND_FIX)
-    assert op.strategy == RecoveryStrategy.VALIDATE_AND_FIX
-    assert op.auto_validate is True
-    assert op.target_recovery_point is None
-    assert isinstance(op.parameters, dict)
-
-
-# Test de l'initialisation de RecoveryOperation avec des paramètres personnalisés
-def test_recovery_operation_custom_parameters() -> None:
-    """Test RecoveryOperation with custom parameters.
-
-    ``target_recovery_point`` carries a DuckLake ``snapshot_id``, the only kind of
-    restore point left since application backups were dropped (§1.5).
-
-    Examples:
-        >>> op = RecoveryOperation(
-        ...     strategy=RecoveryStrategy.USE_SNAPSHOT_HISTORY,
-        ...     target_recovery_point='17',
-        ...     auto_validate=False,
-        ... )
-        >>> op.target_recovery_point
-        '17'
-    """
-    op = RecoveryOperation(
-        strategy=RecoveryStrategy.USE_SNAPSHOT_HISTORY,
-        target_recovery_point="17",
-        parameters={"snapshot_version": 5},
-        auto_validate=False,
-        description="Test recovery",
-    )
-    assert op.target_recovery_point == "17"
-    assert op.parameters == {"snapshot_version": 5}
-    assert op.auto_validate is False
-
-
-# Test de l'initialisation de RecoveryResult
-def test_recovery_result_initialization() -> None:
-    """Test that RecoveryResult is correctly initialized.
-
-    Examples:
-        >>> from dt_ducklake_manager.maintenance.recovery import RecoveryResult
-        >>> result = RecoveryResult(success=True,
-        strategy_used=RecoveryStrategy.VALIDATE_AND_FIX)
-        >>> result.success
-        True
-    """
-    result = RecoveryResult(
-        success=True,
-        strategy_used=RecoveryStrategy.VALIDATE_AND_FIX,
-        recovery_time=1.5,
-        operations_performed=["validate", "fix"],
-    )
-    assert result.success is True
-    assert result.strategy_used == RecoveryStrategy.VALIDATE_AND_FIX
-
-
-# ===========================================================================
-# Tests de DatabaseRecoveryManager
-# ===========================================================================
-
-
-# Initialisation d'un gestionnaire de récupération pour les tests
+# Catalogue DuckLake réel construit, puis modifié par un update et un delete
 @pytest.fixture
-def recovery_manager(built_ducklake_schema: Any) -> DatabaseRecoveryManager:
-    """Create a DatabaseRecoveryManager for testing.
+def lake(tmp_path: Any) -> Generator[tuple[duckdb.DuckDBPyConnection, int]]:
+    """Provide a real catalog whose fact table changed after its build.
 
-    Args:
-        built_ducklake_schema: Fixture providing a DuckDB connection with a built
-        schema.
-
-    Returns:
-        DatabaseRecoveryManager: initialized with the test connection.
-    """
-    return DatabaseRecoveryManager(
-        connection=built_ducklake_schema,
-    )
-
-
-# Initialisation d'un gestionnaire branché sur un catalogue DuckLake réel
-@pytest.fixture
-def ducklake_recovery_manager(tmp_path: Any) -> DatabaseRecoveryManager:
-    """Create a DatabaseRecoveryManager on a real, on-disk DuckLake catalog.
-
-    The in-memory connection used elsewhere attaches no catalog, so the
-    ``ducklake_snapshots()`` table function is unavailable there. An extra write
-    is performed so the history holds several snapshots.
+    The schema is built (ids 1 to 5), then one update inserts id=10 and changes
+    id=1, then one deletion removes id=2.
 
     Args:
         tmp_path: pytest temporary directory.
 
-    Returns:
-        DatabaseRecoveryManager: bound to a catalog with a non-trivial history.
+    Yields:
+        tuple: the connection and the snapshot id right after the build.
     """
-    catalog = str(tmp_path / "test.ducklake")
     data_dir = str(tmp_path / "data")
     os.makedirs(data_dir)
-    conn = DuckLakeConnector(catalog, data_dir).connect()
-
-    df = pl.DataFrame({"id": [1, 2, 3], "category": ["A", "B", "A"]})
+    conn = DuckLakeConnector(
+        str(tmp_path / "recovery.ducklake"), data_dir, data_inlining_row_limit=0
+    ).connect()
+    df = pl.DataFrame(
+        {
+            "id": [1, 2, 3, 4, 5],
+            "category": ["A", "B", "A", "C", "B"],
+            "value": [0.1, 0.2, 0.3, 0.4, 0.5],
+        }
+    )
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", UserWarning)
         DuckLakeTablesBuilder(
             df, categorical_threshold=4, primary_keys=["id"], connection=conn
         ).build_schema()
+    build_snapshot = conn.execute(
+        "SELECT max(snapshot_id) FROM ducklake_snapshots('db')"
+    ).fetchone()[0]
 
-    # Écriture supplémentaire : l'historique compte alors plusieurs snapshots
-    conn.execute("INSERT INTO fact_table (id, category) VALUES (4, 'C')")
+    DatabaseUpdater(conn, categorical_threshold=4).update_database(
+        pl.DataFrame({"id": [1, 10], "category": ["A", "C"], "value": [9.0, 1.0]}),
+        run_id="bad-run",
+        compact_after_update=False,
+    )
+    DatabaseDeleter(conn).delete_rows([("id", "=", 2)], compact_after_update=False)
 
-    return DatabaseRecoveryManager(connection=conn)
-
-
-# Test de l'initialisation du gestionnaire de récupération
-def test_recovery_manager_initialization(recovery_manager: Any) -> None:
-    """Test that DatabaseRecoveryManager initializes correctly.
-
-    Args:
-        recovery_manager: DatabaseRecoveryManager fixture.
-    """
-    assert recovery_manager is not None
-    assert recovery_manager.schema == "main"
-    assert recovery_manager.catalog_alias == "db"
-    assert recovery_manager.auditor is not None
+    yield conn, build_snapshot
+    conn.close()
 
 
-# Test que le gestionnaire n'expose plus de sauvegarde applicative
-def test_recovery_manager_has_no_application_backup(recovery_manager: Any) -> None:
-    """Test that no application-level backup machinery survives (§1.5).
-
-    Recovery relies on DuckLake time travel only: no recovery point is created,
-    listed or deleted, and no backup directory is held.
+# Lecture triée de la table des faits
+def _facts(conn: duckdb.DuckDBPyConnection) -> list[tuple[Any, ...]]:
+    """Read the fact table sorted by id.
 
     Args:
-        recovery_manager: DatabaseRecoveryManager fixture.
+        conn: Connection attached to the catalog.
+
+    Returns:
+        list[tuple]: The rows of the fact table.
     """
-    for attribute in (
-        "create_recovery_point",
-        "list_recovery_points",
-        "delete_recovery_point",
-        "backup_dir",
-    ):
-        assert not hasattr(recovery_manager, attribute)
+    return conn.execute("SELECT * FROM fact_table ORDER BY id").fetchall()
 
 
-# ===========================================================================
-# Tests du time travel DuckLake : LE mécanisme de récupération (§1.5)
-# ===========================================================================
+# ---------------------------------------------------------------------------
+# Tests de list_ducklake_snapshots()
+# ---------------------------------------------------------------------------
 
 
-# Test que list_ducklake_snapshots retourne l'historique d'un catalogue réel
-@pytest.mark.skipif(
-    not _ducklake_available(),
-    reason="Extension ducklake non disponible dans cet environnement",
-)
-def test_list_ducklake_snapshots_returns_history(
-    ducklake_recovery_manager: Any,
-) -> None:
-    """Test that list_ducklake_snapshots returns the catalog's snapshot history.
+# Test que l'historique est renvoyé trié, avec l'auteur des écritures
+@requires_ducklake
+def test_list_ducklake_snapshots_returns_history(lake: Any) -> None:
+    """Test that the history is sorted descending and exposes the run_id.
 
     Args:
-        ducklake_recovery_manager: manager bound to a real DuckLake catalog.
+        lake: Real catalog changed after its build.
     """
-    snapshots = ducklake_recovery_manager.list_ducklake_snapshots()
+    conn, _ = lake
+    snapshots = DatabaseRecoveryManager(conn).list_ducklake_snapshots()
 
-    # Historique non vide, trié par identifiant décroissant
     assert snapshots is not None
-    assert len(snapshots) >= 2
-    assert "snapshot_id" in snapshots.columns
     ids = snapshots["snapshot_id"].to_list()
     assert ids == sorted(ids, reverse=True)
+    assert "bad-run" in snapshots["author"].to_list()
 
 
-# Test que list_ducklake_snapshots retourne None hors catalogue DuckLake
-def test_list_ducklake_snapshots_without_catalog(recovery_manager: Any) -> None:
-    """Test that list_ducklake_snapshots returns None on a plain connection.
-
-    Args:
-        recovery_manager: DatabaseRecoveryManager fixture (in-memory connection,
-            no attached DuckLake catalog).
-    """
-    assert recovery_manager.list_ducklake_snapshots() is None
+# Test que l'historique est indisponible sans catalogue DuckLake
+def test_list_ducklake_snapshots_without_catalog() -> None:
+    """Test that a plain in-memory connection yields None."""
+    assert DatabaseRecoveryManager().list_ducklake_snapshots() is None
 
 
-# Test que USE_SNAPSHOT_HISTORY inventorie les snapshots et guide la restauration
-@pytest.mark.skipif(
-    not _ducklake_available(),
-    reason="Extension ducklake non disponible dans cet environnement",
-)
-def test_use_snapshot_history_returns_restore_instructions(
-    ducklake_recovery_manager: Any,
-) -> None:
-    """Test that USE_SNAPSHOT_HISTORY inventories snapshots and guides restoration.
+# ---------------------------------------------------------------------------
+# Tests de restore_snapshot()
+# ---------------------------------------------------------------------------
+
+
+# Test que la restauration ramène les lignes de la table des faits
+@requires_ducklake
+def test_restore_snapshot_restores_rows(lake: Any) -> None:
+    """Test that restoring the build snapshot undoes the update and the deletion.
 
     Args:
-        ducklake_recovery_manager: manager bound to a real DuckLake catalog.
+        lake: Real catalog changed after its build.
     """
-    operation = RecoveryOperation(
-        strategy=RecoveryStrategy.USE_SNAPSHOT_HISTORY,
-        auto_validate=False,
-        description="Inventaire des snapshots",
+    conn, build_snapshot = lake
+    expected = conn.execute(
+        f"SELECT * FROM fact_table AT (VERSION => {build_snapshot}) ORDER BY id"
+    ).fetchall()
+    assert _facts(conn) != expected
+
+    report = DatabaseRecoveryManager(conn).restore_snapshot(
+        build_snapshot, run_id="rollback"
     )
-    result = ducklake_recovery_manager.recover_database(operation)
 
-    # Inventaire retourné, accompagné de la procédure de restauration
-    assert result.success is True
-    assert any("snapshot" in line for line in result.operations_performed)
-    assert any("snapshot_version=" in line for line in result.recommendations)
+    assert _facts(conn) == expected
+    assert report.operation == "restore_snapshot"
+    assert (report.rows_before, report.rows_after) == (5, 5)
+    assert report.snapshot_after is not None
+    assert report.snapshot_before is not None
+    assert report.snapshot_after > report.snapshot_before
 
 
-# Test qu'un snapshot cible inexistant est signalé sans faire échouer l'inventaire
-@pytest.mark.skipif(
-    not _ducklake_available(),
-    reason="Extension ducklake non disponible dans cet environnement",
-)
-def test_use_snapshot_history_unknown_target_is_flagged(
-    ducklake_recovery_manager: Any,
-) -> None:
-    """Test that an unknown target snapshot is reported rather than silently used.
+# Test que la restauration est un nouveau snapshot, lui-même annulable
+@requires_ducklake
+def test_restore_snapshot_keeps_history(lake: Any) -> None:
+    """Test that the restoration is a new, authored snapshot and can be undone.
 
     Args:
-        ducklake_recovery_manager: manager bound to a real DuckLake catalog.
+        lake: Real catalog changed after its build.
     """
-    operation = RecoveryOperation(
-        strategy=RecoveryStrategy.USE_SNAPSHOT_HISTORY,
-        target_recovery_point="999999",
-        auto_validate=False,
-    )
-    result = ducklake_recovery_manager.recover_database(operation)
+    conn, build_snapshot = lake
+    recovery = DatabaseRecoveryManager(conn)
+    before_restore = conn.execute(
+        "SELECT max(snapshot_id) FROM ducklake_snapshots('db')"
+    ).fetchone()[0]
+    rows_before_restore = _facts(conn)
 
-    assert result.success is True
-    assert any("introuvable" in line for line in result.operations_performed)
+    recovery.restore_snapshot(build_snapshot, run_id="rollback")
+    author = conn.execute(
+        "SELECT author FROM ducklake_snapshots('db') ORDER BY snapshot_id DESC LIMIT 1"
+    ).fetchone()[0]
+    assert author == "rollback"
+
+    # Annulation de la restauration par une seconde restauration
+    recovery.restore_snapshot(before_restore)
+    assert _facts(conn) == rows_before_restore
+
+
+# Test que la restauration peut se limiter à la table des faits
+@requires_ducklake
+def test_restore_snapshot_single_table(lake: Any) -> None:
+    """Test that only the requested table is restored.
+
+    Args:
+        lake: Real catalog changed after its build.
+    """
+    conn, build_snapshot = lake
+    stamp = conn.execute("SELECT updated_at FROM dataset_metadata").fetchone()
+
+    DatabaseRecoveryManager(conn).restore_snapshot(
+        build_snapshot, tables=["fact_table"]
+    )
+
+    assert conn.execute("SELECT updated_at FROM dataset_metadata").fetchone() == stamp
+
+
+# Test qu'un snapshot inconnu est refusé sans rien modifier
+@requires_ducklake
+def test_restore_snapshot_unknown_snapshot_raises(lake: Any) -> None:
+    """Test that an unknown snapshot raises ValueError before any write.
+
+    Args:
+        lake: Real catalog changed after its build.
+    """
+    conn, _ = lake
+    before = _facts(conn)
+    with pytest.raises(ValueError, match="does not exist"):
+        DatabaseRecoveryManager(conn).restore_snapshot(999_999)
+    assert _facts(conn) == before
+
+
+# Test qu'une table dont les colonnes ont changé est refusée
+@requires_ducklake
+def test_restore_snapshot_changed_columns_raises(lake: Any) -> None:
+    """Test that a table whose columns changed since the snapshot is refused.
+
+    Args:
+        lake: Real catalog changed after its build.
+    """
+    conn, build_snapshot = lake
+    DatabaseUpdater(conn, categorical_threshold=4).add_columns(
+        pl.DataFrame({"id": [1], "score": [1.0]}), compact_after_update=False
+    )
+    before = _facts(conn)
+
+    with pytest.raises(ValueError, match="columns of 'fact_table' changed"):
+        DatabaseRecoveryManager(conn).restore_snapshot(build_snapshot)
+    assert _facts(conn) == before
+
+
+# Test qu'une restauration en échec est annulée et ne laisse pas de copie
+@requires_ducklake
+def test_restore_snapshot_failure_rolls_back(
+    lake: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Test that a failure while refilling the tables leaves them untouched.
+
+    Args:
+        lake: Real catalog changed after its build.
+        monkeypatch: pytest fixture used to inject the failure.
+    """
+    conn, build_snapshot = lake
+    before = _facts(conn)
+    recovery = DatabaseRecoveryManager(conn)
+
+    # Échec de l'annotation du commit, après le vidage et le remplissage
+    def _boom(*args: Any, **kwargs: Any) -> None:
+        raise duckdb.IOException("simulated I/O error")
+
+    monkeypatch.setattr(
+        "dt_ducklake_manager.maintenance.recovery._set_commit_message", _boom
+    )
+
+    with pytest.raises(duckdb.IOException):
+        recovery.restore_snapshot(build_snapshot)
+    assert _facts(conn) == before
+    temp_tables = conn.execute(
+        "SELECT table_name FROM duckdb_tables() WHERE temporary"
+    ).fetchall()
+    assert temp_tables == []
+
+
+# Test des arguments invalides
+def test_restore_snapshot_invalid_arguments() -> None:
+    """Test that an empty table list or a missing catalog raise ValueError."""
+    recovery = DatabaseRecoveryManager()
+    with pytest.raises(ValueError, match="at least one table"):
+        recovery.restore_snapshot(1, tables=[])
+    with pytest.raises(ValueError, match="time travel is unavailable"):
+        recovery.restore_snapshot(1)

@@ -3,9 +3,9 @@ from .hierarchy import get_column_hierarchies, validate_hierarchy_forest
 from .logger import _init_logger
 from .sql import (
     SchemaScoped,
-    build_database_duplicate_removal_query,
     qualify_table,
     quote_ident,
+    quote_literal,
     remove_dataframe_duplicates,
     resolve_catalog,
 )
@@ -28,10 +28,10 @@ from .value_labels import (
 __all__ = [
     "_init_logger",
     "remove_dataframe_duplicates",
-    "build_database_duplicate_removal_query",
     "qualify_table",
     "SchemaScoped",
     "quote_ident",
+    "quote_literal",
     "resolve_catalog",
     "map_python_to_sql_type",
     "resolve_sql_type_conflict",

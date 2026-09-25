@@ -101,9 +101,10 @@ updater.update_database(
 deleter = DatabaseDeleter(connection=connection)
 deleter.delete_rows(filters=[("score", "<", 0.6)])
 
-# 4. Audit database integrity
+# 4. Audit database integrity on demand (every write already runs the cheap
+# BASIC audit; COMPREHENSIVE also scans the fact table)
 auditor = DatabaseAuditor(connection=connection)
-report = auditor.validate_database(ValidationLevel.STANDARD)
+report = auditor.validate_database(ValidationLevel.COMPREHENSIVE)
 print(report.recommendations)
 
 # 5. Run maintenance driven by measured storage indicators (never

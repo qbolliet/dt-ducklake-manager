@@ -2,6 +2,8 @@
 # Modules de base
 from typing import Any
 
+import duckdb
+
 # Module de tests
 import pytest
 
@@ -251,16 +253,20 @@ def test_cleanup_rolls_back_on_failure(
 # ---------------------------------------------------------------------------
 
 
-# Test qu'une colonne inexistante renvoie False sans lever
-def test_drop_fact_table_column_unknown_returns_false(
+# Test qu'une colonne inexistante lève l'erreur DuckDB au lieu de l'avaler
+def test_drop_fact_table_column_unknown_raises(
     manager: BaseSchemaManager,
 ) -> None:
-    """Test that dropping an unknown column returns False.
+    """Test that dropping an unknown column raises instead of returning a flag.
+
+    Inside a transaction, a failed statement aborts the whole transaction: the
+    error must reach the caller, which rolls back.
 
     Args:
         manager: DatabaseDeleter or DatabaseUpdater fixture.
     """
-    assert manager._drop_fact_table_column("does_not_exist") is False
+    with pytest.raises(duckdb.Error):
+        manager._drop_fact_table_column("does_not_exist")
 
 
 # Test qu'un DROP en échec ne touche ni metadata ni cluster_by
@@ -275,7 +281,8 @@ def test_drop_column_with_references_failure_leaves_references(
     metadata_before = _metadata_names(manager.conn)
     cluster_before = manager._get_cluster_by_columns()
 
-    assert manager._drop_column_with_references("does_not_exist") is False
+    with pytest.raises(duckdb.Error):
+        manager._drop_column_with_references("does_not_exist")
     assert _metadata_names(manager.conn) == metadata_before
     assert manager._get_cluster_by_columns() == cluster_before
 
@@ -291,7 +298,7 @@ def test_drop_column_with_references_cascade_detaches_children(
     """
     manager.update_column_metadata("category", parent_name="status")
 
-    assert manager._drop_column_with_references("status", cascade=True) is True
+    manager._drop_column_with_references("status", cascade=True)
     assert manager._get_hierarchy_children("status") == []
     assert "status" not in _metadata_names(manager.conn)
 
@@ -355,40 +362,9 @@ def test_delete_all_rows_keeps_columns(deleter: DatabaseDeleter) -> None:
     assert _fact_columns(deleter.conn) == before
 
 
-# Test du format de retour de cleanup_database
-def test_cleanup_database_returns_dropped_columns(deleter: DatabaseDeleter) -> None:
-    """Test that ``cleanup_database`` wraps the dropped columns in a dict.
-
-    Args:
-        deleter: DatabaseDeleter fixture.
-    """
-    _nullify(deleter.conn, "value")
-
-    assert deleter.cleanup_database() == {"null_columns": ["value"]}
-
-
-# Test que cleanup_database convertit une exception en dictionnaire d'erreur
-def test_cleanup_database_returns_error_on_failure(
-    deleter: DatabaseDeleter, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Test that ``cleanup_database`` returns ``{"error": ...}`` instead of raising.
-
-    Args:
-        deleter: DatabaseDeleter fixture.
-        monkeypatch: pytest fixture used to inject the failure.
-    """
-
-    def _boom(use_transaction: bool = True) -> list[str]:
-        raise RuntimeError("boom")
-
-    monkeypatch.setattr(deleter, "_cleanup_null_only_columns", _boom)
-
-    assert deleter.cleanup_database() == {"error": "boom"}
-
-
-# Test que optimize_database nettoie aussi cluster_by et parent_name côté updater
-def test_optimize_database_cleans_references(updater: DatabaseUpdater) -> None:
-    """Test that the updater's cleanup now removes the column from ``cluster_by``.
+# Test que le nettoyage retire aussi la colonne de cluster_by côté updater
+def test_cleanup_null_only_columns_cleans_cluster_by(updater: DatabaseUpdater) -> None:
+    """Test that the updater's cleanup removes the column from ``cluster_by``.
 
     Args:
         updater: DatabaseUpdater fixture.
@@ -396,7 +372,7 @@ def test_optimize_database_cleans_references(updater: DatabaseUpdater) -> None:
     updater.update_cluster_by(["value", "id"])
     _nullify(updater.conn, "value")
 
-    updater.optimize_database()
+    assert updater._cleanup_null_only_columns() == ["value"]
 
     assert "value" not in _fact_columns(updater.conn)
     assert "value" not in _metadata_names(updater.conn)

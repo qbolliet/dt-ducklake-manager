@@ -95,18 +95,15 @@ nav:
     - ValidationIssue: api/maintenance/ValidationIssue.md
     - ValidationReport: api/maintenance/ValidationReport.md
     - DatabaseAuditor: api/maintenance/DatabaseAuditor.md
+    - DuckLakeProcedures: api/maintenance/DuckLakeProcedures.md
     - DuckLakeMaintenance: api/maintenance/DuckLakeMaintenance.md
     - MaintenancePolicy: api/maintenance/MaintenancePolicy.md
     - StorageReport: api/maintenance/StorageReport.md
-    - RecoveryStrategy: api/maintenance/RecoveryStrategy.md
-    - RecoveryOperation: api/maintenance/RecoveryOperation.md
-    - RecoveryResult: api/maintenance/RecoveryResult.md
     - DatabaseRecoveryManager: api/maintenance/DatabaseRecoveryManager.md
   - operations:
     - DatabaseDeleter: api/operations/DatabaseDeleter.md
     - DatabaseUpdater: api/operations/DatabaseUpdater.md
     - BaseSchemaManager: api/operations/BaseSchemaManager.md
-    - DataManager: api/operations/DataManager.md
   - reporting:
     - OperationReport: api/reporting/OperationReport.md
   - schema:
@@ -114,9 +111,9 @@ nav:
     - DuckLakeTablesBuilder: api/schema/DuckLakeTablesBuilder.md
   - utils:
     - remove_dataframe_duplicates: api/utils/remove_dataframe_duplicates.md
-    - build_database_duplicate_removal_query: api/utils/build_database_duplicate_removal_query.md
     - map_python_to_sql_type: api/utils/map_python_to_sql_type.md
     - quote_ident: api/utils/quote_ident.md
+    - quote_literal: api/utils/quote_literal.md
     - qualify_table: api/utils/qualify_table.md
     - SchemaScoped: api/utils/SchemaScoped.md
     - METADATA_COLUMNS: api/utils/METADATA_COLUMNS.md

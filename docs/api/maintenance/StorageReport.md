@@ -1,1 +1,1 @@
-::: dt_ducklake_manager.maintenance.compaction.StorageReport
+::: dt_ducklake_manager.maintenance.policy.StorageReport

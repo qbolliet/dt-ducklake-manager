@@ -13,7 +13,7 @@ import pytest
 from dt_ducklake_manager.utils.sql import (
     _build_sql_filter,
     _build_where_clause,
-    build_database_duplicate_removal_query,
+    quote_literal,
     remove_dataframe_duplicates,
 )
 
@@ -202,76 +202,46 @@ def test_remove_duplicates_no_logging_when_no_duplicates() -> None:
 
 
 # ===========================================================================
-# Tests de build_database_duplicate_removal_query
+# Tests de quote_literal
 # ===========================================================================
 
 
-# Test de la construction de la requête SQL avec keep='first'
-def test_build_duplicate_query_keep_first() -> None:
-    """Test that keep='first' produces a query with ROW_NUMBER and ASC ordering.
+# Test de la mise entre apostrophes d'un littéral simple et d'un littéral piégé
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        ("data/", "'data/'"),
+        ("it's", "'it''s'"),
+        ("", "''"),
+        ("a'b'c", "'a''b''c'"),
+    ],
+)
+def test_quote_literal(value: str, expected: str) -> None:
+    """Test that quote_literal wraps and escapes embedded single quotes.
 
-    Examples:
-        >>> query = build_database_duplicate_removal_query(['id'], 'first')
-        >>> 'ROW_NUMBER()' in query
-        True
+    Args:
+        value: Raw value.
+        expected: Expected SQL literal.
     """
-    query = build_database_duplicate_removal_query(["id", "date"], "first")
-    assert "ROW_NUMBER()" in query
-    assert "ASC" in query
-    assert "DELETE FROM fact_table" in query
+    assert quote_literal(value) == expected
 
 
-# Test de la construction de la requête SQL avec keep='last'
-def test_build_duplicate_query_keep_last() -> None:
-    """Test that keep='last' produces a query with DESC ordering.
+# Test que le littéral produit est relu à l'identique par DuckDB
+def test_quote_literal_round_trip() -> None:
+    """Test that DuckDB reads the quoted literal back as the original value."""
+    import duckdb
 
-    Examples:
-        >>> query = build_database_duplicate_removal_query(['id'], 'last')
-        >>> 'DESC' in query
-        True
-    """
-    query = build_database_duplicate_removal_query(["id"], "last")
-    assert "DESC" in query
-    assert "ROW_NUMBER()" in query
+    value = "C:\\data\\it's here/"
+    row = duckdb.connect().execute(f"SELECT {quote_literal(value)}").fetchone()
+    assert row is not None and row[0] == value
 
 
-# Test de la construction de la requête SQL avec keep=False
-def test_build_duplicate_query_keep_none() -> None:
-    """Test that keep='none' produces a query using HAVING COUNT(*) > 1.
-
-    Examples:
-        >>> query = build_database_duplicate_removal_query(['id'], 'none')
-        >>> 'HAVING COUNT(*) > 1' in query
-        True
-    """
-    query = build_database_duplicate_removal_query(["id"], "none")
-    assert "HAVING COUNT(*) > 1" in query
-    assert "DELETE FROM fact_table" in query
-
-
-# Test que columns_to_check=[] retourne une chaîne vide
-def test_build_duplicate_query_empty_columns() -> None:
-    """Test that an empty columns_to_check list returns an empty string.
-
-    Examples:
-        >>> build_database_duplicate_removal_query([], 'first')
-        ''
-    """
-    result = build_database_duplicate_removal_query([], "first")
-    assert result == ""
-
-
-# Test de la construction avec un nom de table personnalisé
-def test_build_duplicate_query_custom_table_name() -> None:
-    """Test that the custom table_name is used in the generated query.
-
-    Examples:
-        >>> query = build_database_duplicate_removal_query(['id'], 'first', 'my_table')
-        >>> 'DELETE FROM my_table' in query
-        True
-    """
-    query = build_database_duplicate_removal_query(["id"], "first", "my_table")
-    assert "DELETE FROM my_table" in query
+# Test de la déduplication sur les clés primaires avec keep='none'
+def test_remove_duplicates_primary_keys_keep_none() -> None:
+    """Test that keep='none' drops every row of a duplicated key."""
+    df = pl.DataFrame({"id": [1, 1, 2], "value": [10.0, 99.0, 20.0]})
+    result = remove_dataframe_duplicates(df, keep="none", primary_keys=["id"])
+    assert result["id"].to_list() == [2]
 
 
 # ===========================================================================

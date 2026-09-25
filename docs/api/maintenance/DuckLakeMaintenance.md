@@ -1,1 +1,1 @@
-::: dt_ducklake_manager.maintenance.compaction.DuckLakeMaintenance
+::: dt_ducklake_manager.maintenance.policy.DuckLakeMaintenance

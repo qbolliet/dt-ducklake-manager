@@ -14,21 +14,11 @@ import pytest
 
 # Modules du package à tester
 from dt_ducklake_manager.connection import DuckLakeConnector
+from dt_ducklake_manager.maintenance import IssueSeverity, ValidationLevel
 from dt_ducklake_manager.operations import DatabaseDeleter
 from dt_ducklake_manager.reporting import OperationReport
 from dt_ducklake_manager.schema import DuckLakeTablesBuilder
-
-
-def _ducklake_available() -> bool:
-    """Vérifie si l'extension DuckLake est disponible dans l'environnement de test."""
-    try:
-        conn = duckdb.connect(":memory:")
-        conn.execute("INSTALL ducklake; LOAD ducklake;")
-        conn.close()
-        return True
-    except Exception:
-        return False
-
+from tests.utils.ducklake import requires_ducklake
 
 # ---------------------------------------------------------------------------
 # Tests de l'initialisation
@@ -47,22 +37,22 @@ def test_deleter_initialization(built_ducklake_schema: Any) -> None:
     assert deleter is not None
 
 
-# Test de l'initialisation avec enable_validation=False
-def test_deleter_initialization_without_validation(built_ducklake_schema: Any) -> None:
-    """Test that DatabaseDeleter can be initialized with validation disabled.
+# Test de la désactivation de l'audit post-écriture
+def test_deleter_initialization_without_audit(built_ducklake_schema: Any) -> None:
+    """Test that the post-write audit defaults to BASIC and can be disabled.
 
     Args:
         built_ducklake_schema: Fixture providing a DuckDB connection with a built
         schema.
     """
-    deleter = DatabaseDeleter(connection=built_ducklake_schema, enable_validation=False)
-    # Vérification que l'auditeur n'est pas initialisé
-    assert deleter.enable_validation is False
+    assert DatabaseDeleter(built_ducklake_schema).audit_level == ValidationLevel.BASIC
+    deleter = DatabaseDeleter(connection=built_ducklake_schema, audit_level=None)
+    assert deleter.audit_level is None
 
 
-# Test que catalog_alias est propagé aux sous-gestionnaires
+# Test que catalog_alias est propagé à l'auditeur et à la maintenance
 def test_deleter_propagates_catalog_alias(built_ducklake_schema: Any) -> None:
-    """Test that ``catalog_alias`` reaches every specialized sub-manager.
+    """Test that ``catalog_alias`` reaches the auditor and the maintenance helper.
 
     Args:
         built_ducklake_schema: Fixture providing a DuckDB connection with a built
@@ -70,9 +60,9 @@ def test_deleter_propagates_catalog_alias(built_ducklake_schema: Any) -> None:
     """
     deleter = DatabaseDeleter(connection=built_ducklake_schema, catalog_alias="my_lake")
     assert deleter.catalog_alias == "my_lake"
-    assert deleter.data_mgr.catalog_alias == "my_lake"
     assert deleter.auditor is not None
     assert deleter.auditor.catalog_alias == "my_lake"
+    assert deleter.maintenance.catalog_alias == "my_lake"
 
 
 # Test que catalog_alias vaut 'db' par défaut
@@ -85,22 +75,6 @@ def test_deleter_default_catalog_alias(built_ducklake_schema: Any) -> None:
     """
     deleter = DatabaseDeleter(connection=built_ducklake_schema)
     assert deleter.catalog_alias == "db"
-
-
-# ---------------------------------------------------------------------------
-# Tests de validate_operation()
-# ---------------------------------------------------------------------------
-
-
-# Test que validate_operation retourne un booléen pour une suppression valide
-def test_validate_operation_delete_returns_bool(deleter: DatabaseDeleter) -> None:
-    """Test that validate_operation returns a boolean for a delete operation.
-
-    Args:
-        deleter: DatabaseDeleter fixture.
-    """
-    result = deleter.validate_operation("delete", filters=[("id", "=", 1)])
-    assert isinstance(result, bool)
 
 
 # ---------------------------------------------------------------------------
@@ -292,10 +266,9 @@ def test_delete_columns_parent_refused_without_cascade(
     # 'category' et 'status' sont déjà catégorielles (seuil=4) : aucun forçage
     deleter.update_column_metadata("category", parent_name="status")
 
-    result = deleter.delete_columns(["status"], use_transaction=False)
+    with pytest.raises(ValueError, match="hierarchy parent"):
+        deleter.delete_columns(["status"], use_transaction=False)
 
-    assert result.columns_dropped == []
-    assert any("status" in w for w in result.warnings)
     columns_after = [
         row[0]
         for row in built_ducklake_schema.execute("DESCRIBE fact_table").fetchall()
@@ -350,10 +323,9 @@ def test_delete_columns_code_refused_without_cascade(
     """
     deleter.update_column_metadata("status", label_for="category")
 
-    result = deleter.delete_columns(["category"], use_transaction=False)
+    with pytest.raises(ValueError, match="label_for target"):
+        deleter.delete_columns(["category"], use_transaction=False)
 
-    assert result.columns_dropped == []
-    assert any("category" in w for w in result.warnings)
     columns_after = [
         row[0]
         for row in built_ducklake_schema.execute("DESCRIBE fact_table").fetchall()
@@ -476,10 +448,7 @@ def test_delete_columns_leaves_cluster_by_untouched_when_unrelated(
 
 
 # Test que delete_rows réussit avec compaction réelle sur un catalogue sur disque
-@pytest.mark.skipif(
-    not _ducklake_available(),
-    reason="Extension ducklake non disponible dans cet environnement",
-)
+@requires_ducklake
 def test_delete_rows_compacts_on_real_ducklake_catalog(tmp_path: Any) -> None:
     """Test that delete_rows succeeds end-to-end against a real DuckLake catalog.
 
@@ -518,10 +487,7 @@ def test_delete_rows_compacts_on_real_ducklake_catalog(tmp_path: Any) -> None:
 
 
 # Test que delete_columns ne change pas file_count (§4.3 : opération de métadonnées)
-@pytest.mark.skipif(
-    not _ducklake_available(),
-    reason="Extension ducklake non disponible dans cet environnement",
-)
+@requires_ducklake
 def test_delete_columns_does_not_change_file_count(tmp_path: Any) -> None:
     """Test that ALTER TABLE ... DROP COLUMN rewrites no data file (measured, §4.3).
 
@@ -573,6 +539,18 @@ def test_delete_columns_does_not_change_file_count(tmp_path: Any) -> None:
 # ---------------------------------------------------------------------------
 
 
+# Rapport d'audit simulant un problème critique
+class _CriticalReport:
+    """Audit report double holding one critical issue."""
+
+    class _Issue:
+        description = "metadata table is missing"
+
+    def get_issues_by_severity(self, severity: Any) -> list[Any]:
+        """Return the critical issue for CRITICAL, nothing otherwise."""
+        return [self._Issue()] if severity == IssueSeverity.CRITICAL else []
+
+
 # Fonction auxiliaire de capture de l'état complet de la base
 def _snapshot_state(conn: Any) -> dict[str, Any]:
     """Capture the full state of the schema, for before/after comparison.
@@ -601,15 +579,17 @@ def test_delete_rows_rolls_back_on_exception(deleter: DatabaseDeleter) -> None:
     """
     before = _snapshot_state(deleter.conn)
 
-    # Exception simulée dans la validation post-suppression, après le DELETE
+    # Exception simulée dans l'audit post-suppression, après le DELETE
     def _boom(level: Any = None) -> Any:
         raise RuntimeError("échec après suppression")
 
     assert deleter.auditor is not None
     setattr(deleter.auditor, "validate_database", _boom)
 
-    report = deleter.delete_rows(filters=[("id", "=", 1)])
-    assert report.warnings
+    with pytest.raises(RuntimeError, match="échec après suppression"):
+        deleter.delete_rows(filters=[("id", "=", 1)])
+    assert deleter.last_report is not None
+    assert deleter.last_report.warnings
 
     # Les lignes supprimées sont revenues
     assert _snapshot_state(deleter.conn) == before
@@ -656,19 +636,11 @@ def test_delete_rows_rolls_back_on_critical_validation_issues(
     """
     before = _snapshot_state(deleter.conn)
 
-    # Rapport de validation simulant un problème critique
-    class _CriticalReport:
-        def get_critical_issues_count(self) -> int:
-            return 1
-
-        def get_issues_by_severity(self, severity: Any) -> list[Any]:
-            return []
-
     assert deleter.auditor is not None
     setattr(deleter.auditor, "validate_database", lambda level=None: _CriticalReport())
 
-    report = deleter.delete_rows(filters=[("id", "=", 1)])
-    assert report.warnings
+    with pytest.raises(RuntimeError, match="critical"):
+        deleter.delete_rows(filters=[("id", "=", 1)])
     assert _snapshot_state(deleter.conn) == before
 
 
@@ -715,31 +687,31 @@ def test_delete_rows_commits_on_success(deleter: DatabaseDeleter) -> None:
     assert count_after == initial_count - 1
 
 
-# Test qu'une colonne en échec n'empêche pas la suppression des autres
-def test_delete_columns_isolates_failing_column(deleter: DatabaseDeleter) -> None:
-    """Test that a column failing to drop does not abort the other deletions.
+# Test qu'une colonne en échec annule la suppression de toutes les colonnes
+def test_delete_columns_failing_column_rolls_back_all(deleter: DatabaseDeleter) -> None:
+    """Test that a column failing to drop restores the columns already dropped.
+
+    Either every requested column is dropped or none is: a failure on the second
+    column restores the first one, its metadata row included.
 
     Args:
         deleter: DatabaseDeleter fixture.
     """
-    # Échec simulé pour la seule colonne 'status'
+    before = _snapshot_state(deleter.conn)
+    # Échec simulé pour la seule colonne 'status', traitée en second
     original_drop = deleter._drop_fact_table_column
 
-    def _selective_drop(column: str) -> bool:
+    def _selective_drop(column: str) -> None:
         if column == "status":
-            return False
-        return original_drop(column)
+            raise duckdb.IOException("simulated I/O error")
+        original_drop(column)
 
     deleter._drop_fact_table_column = _selective_drop  # type: ignore[method-assign]
 
-    result = deleter.delete_columns(["status", "high_cardinality"])
+    with pytest.raises(duckdb.IOException):
+        deleter.delete_columns(["high_cardinality", "status"])
 
-    # La colonne en échec est signalée, l'autre est bien supprimée
-    assert result.columns_dropped == ["high_cardinality"]
-    assert any("status" in w for w in result.warnings)
-    remaining = deleter._get_fact_table_columns()
-    assert "status" in remaining
-    assert "high_cardinality" not in remaining
+    assert _snapshot_state(deleter.conn) == before
 
 
 # Test que des problèmes critiques annulent toutes les suppressions de colonnes
@@ -753,22 +725,13 @@ def test_delete_columns_rolls_back_on_critical_validation_issues(
     """
     before = _snapshot_state(deleter.conn)
 
-    # Rapport de validation simulant un problème critique
-    class _CriticalReport:
-        def get_critical_issues_count(self) -> int:
-            return 3
-
-        def get_issues_by_severity(self, severity: Any) -> list[Any]:
-            return []
-
     assert deleter.auditor is not None
     setattr(deleter.auditor, "validate_database", lambda level=None: _CriticalReport())
 
-    result = deleter.delete_columns(["status", "high_cardinality"])
+    with pytest.raises(RuntimeError, match="critical"):
+        deleter.delete_columns(["status", "high_cardinality"])
 
     # Aucune suppression n'est retenue, colonnes et métadonnées sont intactes
-    assert result.columns_dropped == []
-    assert result.warnings
     assert _snapshot_state(deleter.conn) == before
 
 
@@ -789,8 +752,117 @@ def test_delete_columns_rolls_back_on_exception(deleter: DatabaseDeleter) -> Non
 
     setattr(deleter.auditor, "validate_database", _boom)
 
-    result = deleter.delete_columns(["status"])
+    with pytest.raises(RuntimeError, match="auditeur indisponible"):
+        deleter.delete_columns(["status"])
 
-    assert result.columns_dropped == []
-    assert result.warnings
     assert _snapshot_state(deleter.conn) == before
+
+
+# ---------------------------------------------------------------------------
+# Validation des demandes de suppression : ValueError, rien d'écrit
+# ---------------------------------------------------------------------------
+
+
+# Test que des filtres invalides sont refusés avant toute écriture
+@pytest.mark.parametrize(
+    "filters",
+    [None, "", "   ", [], {"id": 1}, 42, [("id", "=", 1), [("id", "=", 2)]]],
+)
+def test_delete_rows_invalid_filters_raise(
+    deleter: DatabaseDeleter, filters: Any
+) -> None:
+    """Test that missing, empty or malformed filters raise ValueError.
+
+    A dict used to be accepted by the signature and silently delete 0 rows.
+
+    Args:
+        deleter: DatabaseDeleter fixture.
+        filters: Invalid filters.
+    """
+    before = _snapshot_state(deleter.conn)
+    with pytest.raises(ValueError):
+        deleter.delete_rows(filters)
+    assert _snapshot_state(deleter.conn) == before
+
+
+# Test qu'un filtre sans correspondance ne supprime rien et n'horodate pas
+def test_delete_rows_without_match_is_noop(deleter: DatabaseDeleter) -> None:
+    """Test that a filter matching no row deletes nothing and keeps updated_at.
+
+    Args:
+        deleter: DatabaseDeleter fixture.
+    """
+    stamp = deleter.conn.execute("SELECT updated_at FROM dataset_metadata").fetchone()
+    report = deleter.delete_rows([("id", "=", 999)])
+    assert report.rows_deleted == 0
+    assert report.columns_dropped == []
+    after = deleter.conn.execute("SELECT updated_at FROM dataset_metadata").fetchone()
+    assert after == stamp
+
+
+# Test qu'une colonne inconnue du filtre remonte l'erreur DuckDB après annulation
+def test_delete_rows_unknown_filter_column_raises(deleter: DatabaseDeleter) -> None:
+    """Test that a SQL error in the filter propagates after rollback.
+
+    Args:
+        deleter: DatabaseDeleter fixture.
+    """
+    before = _snapshot_state(deleter.conn)
+    with pytest.raises(duckdb.Error):
+        deleter.delete_rows([("unknown_column", "=", 1)])
+    assert _snapshot_state(deleter.conn) == before
+
+
+# Test que la suppression d'une clé primaire est refusée
+def test_delete_columns_primary_key_raises(deleter: DatabaseDeleter) -> None:
+    """Test that deleting a primary key column raises ValueError.
+
+    Args:
+        deleter: DatabaseDeleter fixture.
+    """
+    with pytest.raises(ValueError, match="primary key"):
+        deleter.delete_columns(["id", "status"])
+    assert "status" in deleter._get_fact_table_columns()
+
+
+# Test que la suppression d'une colonne inconnue ou d'une liste vide est refusée
+@pytest.mark.parametrize("columns", [[], ["does_not_exist"], ["status", "nope"]])
+def test_delete_columns_invalid_request_raises(
+    deleter: DatabaseDeleter, columns: list[str]
+) -> None:
+    """Test that an empty list or an unknown column raises ValueError.
+
+    Args:
+        deleter: DatabaseDeleter fixture.
+        columns: Invalid column list.
+    """
+    with pytest.raises(ValueError):
+        deleter.delete_columns(columns)
+    assert "status" in deleter._get_fact_table_columns()
+
+
+# Test que la suppression d'une colonne catégorielle est signalée
+def test_delete_columns_categorical_warning(deleter: DatabaseDeleter) -> None:
+    """Test that dropping a categorical column warns that it may back a menu.
+
+    Args:
+        deleter: DatabaseDeleter fixture.
+    """
+    report = deleter.delete_columns(["status"])
+    assert report.columns_dropped == ["status"]
+    assert any("categorical" in w for w in report.warnings)
+
+
+# Test que les méthodes publiques sans usage ont été retirées
+@pytest.mark.parametrize(
+    "name",
+    ["get_deletion_impact", "get_deletion_status", "cleanup_database", "data_mgr"],
+)
+def test_deleter_has_no_removed_api(deleter: DatabaseDeleter, name: str) -> None:
+    """Test that the unused public methods and attributes are gone.
+
+    Args:
+        deleter: DatabaseDeleter fixture.
+        name: Removed attribute name.
+    """
+    assert not hasattr(deleter, name)

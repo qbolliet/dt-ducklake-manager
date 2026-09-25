@@ -15,24 +15,7 @@ import pytest
 
 # Module à tester
 from dt_ducklake_manager.schema import DuckLakeTablesBuilder
-
-# ---------------------------------------------------------------------------
-# Fonctions auxiliaires
-# ---------------------------------------------------------------------------
-
-
-def _ducklake_available() -> bool:
-    """Vérifie si l'extension DuckLake est disponible dans l'environnement de test."""
-    try:
-        import duckdb as _ddb
-
-        conn = _ddb.connect(":memory:")
-        conn.execute("INSTALL ducklake; LOAD ducklake;")
-        conn.close()
-        return True
-    except Exception:
-        return False
-
+from tests.utils.ducklake import requires_ducklake
 
 # ---------------------------------------------------------------------------
 # Fixture locale
@@ -483,9 +466,7 @@ def test_query_nonexistent_table(
 
 
 # Test de la création de la fact table avec partitionnement
-@pytest.mark.skipif(
-    not _ducklake_available(), reason="Extension ducklake non disponible"
-)
+@requires_ducklake
 def test_create_duckdb_fact_table_with_partition_by(sample_df: pl.DataFrame) -> None:
     """Test that create_duckdb_fact_table accepts partition_by without error.
 
@@ -520,9 +501,7 @@ def test_create_duckdb_fact_table_with_partition_by(sample_df: pl.DataFrame) -> 
 
 
 # Test de build_schema avec partition_by
-@pytest.mark.skipif(
-    not _ducklake_available(), reason="Extension ducklake non disponible"
-)
+@requires_ducklake
 def test_build_schema_with_partition_by(sample_df: pl.DataFrame) -> None:
     """Test that build_schema propagates partition_by to create_duckdb_fact_table.
 
@@ -981,10 +960,7 @@ def test_create_duckdb_dataset_metadata_table_with_cluster_by(
 
 # Test que le tri physique produit des fichiers Parquet dont les plages ne se
 # recouvrent pas (élagage par fichier, §5.3)
-@pytest.mark.skipif(
-    not _ducklake_available(),
-    reason="Extension ducklake non disponible dans cet environnement",
-)
+@requires_ducklake
 def test_build_schema_cluster_by_produces_non_overlapping_files(
     tmp_path: Path,
 ) -> None:
@@ -1000,8 +976,8 @@ def test_build_schema_cluster_by_produces_non_overlapping_files(
     files non-monotonically (measured, annexe A — the same effect documented for
     ``recluster``); ``SET threads = 1`` around the write is the same technique the
     specification itself uses to observe the physical effect deterministically. It
-    is applied only in this test, not in production code (single-threaded writes
-    are prompt 9's ``recluster`` concern, not this one).
+    is applied only in this test, not in production code (only
+    ``DuckLakeMaintenance.recluster`` writes single-threaded).
 
     Args:
         tmp_path: pytest temporary directory.

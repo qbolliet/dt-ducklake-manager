@@ -280,7 +280,11 @@ Toutes les écritures : identifiants **quotés** (`quote_ident`) et **qualifiés
 catalogue** (`"catalog"."schema"."table"`, §7) ; DataFrames enregistrés comme vues
 temporaires (non qualifiées) ; une transaction DuckDB (`BEGIN`/`COMMIT`, `ROLLBACK` sur
 exception) par opération ; un `OperationReport` (§6) par opération ; `dataset_metadata.
-updated_at` mis à jour.
+updated_at` mis à jour **dans la transaction** (même snapshot, même `run_id` que
+l'écriture) ; audit structurel `BASIC` de `DatabaseAuditor` avant le `COMMIT` (lecture du
+catalogue et des petites tables de métadonnées uniquement, jamais de la table des faits ;
+un problème critique annule l'écriture), réglable par `audit_level` (`COMPREHENSIVE`
+ajoute les contrôles qui balaient la table des faits, `None` le désactive).
 
 ### 4.1 Construction (`DuckLakeTablesBuilder.build_schema`)
 
@@ -298,15 +302,25 @@ sinon) ; création de `dataset_metadata`.
 
 ### 4.2 Mise à jour (`DatabaseUpdater.update_database`)
 
-Upsert sur les clés primaires (toutes requises) : lignes nouvelles insérées, lignes
-existantes mises à jour, lot trié sur `cluster_by` avant écriture. Nouvelles colonnes :
+Upsert sur les clés primaires (toutes requises, non nulles) en deux instructions : un
+`UPDATE … FROM` restreint aux lignes existantes dont au moins une valeur change (une
+ligne inchangée n'est pas réécrite, `rows_updated` ne compte que les lignes modifiées),
+puis un `INSERT … SELECT … WHERE NOT EXISTS … ORDER BY cluster_by` du lot entier (pas de
+découpage en lots Python : DuckDB traite déjà l'instruction en flux). Le lot est
+dédupliqué **sur les clés primaires** selon `keep` ; un lot resté non unique est refusé.
+Après l'écriture, l'unicité de la clé de la table des faits est contrôlée
+(`check_duplicates_db`) : un doublon, qui ne peut venir que d'une écriture hors du
+package, fait échouer l'update au lieu d'être supprimé. Nouvelles colonnes :
 **refusées par défaut** ; acceptées avec `allow_new_columns=True` (ajout de la colonne,
 ligne `metadata`, champs d'UI depuis `column_metadata`). Nouvelles modalités d'une
 colonne catégorielle : rien à faire (ce sont des libellés), et `is_categorical` n'est
 pas recalculé. Dépendance fonctionnelle des colonnes de libellés contrôlée sur l'état
 post-upsert, dans la transaction, pour les codes du lot (§2.6) ; un changement de
-libellé passe par `update_value_labels`. Suivie d'un `rewrite_data_files(delete_threshold)` (§5.4),
-jamais d'une expiration de snapshots.
+libellé passe par `update_value_labels`. Les colonnes nouvelles (`allow_new_columns`)
+sont ajoutées dans la transaction de l'update : un update refusé ne les laisse pas
+derrière lui. Suivie de la compaction post-écriture (`compact` : fusion des petits
+fichiers puis `rewrite_data_files(delete_threshold)`, §5.5), jamais d'une expiration de
+snapshots.
 
 ### 4.3 Gestion explicite des colonnes
 
@@ -433,7 +447,7 @@ données sont physiquement groupées : d'où `cluster_by`.
 | `parquet_compression` | `snappy`, `zstd`, `gzip`, … | `zstd` |
 | `parquet_version` | `1`, `2` | `2` |
 | `target_file_size` | taille **avec unité** (`'100MB'`) ; sans unité : erreur | `'100MB'` |
-| `parquet_row_group_size` | entier (lignes) | 122 880, à aligner sur la taille des lots |
+| `parquet_row_group_size` | entier (lignes) | 122 880 (déjà le défaut effectif de DuckDB, *mesuré* ; explicité pour rendre visible la granularité de l'élagage par row group) |
 | `data_inlining_row_limit` | entier | selon profil (§5.2), pas de défaut imposé |
 | `encrypted` | `true`/`false` | selon déploiement |
 
@@ -459,12 +473,17 @@ ducklake_list_files(catalog, table [, schema, snapshot_version, snapshot_time])
 
 Attention aux unités : `target_file_size` exige une unité, `min_file_size` /
 `max_file_size` de `merge_adjacent_files` sont des **entiers en octets** (*mesuré* :
-`'1KB'` est rejeté).
+`'1KB'` est rejeté). `min_file_size` est une borne **basse** (*mesuré*) : les fichiers
+*plus petits* que ce seuil sont exclus de la fusion ; il n'est donc pas transmis, et
+`max_file_size` vaut le `target_file_size` du catalogue. Le résultat de
+`merge_adjacent_files` et de `rewrite_data_files` doit être **lu en entier**
+(`fetchall`) : lu partiellement (`fetchone`), la procédure renvoie ses compteurs mais
+n'est pas validée et reste sans effet (*mesuré*).
 
 | Opération | Effet | Quand | Risque |
 |---|---|---|---|
 | `rewrite_data_files(delete_threshold)` | Réécrit les fichiers dont la part de lignes supprimées dépasse le seuil ; **sans seuil explicite, ne fait rien** (*mesuré*, même à 25 % de suppressions) | Après chaque update / delete (`delete_threshold` 0,1–0,3) | Aucun (les anciens fichiers restent lisibles par time travel) |
-| `merge_adjacent_files(min_file_size)` | Fusionne les fichiers adjacents plus petits que `min_file_size` | Quand beaucoup de petits lots se sont accumulés ; après `recluster` | Aucun |
+| `merge_adjacent_files(max_file_size)` | Fusionne les fichiers adjacents en fichiers d'au plus `max_file_size` octets (`target_file_size` du catalogue) | Après chaque écriture (`compact`) ; après `recluster` | Aucun |
 | `flush_inlined_data` | Écrit en Parquet les lignes inlinées dans le catalogue | Maintenance planifiée ; avant une lecture directe des fichiers | Aucun |
 | `recluster(order_by)` | Réécrit la table entière dans l'ordre de `cluster_by` | Quand le recouvrement des fichiers dégrade l'élagage (indicateur §5.3), typiquement après N updates | Réécriture complète ; double l'espace jusqu'au cleanup |
 | `repartition` | Change le partitionnement et réécrit | Changement de stratégie de filtre | Idem |
@@ -474,7 +493,8 @@ Attention aux unités : `target_file_size` exige une unité, `min_file_size` /
 
 Cycle : *réécrire* (rewrite / merge / flush) après les écritures → *périmer* (expire) et
 *supprimer* (cleanup) en maintenance planifiée. Une **politique de maintenance**
-(`MaintenancePolicy`) regroupe les seuils (`delete_threshold`, `min_file_size`,
+(`MaintenancePolicy`) regroupe les seuils (`delete_threshold`, `min_file_size_bytes` —
+seuil de *comptage* des petits fichiers, qui décide si la fusion s'exécute —,
 `retention_days`, `max_overlap_ratio`, `flush_inlined`) et `DuckLakeMaintenance.
 maintain(policy)` ne déclenche chaque étape que si son indicateur (`storage_report()`)
 le justifie, en journalisant les étapes sautées et pourquoi :
@@ -506,7 +526,7 @@ exigeant `pytz` (*mesuré*).
 ```python
 @dataclass
 class OperationReport:
-    operation: str                  # 'build' | 'update' | 'add_columns' | 'update_value_labels' | 'delete_columns' | 'delete' | 'recluster' | 'maintenance'
+    operation: str                  # 'build' | 'update' | 'add_columns' | 'update_value_labels' | 'delete_columns' | 'delete_rows' | 'recluster' | 'maintenance' | 'restore_snapshot'
     schema: str
     run_id: str | None
     started_at: datetime
@@ -539,6 +559,14 @@ Contrat : une ligne INFO de synthèse par opération (`update main [run-42]: +1 
 réécrit (seuil non atteint)`) ; warnings journalisés au fil de l'eau ; rapport partiel en
 ERROR en cas d'échec avec l'étape atteinte. `update_database` continue de retourner
 `bool` et expose `updater.last_report` ; les nouvelles méthodes retournent le rapport.
+
+Erreurs (arbitrage entre §2.6 et le contrat `bool`) : une erreur de **saisie** (clé
+primaire manquante ou nulle, colonne inconnue, clé dupliquée dans un lot, dépendance
+code → libellé violée, filtre de suppression absent ou mal formé) lève une `ValueError`
+explicite, dans toutes les opérations, `update_database` compris, après `ROLLBACK` si
+une transaction était ouverte. Une erreur d'**exécution** (erreur de la base) est
+annulée elle aussi ; `update_database` retourne alors `False` (le message est dans
+`last_report.warnings`), les autres opérations relancent l'exception d'origine.
 
 ---
 
