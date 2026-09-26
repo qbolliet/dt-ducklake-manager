@@ -14,7 +14,11 @@ from ..reporting import OperationReport
 
 # Import des utilitaires
 from ..utils.sql import quote_ident, remove_dataframe_duplicates
-from ..utils.types import map_python_to_sql_type, validate_column_metadata
+from ..utils.types import (
+    check_supported_dtype,
+    map_python_to_sql_type,
+    validate_column_metadata,
+)
 from ..utils.value_labels import check_value_label_dependency, get_value_label_columns
 
 # Import du gestionnaire de base
@@ -208,8 +212,9 @@ class DatabaseUpdater(BaseSchemaManager):
                 it carries a column absent from the fact table while
                 ``allow_new_columns`` is False, if it is not unique on the primary
                 keys while ``check_duplicates_update`` is False, if
-                ``column_metadata`` is invalid, or if the update would violate the
-                functional dependency of a code/label column pair (see
+                ``column_metadata`` is invalid, if a column has a composite type
+                (``List``, ``Array``, ``Struct``), or if the update would violate
+                the functional dependency of a code/label column pair (see
                 :meth:`update_value_labels`). Raised after rollback.
 
         Examples:
@@ -365,12 +370,16 @@ class DatabaseUpdater(BaseSchemaManager):
                 ``new_columns``.
 
         Raises:
-            ValueError: If a UI field is rejected by ``update_column_metadata``
-                (e.g. a ``parent_name`` creating a cycle).
+            ValueError: If a new column has a composite type (``List``, ``Array``,
+                ``Struct``), or if a UI field is rejected by
+                ``update_column_metadata`` (e.g. a ``parent_name`` creating a
+                cycle).
             duckdb.Error: If a column cannot be added.
         """
         # Ajout de toutes les colonnes et de leurs lignes de méta-données
         for column in new_columns:
+            # Refus des types composites avant toute modification de la table
+            check_supported_dtype(column, update_df.schema[column])
             sql_type = map_python_to_sql_type(update_df.schema[column])
             self.conn.execute(
                 f"ALTER TABLE {self._qualified('fact_table')} ADD COLUMN"
@@ -414,8 +423,8 @@ class DatabaseUpdater(BaseSchemaManager):
             report: In-progress report of the enclosing transaction.
 
         Raises:
-            ValueError: If the update violates the functional dependency of a
-                code/label column pair.
+            ValueError: If a column has a composite type, or if the update violates
+                the functional dependency of a code/label column pair.
             RuntimeError: If the fact table is not unique on its primary keys, or
                 if the structural audit finds a critical issue.
             duckdb.Error: If a statement fails.
@@ -454,6 +463,7 @@ class DatabaseUpdater(BaseSchemaManager):
                 ``report.metadata_changes``.
 
         Raises:
+            ValueError: If a column of the batch has a composite type.
             duckdb.Error: If a fact table column cannot be widened.
         """
         # Méta-données courantes (lues une fois pour toutes les colonnes)
@@ -745,9 +755,10 @@ class DatabaseUpdater(BaseSchemaManager):
                 is missing a primary key column, if a primary key of ``df`` holds a
                 null, if ``df`` is not unique on the primary keys, if ``df``
                 carries no value column, if a value column already exists and
-                ``overwrite`` is False, if ``column_metadata`` is malformed, or if
-                writing a code or label column violates the functional dependency
-                of a declared code/label pair.
+                ``overwrite`` is False, if a value column has a composite type
+                (``List``, ``Array``, ``Struct``), if ``column_metadata`` is
+                malformed, or if writing a code or label column violates the
+                functional dependency of a declared code/label pair.
             RuntimeError: If the structural audit finds a critical issue.
             duckdb.Error: If a statement fails; the transaction is rolled back.
 
@@ -788,6 +799,10 @@ class DatabaseUpdater(BaseSchemaManager):
                 " Pass overwrite=True to update their values instead."
             )
         columns_to_add = [c for c in new_columns if c not in already_existing]
+
+        # Refus des types composites (colonnes nouvelles comme colonnes écrasées)
+        for column in new_columns:
+            check_supported_dtype(column, df_nw.schema[column])
 
         # Validation des métadonnées d'UI, restreintes aux colonnes concernées
         normalized_metadata = validate_column_metadata(column_metadata, new_columns)

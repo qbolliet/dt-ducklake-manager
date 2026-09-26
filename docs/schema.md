@@ -33,7 +33,7 @@ The table is:
 |---|---|---|---|
 | `name` | VARCHAR | no | Technical column name |
 | `label` | VARCHAR | no | Display label (defaults to `name`) |
-| `sql_type` | VARCHAR | no | DuckDB SQL type (`BIGINT`, `DOUBLE`, `VARCHAR`, …) — drives DDL and the front end's type → chart mapping |
+| `sql_type` | VARCHAR | no | **Physical** DuckDB type of the stored column, parameters included (`BIGINT`, `DOUBLE`, `DECIMAL(10,2)`, …) — see [Types](#types); drives the front end's type → chart mapping |
 | `is_primary_key` | BOOLEAN | no | Part of the logical key (deduplication, upsert) |
 | `is_categorical` | BOOLEAN | no | **Pure UI metadata**: the column is filtered through a select menu and can be a `groupBy`. Never drives a storage decision |
 | `parent_name` | VARCHAR | yes | Parent column in a column hierarchy (see below) |
@@ -43,6 +43,13 @@ The table is:
 | `family` | VARCHAR | yes | Thematic grouping of variables in menus |
 | `description` | VARCHAR | yes | Contextual help text |
 | `default_aggregation` | VARCHAR | yes | One of `SUM`, `AVG`, `MIN`, `MAX`, `COUNT`, `MEDIAN`, `MODE`, validated on write |
+
+The five columns marked "no" (`name`, `label`, `sql_type`, `is_categorical`,
+`is_primary_key`) are declared `NOT NULL` in the `CREATE TABLE`, which DuckLake
+enforces. `is_categorical` and `is_primary_key` still
+default to `FALSE`. Since a label is mandatory, `update_column_metadata(column,
+label=None)` raises `ValueError` instead of clearing it; the other UI fields
+remain clearable with `None`.
 
 `metadata` is **the contract between the database and the interface**:
 everything the UI needs to drive itself (label, type, categorical status,
@@ -60,7 +67,10 @@ conflicts arising from a later batch (e.g. an update carrying `Int32` where
 `BIGINT` is stored) are resolved on the SQL type ranking `BOOLEAN < TINYINT <
 SMALLINT < INTEGER < BIGINT < FLOAT < DOUBLE < VARCHAR`, keeping the greater
 width: a stored `BIGINT` is never narrowed by a batch of `Int32`
-(`resolve_sql_type_conflict`).
+(`resolve_sql_type_conflict`). When a column is widened, `sql_type` is rewritten
+with the type read back from the table after the `ALTER`, like everywhere else
+(see [Types](#types)). Types outside this ranking (`DECIMAL`, temporal types,
+`BLOB`) are never widened: the stored type is kept.
 
 ### `dataset_metadata` — one row per schema
 
@@ -69,13 +79,18 @@ width: a stored `BIGINT` is never narrowed by a batch of `Int32`
 | `label` | VARCHAR | Title of the result set |
 | `description` | VARCHAR | Subtitle / description |
 | `source` | VARCHAR | Provenance (model, pipeline) |
-| `updated_at` | TIMESTAMP | Last successful write (build, update, column add/drop) |
+| `updated_at` | TIMESTAMP | Last successful write (build, update, column add/drop), **in UTC** |
 | `schema_version` | INTEGER | Currently always `1`, reserved for a future migration |
 | `cluster_by` | VARCHAR | JSON list of the physical sort columns (see below) |
 
 `updated_at` and `schema_version` are always populated; the remaining fields
 come from optional builder arguments (`dataset_label`, `dataset_description`,
 `dataset_source`).
+
+`updated_at` is **in UTC**. The column is a `TIMESTAMP` (no time zone), so the
+value is stored as a naive UTC datetime, with no `tzinfo`: a consumer that
+serializes it must mark it as UTC (suffix `Z`), and must not treat it as local
+time.
 
 ## Categorical status
 
@@ -285,11 +300,79 @@ DataFrame (narwhals) → SQL, widths preserved:
 | `UInt8` / `UInt16` / `UInt32` / `UInt64` | `UTINYINT` / `USMALLINT` / `UINTEGER` / `UBIGINT` |
 | `Float32` / `Float64` | `FLOAT` / `DOUBLE` |
 | `String` / `Categorical` / `Enum` | `VARCHAR` |
+| `Decimal` | `DECIMAL(p,s)` |
 | `Date` / `Datetime` | `DATE` / `TIMESTAMP` |
+| `List` / `Array` / `Struct` | **refused** (see below) |
 
 The package never silently narrows a width: it is up to the producer to supply
 a `Float32` (or a narrower integer) when 32 bits are judged sufficient for
 values destined for charts.
+
+### `sql_type` is the physical type
+
+The table above is the type **inferred** from the DataFrame, used to declare
+the columns. What `metadata.sql_type` records is the **physical** type, read
+back from the table itself (`DESCRIBE`) once the column exists: after
+`build_schema`, after `add_columns` or an `update_database` that adds a column,
+and after a type widening. The two differ as soon as a type carries parameters:
+a `Decimal(10, 2)` column is recorded as `DECIMAL(10,2)`, not `DECIMAL`. A
+consumer can therefore rely on `sql_type` to filter, type and serialize the
+column exactly as the table stores it.
+
+### Composite types are refused
+
+`List`, `Array` and `Struct` columns raise a `ValueError` (naming the column)
+in `build_schema`, `add_columns` and `update_database` — for a new column as
+well as for a batch targeting an existing one — before anything is written or,
+when the write has started, with the transaction rolled back. A nested type has
+no flat SQL type for `sql_type` to describe, and a silent fallback to `VARCHAR`
+would misdescribe the column. The producer converts the column explicitly
+before writing it, typically to a JSON
+string (`.struct.json_encode()` for a struct, `.list.join(",")` for a list of
+strings), or drops it.
+
+### Column names
+
+Any column name is accepted (identifiers are always quoted), but a name outside
+`^[a-z_][a-z0-9_]*$` — accents, spaces, capitals, symbols, a leading digit —
+triggers a `WARNING` at creation (`build_schema`, `add_columns`,
+`update_database` with a new column). It is not an error: such names remain
+awkward for SQL clients (which must quote them) and for URLs. Prefer
+`snake_case` ASCII names and put the display text in `label`.
+
+## Order of modalities
+
+The database stores **no business order** for the modalities of a column: the
+interface lists them with a `SELECT DISTINCT`, which sorts alphabetically. For
+an ordinal variable (`Low` < `Medium` < `High`, months, age brackets,
+quantiles) that order is wrong, and `metadata` has no field to fix it — the
+[`label_for`](#codes-and-value-labels) mechanism already does.
+
+Declare a **sortable code** column whose natural order (numeric, or
+zero-padded text) is the business order, and a **label column** carrying the
+text to display, linked by `label_for`:
+
+| `severity_rank` (code) | `severity` (label, `label_for = severity_rank`) |
+|---|---|
+| `1` | `Low` |
+| `2` | `Medium` |
+| `3` | `High` |
+
+```python
+builder = DuckLakeTablesBuilder(
+    df, primary_keys=["date", "severity_rank"],
+    value_labels={"severity": "severity_rank"},
+    connection=connection,
+)
+```
+
+The interface sorts on the code column and displays the label column, so the
+menu reads `Low`, `Medium`, `High`. Prefer an integer code; a text code must be
+zero-padded (`"01"`, `"02"`, …, `"10"`), since `"10"` sorts before `"2"`. The
+functional dependency code → label is checked on every write, so an order can
+neither get two labels nor a label two ranks. To relabel a modality, use
+`update_value_labels`; the order lives in the code, so leave room for a later
+modality by using a sparse code (`10`, `20`, `30`) from the start.
 
 ## `cluster_by` and physical sort order
 

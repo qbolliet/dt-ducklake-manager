@@ -14,8 +14,10 @@ from ..utils.logger import _init_logger
 # Utilitaires de traitement des données
 from ..utils.types import (
     UI_METADATA_FIELDS,
+    check_supported_dtype,
     map_python_to_sql_type,
     validate_column_metadata,
+    warn_nonstandard_column_name,
 )
 from ..utils.value_labels import validate_value_labels
 
@@ -410,7 +412,10 @@ class SchemaBuilder:
 
         The ``is_categorical`` flag is inferred once from the distinct non-null count
         of textual columns and can be forced per column through
-        ``categorical_overrides``. No later update re-evaluates it.
+        ``categorical_overrides``. No later update re-evaluates it. The ``sql_type``
+        written here is the inferred one; ``DuckLakeTablesBuilder.build_schema``
+        replaces it by the physical type once the fact table exists. A column name
+        outside ``^[a-z_][a-z0-9_]*$`` is accepted with a warning.
 
         The UI fields ``unit``, ``display_format``, ``family``, ``description`` and
         ``default_aggregation`` are all VARCHAR, nullable, and default to ``None``.
@@ -443,8 +448,9 @@ class SchemaBuilder:
             dataset.
 
         Raises:
-            ValueError: If ``column_metadata`` references a column absent from the
-                DataFrame, carries an unknown sub-dictionary key, supplies an
+            ValueError: If a column has a composite type (``List``, ``Array``,
+                ``Struct``), if ``column_metadata`` references a column absent from
+                the DataFrame, carries an unknown sub-dictionary key, supplies an
                 invalid ``default_aggregation``, disagrees with ``hierarchies``/
                 ``value_labels`` on a column's parent/target, references a
                 ``parent_name``/``label_for`` column absent from the DataFrame, if the
@@ -458,6 +464,12 @@ class SchemaBuilder:
              'is_categorical', 'is_primary_key', 'label', 'label_for', 'name',
              'parent_name', 'sql_type', 'unit']
         """
+        # Refus des colonnes composites (List, Array, Struct) et avertissement sur
+        # les noms hors snake_case, avant toute autre validation
+        for col in self.df.columns:
+            check_supported_dtype(col, self.df.schema[col])
+            warn_nonstandard_column_name(col, self.logger)
+
         # Validation et normalisation des métadonnées d'UI fournies par le producteur
         column_metadata_norm = validate_column_metadata(
             column_metadata, list(self.df.columns)

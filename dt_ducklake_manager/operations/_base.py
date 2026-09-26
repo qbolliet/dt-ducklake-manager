@@ -32,11 +32,14 @@ from ..utils.logger import _init_logger
 from ..utils.sql import SchemaScoped, quote_ident, resolve_catalog
 from ..utils.types import (
     COLUMN_METADATA_KEYS,
+    check_supported_dtype,
     empty_metadata_frame,
     map_python_to_sql_type,
     metadata_table_ddl,
     normalize_default_aggregation,
     resolve_sql_type_conflict,
+    utc_now,
+    warn_nonstandard_column_name,
 )
 from ..utils.value_labels import check_value_label_dependency, validate_value_labels
 
@@ -837,11 +840,20 @@ class BaseSchemaManager(SchemaScoped):
         only ``sql_type`` is refreshed: the recorded ``label`` and
         ``is_categorical`` are never overwritten by a data update.
 
+        The recorded ``sql_type`` is the physical type read back from the fact table
+        (``DECIMAL(10,2)``, not ``DECIMAL``): the column must therefore already
+        exist there. The type inferred from ``df`` is only a fallback for a column
+        absent from the fact table.
+
         Args:
             column: Column name
             df: DataFrame containing the column (any narwhals-compatible backend)
             label: Custom label for the column. If None, a label is derived from the
                 column name on insertion, and the recorded label is kept on update.
+
+        Raises:
+            ValueError: If the column has a composite type (``List``, ``Array``,
+                ``Struct``).
 
         Example:
             >>> manager._add_column_to_metadata('score', df)
@@ -850,8 +862,13 @@ class BaseSchemaManager(SchemaScoped):
         df_nw = nw.from_native(df, eager_only=True)
         # Extraction du type narwhals de la colonne
         dtype_obj = df_nw.schema[column]
-        # Conversion du type narwhals en SQL
-        sql_type = map_python_to_sql_type(dtype_obj)
+        # Refus des types composites : pas de type SQL plat à enregistrer
+        check_supported_dtype(column, dtype_obj)
+        # Type SQL physique relu dans la table des faits ; le type inféré du
+        # DataFrame ne sert que de repli pour une colonne absente de la table
+        sql_type = self._physical_column_types().get(
+            column, map_python_to_sql_type(dtype_obj)
+        )
         # Statut catégoriel, calculé une seule fois à la création de la colonne :
         # colonne textuelle dont la cardinalité (hors valeurs manquantes) respecte le
         # seuil.
@@ -883,6 +900,8 @@ class BaseSchemaManager(SchemaScoped):
             insert_label = (
                 label if label is not None else column.replace("_", " ").title()
             )
+            # Avertissement sur les noms hors snake_case (accepté, non refusé)
+            warn_nonstandard_column_name(column, self.logger)
             self.conn.execute(
                 f"""
                 INSERT INTO {metadata_table} (name, label, sql_type,
@@ -946,15 +965,17 @@ class BaseSchemaManager(SchemaScoped):
             **fields: Field/value pairs among ``label``, ``parent_name``,
                 ``label_for``, ``unit``, ``display_format``, ``family``,
                 ``description``, ``default_aggregation`` (strings, ``None`` clears
-                the field) and ``is_categorical`` (bool).
+                the field, except for ``label`` which is required) and
+                ``is_categorical`` (bool).
 
         Raises:
             ValueError: If a field name is not one of the allowed fields, if
-                ``default_aggregation`` is invalid, if the column has no row in the
-                metadata table, if a non-``None`` ``parent_name`` references a
-                column absent from metadata, if it would create a cycle in the
-                ``parent_name`` graph, if ``is_categorical`` is not a bool, if
-                ``is_categorical=False`` targets a column of a hierarchy, if a
+                ``label`` is ``None``, if ``default_aggregation`` is invalid, if
+                the column has no row in the metadata table, if a non-``None``
+                ``parent_name`` references a column absent from metadata, if it
+                would create a cycle in the ``parent_name`` graph, if
+                ``is_categorical`` is not a bool, if ``is_categorical=False``
+                targets a column of a hierarchy, if a
                 non-``None`` ``label_for`` violates the label_for structural
                 checks or the code -> label functional dependency, or
                 if ``parent_name`` and ``label_for`` are set (currently or in the same
@@ -987,6 +1008,11 @@ class BaseSchemaManager(SchemaScoped):
         # Aucun champ fourni : rien à écrire
         if not fields:
             return
+
+        # Le libellé est obligatoire (colonne NOT NULL) : il se corrige, il ne s'efface
+        # pas
+        if "label" in fields and fields["label"] is None:
+            raise ValueError("label cannot be None: it is a required metadata field")
 
         # Normalisation et validation de l'agrégation par défaut
         if "default_aggregation" in fields:
@@ -1534,12 +1560,17 @@ class BaseSchemaManager(SchemaScoped):
                 ``report.metadata_changes``.
 
         Raises:
+            ValueError: If the incoming column has a composite type (``List``,
+                ``Array``, ``Struct``).
             duckdb.Error: If the fact table column cannot be widened to the
                 resolved type.
 
         Example:
             >>> manager._resolve_type_conflicts('amount', df, metadata)
         """
+        # Refus des types composites, y compris sur une colonne déjà existante
+        check_supported_dtype(column, df.schema[column])
+
         # Identification du type SQL actuellement enregistré
         matching = current_metadata.filter(nw.col("name") == column)["sql_type"]
         if len(matching) == 0:
@@ -1577,25 +1608,26 @@ class BaseSchemaManager(SchemaScoped):
             f" ALTER {quote_ident(column)} SET DATA TYPE {resolved_type}"
         )
 
-        # Mise à jour du type SQL enregistré
+        # Mise à jour du type SQL enregistré : type physique relu après l'ALTER
+        physical_type = self._physical_column_types().get(column, resolved_type)
         self.conn.execute(
             f"""
             UPDATE {self._qualified("metadata")}
             SET sql_type = ?
             WHERE name = ?
         """,
-            [resolved_type, column],
+            [physical_type, column],
         )
         # Invalidation du cache
         self._invalidate_metadata_cache()
         # Logging
         self.logger.debug(
-            f"Type conflict resolution for {column}: {current_type} -> {resolved_type}"
+            f"Type conflict resolution for {column}: {current_type} -> {physical_type}"
         )
         # Ajout au rapport
         if report is not None:
             report.metadata_changes.append(
-                f"sql_type({column}): {current_type} -> {resolved_type}"
+                f"sql_type({column}): {current_type} -> {physical_type}"
             )
 
     # Méthode utilitaire pour les colonnes contenant uniquement des valeurs nulles
@@ -1643,7 +1675,7 @@ class BaseSchemaManager(SchemaScoped):
     # Méthode d'horodatage de la dernière écriture réussie
     def _touch_dataset_metadata(self) -> None:
         """
-        Stamp ``dataset_metadata.updated_at`` with the current timestamp.
+        Stamp ``dataset_metadata.updated_at`` with the current UTC timestamp.
 
         Called inside the transaction of every write, so that the timestamp is
         atomic with the write it describes and lands in the same DuckLake snapshot
@@ -1665,7 +1697,8 @@ class BaseSchemaManager(SchemaScoped):
         # Horodatage de la dernière écriture réussie.
         # Valeur liée en Python plutôt que via now() : la colonne est un
         # TIMESTAMP sans fuseau, là où now() renvoie un TIMESTAMP WITH TIME ZONE.
+        # Valeur en UTC (l'API la publie suffixée Z).
         self.conn.execute(
             f"UPDATE {self._qualified('dataset_metadata')} SET updated_at = ?",
-            [datetime.now()],
+            [utc_now()],
         )

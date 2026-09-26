@@ -243,6 +243,30 @@ class SchemaScoped:
             return 0
         return int(row[0]) if row is not None else 0
 
+    # Méthode de lecture des types physiques des colonnes d'une table du schéma
+    def _physical_column_types(self, table: str = "fact_table") -> dict[str, str]:
+        """Read the physical SQL type of every column of a table of this schema.
+
+        The type is the one DuckDB reports for the stored column (``DESCRIBE``), with
+        its parameters: ``DECIMAL(10,2)``, not ``DECIMAL``. This is the value recorded
+        in ``metadata.sql_type``.
+
+        Args:
+            table: Bare table name. Defaults to ``'fact_table'``.
+
+        Returns:
+            dict[str, str]: Column name -> physical SQL type, in column order.
+
+        Raises:
+            duckdb.Error: If the table cannot be described.
+
+        Examples:
+            >>> manager._physical_column_types()["score"]
+            'DECIMAL(10,2)'
+        """
+        rows = self.conn.execute(f"DESCRIBE {self._qualified(table)}").fetchall()
+        return {str(row[0]): str(row[1]) for row in rows}
+
 
 # Fonction de suppression des duplicats d'un jeu de données
 def remove_dataframe_duplicates(

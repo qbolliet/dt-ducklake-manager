@@ -1,4 +1,7 @@
 # Importation des modules
+import logging
+import re
+from datetime import UTC, datetime
 from typing import Any
 
 import narwhals as nw
@@ -24,17 +27,22 @@ UI_METADATA_FIELDS: tuple[str, ...] = (
 # ci-dessus, plus le libellé d'affichage.
 COLUMN_METADATA_KEYS: frozenset[str] = frozenset({"label", *UI_METADATA_FIELDS})
 
-# Colonnes de la table metadata (nom -> type SQL et défaut), dans l'ordre du DDL.
+# Colonnes de la table metadata (nom -> type SQL et contraintes), dans l'ordre du DDL.
 # Source unique du CREATE TABLE (builder, managers, recovery), des colonnes requises
 # de l'auditeur et du schéma du DataFrame de métadonnées vide.
 METADATA_COLUMNS: dict[str, str] = {
-    "name": "VARCHAR",
-    "label": "VARCHAR",
-    "sql_type": "VARCHAR",
-    "is_categorical": "BOOLEAN DEFAULT FALSE",
-    "is_primary_key": "BOOLEAN DEFAULT FALSE",
+    "name": "VARCHAR NOT NULL",
+    "label": "VARCHAR NOT NULL",
+    "sql_type": "VARCHAR NOT NULL",
+    "is_categorical": "BOOLEAN NOT NULL DEFAULT FALSE",
+    "is_primary_key": "BOOLEAN NOT NULL DEFAULT FALSE",
     **{field: "VARCHAR" for field in UI_METADATA_FIELDS},
 }
+
+# Convention de nommage des colonnes : snake_case ASCII. Les autres noms sont acceptés
+# (les identifiants sont toujours quotés) mais signalés par un avertissement, car ils
+# restent pénibles pour les clients SQL et les URL.
+COLUMN_NAME_PATTERN: re.Pattern[str] = re.compile(r"^[a-z_][a-z0-9_]*$")
 
 # Agrégations acceptées pour ``metadata.default_aggregation``, validées à l'écriture.
 ALLOWED_DEFAULT_AGGREGATIONS: frozenset[str] = frozenset(
@@ -173,10 +181,86 @@ SIGNED_WIDENING: dict[int, str] = {
 }
 
 
+# Fonction d'horodatage UTC naïf
+def utc_now() -> datetime:
+    """Return the current UTC time as a naive datetime.
+
+    ``dataset_metadata.updated_at`` is a ``TIMESTAMP`` (no time zone): the value is
+    written in UTC, and the tzinfo is dropped so DuckDB stores it as is.
+
+    Returns:
+        datetime: Current UTC time, without ``tzinfo``.
+
+    Examples:
+        >>> utc_now().tzinfo is None
+        True
+    """
+    return datetime.now(UTC).replace(tzinfo=None)
+
+
+# Fonction de refus des types composites
+def check_supported_dtype(column: str, dtype: nw.dtypes.DType) -> None:
+    """Refuse the composite types (``List``, ``Array``, ``Struct``).
+
+    The metadata contract records one flat physical SQL type per column, on which the
+    API relies to filter, type and serialize. A nested column has no such type, and
+    a silent fallback to ``VARCHAR`` would misdescribe it. The producer must convert
+    the column explicitly (e.g. to a JSON string) before writing it.
+
+    Args:
+        column: Name of the column, used in the error message.
+        dtype: The Narwhals data type of the column.
+
+    Raises:
+        ValueError: If ``dtype`` is a ``List``, ``Array`` or ``Struct``.
+
+    Examples:
+        >>> import narwhals as nw
+        >>> check_supported_dtype('score', nw.Float64())
+        >>> tags = nw.List(nw.String())
+        >>> check_supported_dtype('tags', tags)  # doctest: +IGNORE_EXCEPTION_DETAIL
+        Traceback (most recent call last):
+            ...
+        ValueError: Column 'tags' has the composite type List(String); ...
+    """
+    if isinstance(dtype, nw.Array | nw.List | nw.Struct):
+        raise ValueError(
+            f"Column {column!r} has the composite type {dtype}; List, Array and"
+            " Struct columns are not supported. Convert it explicitly (e.g. to a"
+            " JSON string) or drop it before writing"
+        )
+
+
+# Fonction d'avertissement sur les noms de colonnes hors snake_case
+def warn_nonstandard_column_name(column: str, logger: logging.Logger) -> None:
+    """Log a warning when a column name is not ``snake_case`` ASCII.
+
+    The name is accepted anyway: identifiers are always quoted by the package. The
+    warning only flags names that remain awkward for SQL clients and URLs.
+
+    Args:
+        column: Column name to check.
+        logger: Logger receiving the warning.
+
+    Examples:
+        >>> import logging
+        >>> warn_nonstandard_column_name('valeur_totale', logging.getLogger('doc'))
+    """
+    if not COLUMN_NAME_PATTERN.fullmatch(column):
+        logger.warning(
+            f"Column name {column!r} does not match {COLUMN_NAME_PATTERN.pattern};"
+            " it is accepted but may be awkward for SQL clients and URLs"
+        )
+
+
 # Fonction associant les types narwhals à leur équivalent SQL
 def map_python_to_sql_type(dtype: nw.dtypes.DType) -> str:
     """
     Map Narwhals data types to SQL-compatible data types.
+
+    This is the *inferred* type, used to declare columns. The type recorded in
+    ``metadata.sql_type`` is the physical one, read back from the table after the
+    write (e.g. ``DECIMAL(10,2)`` where this function returns ``DECIMAL``).
 
     Integer and float widths are preserved: the package never silently narrows a
     column. It is up to the producer to supply a ``Float32`` (or a narrower integer)
@@ -266,9 +350,8 @@ def map_python_to_sql_type(dtype: nw.dtypes.DType) -> str:
         return "BLOB"
 
     # Types composites (Array, List, Struct)
-    # DuckDB supporte nativement ces types, mais leur définition SQL complète
-    # nécessiterait la connaissance des types imbriqués. On replie vers VARCHAR
-    # pour garantir la compatibilité dans tous les contextes d'usage.
+    # Refusés à l'écriture par check_supported_dtype ; le repli vers VARCHAR ne sert
+    # qu'aux appels internes de simple inférence (ex. validation de label_for).
     elif isinstance(dtype, nw.Array | nw.List | nw.Struct):
         return "VARCHAR"
 
