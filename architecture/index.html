@@ -895,6 +895,34 @@
   
   
     <li class="md-nav__item">
+      <a href="../api/maintenance/DuckLakeProcedures/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    DuckLakeProcedures
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../api/maintenance/DuckLakeMaintenance/" class="md-nav__link">
         
   
@@ -959,90 +987,6 @@
     
   
     StorageReport
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../api/maintenance/RecoveryStrategy/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    RecoveryStrategy
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../api/maintenance/RecoveryOperation/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    RecoveryOperation
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../api/maintenance/RecoveryResult/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    RecoveryResult
   
 
     
@@ -1212,34 +1156,6 @@
     
   
     BaseSchemaManager
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../api/operations/DataManager/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    DataManager
   
 
     
@@ -1543,34 +1459,6 @@
   
   
     <li class="md-nav__item">
-      <a href="../api/utils/build_database_duplicate_removal_query/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    build_database_duplicate_removal_query
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
       <a href="../api/utils/map_python_to_sql_type/" class="md-nav__link">
         
   
@@ -1607,6 +1495,34 @@
     
   
     quote_ident
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api/utils/quote_literal/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    quote_literal
   
 
     
@@ -1719,6 +1635,90 @@
     
   
     get_column_hierarchies
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api/utils/get_value_label_columns/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    get_value_label_columns
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api/utils/validate_value_labels/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    validate_value_labels
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api/utils/check_value_label_dependency/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    check_value_label_dependency
   
 
     
@@ -1945,10 +1945,12 @@ Predictions keyed by <code>(date, region, product)</code> and Shapley values key
 column <em>names</em>. Forcing them into one fact table would mean padding every
 prediction row with <code>NULL</code> Shapley columns (or the reverse), and would make
 the primary key of the combined table ambiguous.</p>
-<p><strong>Cross-result-set analysis joins on labels, not on ids.</strong> A
+<p><strong>Cross-result-set analysis joins on shared columns, not on ids.</strong> A
 query correlating <code>predictions</code> and <code>shapley</code> joins directly on their shared
-label columns (<code>region</code>, <code>product</code>, …), which is exactly what a categorical
-column already stores. This is simpler than the dimension-table alternative
+columns (<code>region</code>, <code>product</code>, …) — on the <strong>code</strong> when the column has one
+(a code is more stable than a label, which a nomenclature revision can
+rename via <a href="../schema/#changing-a-label"><code>update_value_labels</code></a>), on the
+label otherwise. This is simpler than the dimension-table alternative
 that was considered and dropped (see <a href="../schema/#design-choices-not-retained">Schema and data
 model</a>): there is no id↔label
 resolution step, and no risk of two databases assigning different ids to the
@@ -2063,6 +2065,21 @@ back along with DML. There is no application-level transaction machinery: no
 registered operations, no savepoints, no compensating <code>rollback_func</code>.</p>
 <p><code>use_transaction=False</code> keeps the same ordered steps but runs them in autocommit
 mode: faster, and a failure then leaves whatever was already written in place.</p>
+<p><strong>Every write audits its own result, cheaply.</strong> Right before its commit, each
+write runs the <code>BASIC</code> structural audit of <code>DatabaseAuditor</code> (the three tables
+exist, <code>metadata</code> describes exactly the fact table's columns with consistent
+types, the <code>parent_name</code> links form a forest, the <code>label_for</code> declarations are
+valid). It reads only the catalog and the small metadata tables, never the fact
+table, and a critical issue rolls the write back. The <code>COMPREHENSIVE</code> level adds
+the checks that scan the fact table (primary key uniqueness, code → label
+dependency, null shares) and is meant to be run on demand; <code>audit_level</code> selects
+the level run by the writes, or disables it.</p>
+<p><strong>Input errors raise, execution errors roll back.</strong> An invalid request — missing
+or null primary key, unknown column, duplicated key in a batch, violated
+code/label dependency, malformed filter — raises <code>ValueError</code> before or after an
+automatic rollback. An execution failure (database error) is rolled back too;
+<code>update_database</code> then returns <code>False</code> (its historical contract), the other
+operations re-raise the original exception.</p>
 <p><strong>Post-write maintenance runs after the commit, never inside it.</strong>
 <code>merge_adjacent_files</code> and <code>rewrite_data_files</code> are called once the transaction
 has closed: they are optimizations, and a compaction failure must never undo a
@@ -2071,13 +2088,18 @@ successful write.</p>
 DuckLake already persists the full snapshot history. To recover from a bad write
 that was itself committed:</p>
 <div class="language-python highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">recovery</span> <span class="o">=</span> <span class="n">DatabaseRecoveryManager</span><span class="p">(</span><span class="n">conn</span><span class="p">)</span>
-</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="nb">print</span><span class="p">(</span><span class="n">recovery</span><span class="o">.</span><span class="n">list_ducklake_snapshots</span><span class="p">())</span>          <span class="c1"># pick a snapshot_id</span>
-</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="n">old</span> <span class="o">=</span> <span class="n">DuckLakeConnector</span><span class="p">(</span><span class="n">catalog</span><span class="p">,</span> <span class="n">data</span><span class="p">,</span> <span class="n">snapshot_version</span><span class="o">=</span><span class="mi">17</span><span class="p">)</span><span class="o">.</span><span class="n">connect</span><span class="p">()</span>
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="nb">print</span><span class="p">(</span><span class="n">recovery</span><span class="o">.</span><span class="n">list_ducklake_snapshots</span><span class="p">())</span>          <span class="c1"># pick a snapshot_id (author = run_id)</span>
+</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="n">recovery</span><span class="o">.</span><span class="n">restore_snapshot</span><span class="p">(</span><span class="mi">17</span><span class="p">,</span> <span class="n">run_id</span><span class="o">=</span><span class="s2">&quot;rollback-run-42&quot;</span><span class="p">)</span>
 </span></code></pre></div>
-<p>then read the tables from <code>old</code> and reinsert them into the current catalog.
-<code>RecoveryStrategy.USE_SNAPSHOT_HISTORY</code> returns that procedure step by step. The
-other strategies (<code>REPAIR_SCHEMA</code>, <code>CLEAN_ORPHANED_DATA</code>, <code>VALIDATE_AND_FIX</code>)
-repair structural inconsistencies in place and never touch the history.
+<p><code>restore_snapshot</code> copies the result set's tables as they were at the snapshot
+(<code>SELECT * FROM &lt;table&gt; AT (VERSION =&gt; 17)</code>) into temporary tables, then empties
+and refills the live tables in a single transaction. The restoration is itself a
+new snapshot: the states in between remain readable, and the restoration can be
+undone the same way. Only rows are restored: a table whose columns changed since
+the snapshot is refused, since re-creating it would lose its DuckLake identity.
+There is no in-place "repair" strategy: an automatic fix of a corrupted base
+(deleting rows with nulls, re-creating the fact table to deduplicate it) destroys
+data or history without the caller deciding it, which time travel never does.
 Snapshot expiry (<code>expire_snapshots</code>) is planned maintenance with an explicit
 retention — never a side effect of a write, because it is what destroys the
 ability to recover.</p>

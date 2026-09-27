@@ -854,6 +854,34 @@
   
   
     <li class="md-nav__item">
+      <a href="api/maintenance/DuckLakeProcedures/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    DuckLakeProcedures
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="api/maintenance/DuckLakeMaintenance/" class="md-nav__link">
         
   
@@ -918,90 +946,6 @@
     
   
     StorageReport
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="api/maintenance/RecoveryStrategy/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    RecoveryStrategy
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="api/maintenance/RecoveryOperation/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    RecoveryOperation
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="api/maintenance/RecoveryResult/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    RecoveryResult
   
 
     
@@ -1171,34 +1115,6 @@
     
   
     BaseSchemaManager
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="api/operations/DataManager/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    DataManager
   
 
     
@@ -1502,34 +1418,6 @@
   
   
     <li class="md-nav__item">
-      <a href="api/utils/build_database_duplicate_removal_query/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    build_database_duplicate_removal_query
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
       <a href="api/utils/map_python_to_sql_type/" class="md-nav__link">
         
   
@@ -1566,6 +1454,34 @@
     
   
     quote_ident
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="api/utils/quote_literal/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    quote_literal
   
 
     
@@ -1678,6 +1594,90 @@
     
   
     get_column_hierarchies
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="api/utils/get_value_label_columns/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    get_value_label_columns
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="api/utils/validate_value_labels/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    validate_value_labels
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="api/utils/check_value_label_dependency/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    check_value_label_dependency
   
 
     
@@ -1836,7 +1836,7 @@
 dimension table anywhere</strong>:</p>
 <ul>
 <li>the <code>fact_table</code> holds the observations; categorical columns store their <strong>original labels</strong> directly (Parquet dictionary-encoding absorbs the storage cost), so there is no synthetic code ;</li>
-<li>the <code>metadata</code> table describes each column of the fact table — one row per column — and is the contract between the database and the interface (label, SQL type, primary-key and categorical flags, column hierarchy via <code>parent_name</code>, and the UI fields <code>unit</code>, <code>display_format</code>, <code>family</code>, <code>description</code>, <code>default_aggregation</code>) ;</li>
+<li>the <code>metadata</code> table describes each column of the fact table — one row per column — and is the contract between the database and the interface (label, SQL type, primary-key and categorical flags, column hierarchy via <code>parent_name</code>, the code → label link via <code>label_for</code>, and the UI fields <code>unit</code>, <code>display_format</code>, <code>family</code>, <code>description</code>, <code>default_aggregation</code>) ;</li>
 <li>the <code>dataset_metadata</code> table describes the result set itself (title, description, source, last update, schema version, and <code>cluster_by</code>, the physical sort key).</li>
 </ul>
 <p>See <a href="schema/">Schema and data model</a> for the full description, and <a href="maintenance/">Storage
@@ -1910,16 +1910,20 @@ kept efficient over time.</p>
 </span><span id="__span-2-55"><a id="__codelineno-2-55" name="__codelineno-2-55" href="#__codelineno-2-55"></a><span class="n">deleter</span> <span class="o">=</span> <span class="n">DatabaseDeleter</span><span class="p">(</span><span class="n">connection</span><span class="o">=</span><span class="n">connection</span><span class="p">)</span>
 </span><span id="__span-2-56"><a id="__codelineno-2-56" name="__codelineno-2-56" href="#__codelineno-2-56"></a><span class="n">deleter</span><span class="o">.</span><span class="n">delete_rows</span><span class="p">(</span><span class="n">filters</span><span class="o">=</span><span class="p">[(</span><span class="s2">&quot;score&quot;</span><span class="p">,</span> <span class="s2">&quot;&lt;&quot;</span><span class="p">,</span> <span class="mf">0.6</span><span class="p">)])</span>
 </span><span id="__span-2-57"><a id="__codelineno-2-57" name="__codelineno-2-57" href="#__codelineno-2-57"></a>
-</span><span id="__span-2-58"><a id="__codelineno-2-58" name="__codelineno-2-58" href="#__codelineno-2-58"></a><span class="c1"># 4. Audit database integrity</span>
-</span><span id="__span-2-59"><a id="__codelineno-2-59" name="__codelineno-2-59" href="#__codelineno-2-59"></a><span class="n">auditor</span> <span class="o">=</span> <span class="n">DatabaseAuditor</span><span class="p">(</span><span class="n">connection</span><span class="o">=</span><span class="n">connection</span><span class="p">)</span>
-</span><span id="__span-2-60"><a id="__codelineno-2-60" name="__codelineno-2-60" href="#__codelineno-2-60"></a><span class="n">report</span> <span class="o">=</span> <span class="n">auditor</span><span class="o">.</span><span class="n">validate_database</span><span class="p">(</span><span class="n">ValidationLevel</span><span class="o">.</span><span class="n">STANDARD</span><span class="p">)</span>
-</span><span id="__span-2-61"><a id="__codelineno-2-61" name="__codelineno-2-61" href="#__codelineno-2-61"></a><span class="nb">print</span><span class="p">(</span><span class="n">report</span><span class="o">.</span><span class="n">recommendations</span><span class="p">)</span>
-</span><span id="__span-2-62"><a id="__codelineno-2-62" name="__codelineno-2-62" href="#__codelineno-2-62"></a>
-</span><span id="__span-2-63"><a id="__codelineno-2-63" name="__codelineno-2-63" href="#__codelineno-2-63"></a><span class="c1"># 5. Run maintenance driven by measured storage indicators (never</span>
-</span><span id="__span-2-64"><a id="__codelineno-2-64" name="__codelineno-2-64" href="#__codelineno-2-64"></a><span class="c1"># destructive unless explicitly opted into)</span>
-</span><span id="__span-2-65"><a id="__codelineno-2-65" name="__codelineno-2-65" href="#__codelineno-2-65"></a><span class="n">maintenance</span> <span class="o">=</span> <span class="n">DuckLakeMaintenance</span><span class="p">(</span><span class="n">connection</span><span class="p">)</span>
-</span><span id="__span-2-66"><a id="__codelineno-2-66" name="__codelineno-2-66" href="#__codelineno-2-66"></a><span class="n">maintenance</span><span class="o">.</span><span class="n">maintain</span><span class="p">(</span><span class="n">MaintenancePolicy</span><span class="p">(</span><span class="n">retention_days</span><span class="o">=</span><span class="mi">30</span><span class="p">))</span>
+</span><span id="__span-2-58"><a id="__codelineno-2-58" name="__codelineno-2-58" href="#__codelineno-2-58"></a><span class="c1"># 4. Audit database integrity on demand (every write already runs the cheap</span>
+</span><span id="__span-2-59"><a id="__codelineno-2-59" name="__codelineno-2-59" href="#__codelineno-2-59"></a><span class="c1"># BASIC audit; COMPREHENSIVE also scans the fact table)</span>
+</span><span id="__span-2-60"><a id="__codelineno-2-60" name="__codelineno-2-60" href="#__codelineno-2-60"></a><span class="n">auditor</span> <span class="o">=</span> <span class="n">DatabaseAuditor</span><span class="p">(</span><span class="n">connection</span><span class="o">=</span><span class="n">connection</span><span class="p">)</span>
+</span><span id="__span-2-61"><a id="__codelineno-2-61" name="__codelineno-2-61" href="#__codelineno-2-61"></a><span class="n">report</span> <span class="o">=</span> <span class="n">auditor</span><span class="o">.</span><span class="n">validate_database</span><span class="p">(</span><span class="n">ValidationLevel</span><span class="o">.</span><span class="n">COMPREHENSIVE</span><span class="p">)</span>
+</span><span id="__span-2-62"><a id="__codelineno-2-62" name="__codelineno-2-62" href="#__codelineno-2-62"></a><span class="nb">print</span><span class="p">(</span><span class="n">report</span><span class="o">.</span><span class="n">recommendations</span><span class="p">)</span>
+</span><span id="__span-2-63"><a id="__codelineno-2-63" name="__codelineno-2-63" href="#__codelineno-2-63"></a>
+</span><span id="__span-2-64"><a id="__codelineno-2-64" name="__codelineno-2-64" href="#__codelineno-2-64"></a><span class="c1"># 5. Run maintenance driven by measured storage indicators (never</span>
+</span><span id="__span-2-65"><a id="__codelineno-2-65" name="__codelineno-2-65" href="#__codelineno-2-65"></a><span class="c1"># destructive unless explicitly opted into)</span>
+</span><span id="__span-2-66"><a id="__codelineno-2-66" name="__codelineno-2-66" href="#__codelineno-2-66"></a><span class="n">maintenance</span> <span class="o">=</span> <span class="n">DuckLakeMaintenance</span><span class="p">(</span><span class="n">connection</span><span class="p">)</span>
+</span><span id="__span-2-67"><a id="__codelineno-2-67" name="__codelineno-2-67" href="#__codelineno-2-67"></a><span class="n">maintenance</span><span class="o">.</span><span class="n">maintain</span><span class="p">(</span><span class="n">MaintenancePolicy</span><span class="p">(</span><span class="n">retention_days</span><span class="o">=</span><span class="mi">30</span><span class="p">))</span>
 </span></code></pre></div>
+<p>A code column can also carry its own label column(s) (e.g. a nomenclature code
+labelled in French and English) via the builder's <code>value_labels</code> argument —
+see <a href="schema/#codes-and-value-labels">Codes and value labels</a>.</p>
 <p>More detailed examples and parametrization walkthroughs are available in the <code>notebooks/</code> folder.</p>
 <h2 id="license">License</h2>
 <p>MIT</p>
