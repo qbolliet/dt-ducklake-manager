@@ -169,9 +169,3 @@ logs/*
 # claude
 CLAUDE.md
 .claude/
-
-# TODO
-TODO
-
-#prompts-migration-schema-v2.md
-#revue-technique-bdd.md

@@ -1,23 +1,26 @@
 # Importation des éléments d'intérêt du module
-from .auditor import DatabaseAuditor, ValidationIssue, ValidationLevel, ValidationReport
-from .compaction import DuckLakeMaintenance, MaintenancePolicy, StorageReport
-from .recovery import (
-    DatabaseRecoveryManager,
-    RecoveryOperation,
-    RecoveryResult,
-    RecoveryStrategy,
+from .auditor import (
+    DatabaseAuditor,
+    IssueSeverity,
+    IssueType,
+    ValidationIssue,
+    ValidationLevel,
+    ValidationReport,
 )
+from .policy import DuckLakeMaintenance, MaintenancePolicy, StorageReport
+from .procedures import DuckLakeProcedures
+from .recovery import DatabaseRecoveryManager
 
 # Exportation au niveau du module
 __all__ = [
     "DatabaseAuditor",
+    "IssueSeverity",
+    "IssueType",
     "ValidationLevel",
     "ValidationReport",
     "ValidationIssue",
     "DatabaseRecoveryManager",
-    "RecoveryStrategy",
-    "RecoveryOperation",
-    "RecoveryResult",
+    "DuckLakeProcedures",
     "DuckLakeMaintenance",
     "MaintenancePolicy",
     "StorageReport",

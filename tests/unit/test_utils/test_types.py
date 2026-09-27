@@ -1,5 +1,8 @@
 # Importation des modules
 # Modules de base
+import logging
+from datetime import UTC, datetime
+
 import narwhals as nw
 import polars as pl
 
@@ -10,8 +13,13 @@ from narwhals.dtypes import DType
 # Module du package à tester
 from dt_ducklake_manager.utils.types import (
     ALLOWED_DEFAULT_AGGREGATIONS,
+    METADATA_COLUMNS,
+    check_supported_dtype,
     map_python_to_sql_type,
+    metadata_table_ddl,
     normalize_default_aggregation,
+    utc_now,
+    warn_nonstandard_column_name,
 )
 
 # ---------------------------------------------------------------------------
@@ -338,3 +346,154 @@ def test_normalize_default_aggregation_invalid_raises() -> None:
     """Test that an unsupported aggregation raises a descriptive ValueError."""
     with pytest.raises(ValueError, match="Invalid default_aggregation 'TOTAL'"):
         normalize_default_aggregation("TOTAL")
+
+
+# ---------------------------------------------------------------------------
+# Tests de utc_now
+# ---------------------------------------------------------------------------
+
+
+# Test que l'horodatage est naïf et exprimé en UTC
+def test_utc_now_is_naive_and_utc() -> None:
+    """Test that utc_now returns a naive datetime in UTC, to the second.
+
+    Examples:
+        >>> utc_now().tzinfo is None
+        True
+    """
+    before = datetime.now(UTC).replace(tzinfo=None)
+    stamp = utc_now()
+    after = datetime.now(UTC).replace(tzinfo=None)
+
+    assert stamp.tzinfo is None
+    assert before <= stamp <= after
+
+
+# ---------------------------------------------------------------------------
+# Tests de check_supported_dtype
+# ---------------------------------------------------------------------------
+
+
+# Test du refus de chaque type composite, avec le nom de la colonne dans le message
+@pytest.mark.parametrize(
+    "dtype",
+    [
+        nw.List(nw.Int64()),
+        nw.List(nw.List(nw.String())),
+        nw.Array(nw.Int64(), 2),
+        nw.Struct({"a": nw.Int64()}),
+    ],
+)
+def test_check_supported_dtype_refuses_composites(dtype: DType) -> None:
+    """Test that List, Array and Struct types are refused, whatever the nesting.
+
+    Args:
+        dtype: Composite Narwhals type.
+    """
+    with pytest.raises(ValueError, match="'nested'.*composite type"):
+        check_supported_dtype("nested", dtype)
+
+
+# Test que les types plats sont acceptés
+@pytest.mark.parametrize(
+    "dtype",
+    [
+        nw.String(),
+        nw.Int64(),
+        nw.Float64(),
+        nw.Decimal(),
+        nw.Boolean(),
+        nw.Datetime(),
+        nw.Date(),
+        nw.Binary(),
+        nw.Categorical(),
+    ],
+)
+def test_check_supported_dtype_accepts_flat_types(dtype: DType) -> None:
+    """Test that flat types pass the composite check.
+
+    Args:
+        dtype: Flat Narwhals type.
+    """
+    # Aucune exception levée : la fonction ne renvoie rien
+    check_supported_dtype("flat", dtype)
+
+
+# Test du refus à partir d'un vrai schéma polars
+def test_check_supported_dtype_on_polars_schema() -> None:
+    """Test the refusal on dtypes coming from a real polars DataFrame."""
+    df = nw.from_native(pl.DataFrame({"ok": [1], "tags": [["a"]]}), eager_only=True)
+    check_supported_dtype("ok", df.schema["ok"])
+    with pytest.raises(ValueError, match="tags"):
+        check_supported_dtype("tags", df.schema["tags"])
+
+
+# ---------------------------------------------------------------------------
+# Tests de warn_nonstandard_column_name
+# ---------------------------------------------------------------------------
+
+
+# Test qu'un nom snake_case ne déclenche aucun avertissement
+@pytest.mark.parametrize("name", ["a", "_a", "a_1", "commune_2024", "__", "x1_y2"])
+def test_warn_nonstandard_column_name_silent_for_snake_case(
+    name: str, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Test that a snake_case ASCII name is not flagged.
+
+    Args:
+        name: Valid column name.
+        caplog: Log capture fixture.
+    """
+    warn_nonstandard_column_name(name, logging.getLogger("test_naming"))
+    assert not [r for r in caplog.records if r.levelno == logging.WARNING]
+
+
+# Test qu'un nom hors convention déclenche un avertissement (sans refus)
+@pytest.mark.parametrize(
+    "name", ["Valeur", "année", "prix€", "1abc", "a b", "a-b", "a.b", "", "aB"]
+)
+def test_warn_nonstandard_column_name_warns(
+    name: str, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Test that a name outside ``^[a-z_][a-z0-9_]*$`` is flagged, not refused.
+
+    Args:
+        name: Non-conforming column name.
+        caplog: Log capture fixture.
+    """
+    warn_nonstandard_column_name(name, logging.getLogger("test_naming"))
+    warnings_logged = [r for r in caplog.records if r.levelno == logging.WARNING]
+    assert len(warnings_logged) == 1
+    assert repr(name) in warnings_logged[0].getMessage()
+
+
+# ---------------------------------------------------------------------------
+# Tests de la déclaration NOT NULL du contrat metadata
+# ---------------------------------------------------------------------------
+
+
+# Test que les cinq colonnes du contrat sont déclarées NOT NULL
+@pytest.mark.parametrize(
+    "column", ["name", "label", "sql_type", "is_categorical", "is_primary_key"]
+)
+def test_metadata_contract_columns_are_not_null(column: str) -> None:
+    """Test that the five contract columns are declared NOT NULL, in the DDL too.
+
+    Args:
+        column: Contract column name.
+    """
+    assert "NOT NULL" in METADATA_COLUMNS[column]
+    assert f"{column} " in metadata_table_ddl('"main"."metadata"')
+    assert f"{column} {METADATA_COLUMNS[column]}" in metadata_table_ddl("t")
+
+
+# Test que les champs d'UI restent nullables
+def test_metadata_ui_columns_stay_nullable() -> None:
+    """Test that the producer-owned UI fields carry no NOT NULL constraint."""
+    ui = [
+        c
+        for c in METADATA_COLUMNS
+        if c not in {"name", "label", "sql_type", "is_categorical", "is_primary_key"}
+    ]
+    assert ui
+    assert all("NOT NULL" not in METADATA_COLUMNS[c] for c in ui)

@@ -25,6 +25,7 @@ from dt_ducklake_manager.maintenance import (
 )
 from dt_ducklake_manager.reporting import OperationReport
 from dt_ducklake_manager.schema import DuckLakeTablesBuilder
+from tests.utils.ducklake import requires_ducklake
 
 # ---------------------------------------------------------------------------
 # Fonctions auxiliaires
@@ -35,22 +36,9 @@ from dt_ducklake_manager.schema import DuckLakeTablesBuilder
 _BATCH_ROWS = 75_000
 
 
-def _ducklake_available() -> bool:
-    """Vérifie si l'extension DuckLake est disponible dans l'environnement de test."""
-    try:
-        conn = duckdb.connect(":memory:")
-        conn.execute("INSTALL ducklake; LOAD ducklake;")
-        conn.close()
-        return True
-    except Exception:
-        return False
-
-
-# Marqueur appliqué à l'ensemble du module
-pytestmark = pytest.mark.skipif(
-    not _ducklake_available(),
-    reason="Extension ducklake non disponible dans cet environnement",
-)
+# Marqueurs appliqués à l'ensemble du module : catalogue DuckLake réel, et tables
+# de plusieurs centaines de milliers de lignes reconstruites pour chaque test
+pytestmark = [requires_ducklake, pytest.mark.slow]
 
 
 # Lecture directe des plages [min, max] de la colonne k des fichiers actifs

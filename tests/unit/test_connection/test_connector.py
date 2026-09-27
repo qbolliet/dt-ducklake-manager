@@ -16,29 +16,12 @@ import pytest
 
 # Module à tester
 from dt_ducklake_manager.connection import CatalogType, DuckLakeConnector
-
-# ---------------------------------------------------------------------------
-# Fonctions auxiliaires
-# ---------------------------------------------------------------------------
-
-
-def _ducklake_available() -> bool:
-    """Vérifie si l'extension DuckLake est disponible dans l'environnement de test."""
-    try:
-        conn = duckdb.connect(":memory:")
-        conn.execute("INSTALL ducklake; LOAD ducklake;")
-        conn.close()
-        return True
-    except Exception:
-        return False
-
+from dt_ducklake_manager.connection.connector import _normalize_data_path
+from tests.utils.ducklake import requires_ducklake
 
 # Marqueur appliqué à l'ensemble du module : tous les tests sont ignorés si
 # l'extension ducklake n'est pas disponible dans l'environnement.
-pytestmark = pytest.mark.skipif(
-    not _ducklake_available(),
-    reason="Extension ducklake non disponible dans cet environnement",
-)
+pytestmark = requires_ducklake
 
 
 # ---------------------------------------------------------------------------
@@ -544,7 +527,8 @@ def test_build_attach_sql_postgres() -> None:
     sql = connector._build_attach_sql()
     assert "ducklake:postgres:dbname=ducklake" in sql
     assert "META_SECRET 'ducklake_pg_secret'" in sql
-    assert "DATA_PATH 'data/files/'" in sql
+    # Chemin de données local rendu absolu, séparateur final conservé
+    assert f"DATA_PATH '{os.path.abspath('data/files')}{os.sep}'" in sql
     assert "READ_ONLY" not in sql
 
 
@@ -958,3 +942,174 @@ def test_postgres_concurrent_read_write(tmp_path: Path) -> None:
         # Nettoyage du catalogue partagé
         rw_conn.execute(f"DROP TABLE IF EXISTS {table}")
         rw_conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Tests de at_clause()
+# ---------------------------------------------------------------------------
+
+
+# Test des trois formes de la clause AT
+def test_at_clause_forms() -> None:
+    """Test the version, timestamp and current-state forms of the clause."""
+    assert (
+        DuckLakeConnector("c.ducklake", "d/", snapshot_version=3).at_clause()
+        == "AT (VERSION => 3)"
+    )
+    assert (
+        DuckLakeConnector("c.ducklake", "d/", snapshot_time="2025-01-01").at_clause()
+        == "AT (TIMESTAMP => '2025-01-01')"
+    )
+    assert DuckLakeConnector("c.ducklake", "d/").at_clause() == ""
+
+
+# Test que l'horodatage est échappé dans la clause AT
+def test_at_clause_escapes_timestamp() -> None:
+    """Test that a quote in snapshot_time cannot break out of the literal."""
+    clause = DuckLakeConnector(
+        "c.ducklake", "d/", snapshot_time="2025-01-01' OR '1'='1"
+    ).at_clause()
+    assert clause == "AT (TIMESTAMP => '2025-01-01'' OR ''1''=''1')"
+
+
+# Test que version et horodatage sont mutuellement exclusifs
+def test_snapshot_version_and_time_are_exclusive() -> None:
+    """Test the ValueError promised by at_clause, at construction and after."""
+    with pytest.raises(ValueError, match="mutually exclusive"):
+        DuckLakeConnector("c.ducklake", "d/", snapshot_version=1, snapshot_time="x")
+    connector = DuckLakeConnector("c.ducklake", "d/", snapshot_version=1)
+    connector.snapshot_time = "2025-01-01"
+    with pytest.raises(ValueError, match="mutually exclusive"):
+        connector.at_clause()
+
+
+# Test de la lecture d'un état passé par la clause AT sur une connexion ouverte
+def test_at_clause_reads_past_state(ducklake_paths: tuple[str, str]) -> None:
+    """Test that the clause reads the table as it was at the given snapshot.
+
+    Args:
+        ducklake_paths: Temporary catalog and data paths.
+    """
+    catalog, data_dir = ducklake_paths
+    conn = DuckLakeConnector(catalog, data_dir).connect()
+    conn.execute("CREATE TABLE t (k INTEGER)")
+    conn.execute("INSERT INTO t VALUES (1)")
+    version = conn.execute(
+        "SELECT max(snapshot_id) FROM ducklake_snapshots('db')"
+    ).fetchone()[0]
+    conn.execute("INSERT INTO t VALUES (2)")
+
+    at = DuckLakeConnector(catalog, data_dir, snapshot_version=version).at_clause()
+    assert conn.execute(f"SELECT count(*) FROM t {at}").fetchone()[0] == 1
+    conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Tests de la normalisation du chemin de données et de l'échappement de l'ATTACH
+# ---------------------------------------------------------------------------
+
+
+# Test de la normalisation d'un chemin local et d'un chemin distant
+@pytest.mark.parametrize(
+    ("data_path", "expected"),
+    [
+        ("s3://bucket/prefix/", "s3://bucket/prefix/"),
+        ("gs://bucket/p", "gs://bucket/p"),
+        ("data", os.path.abspath("data")),
+        ("data/", os.path.abspath("data") + os.sep),
+    ],
+)
+def test_normalize_data_path(data_path: str, expected: str) -> None:
+    """Test that a local path becomes absolute and a URL is left unchanged.
+
+    Args:
+        data_path: Path given by the caller.
+        expected: Normalized path.
+    """
+    assert _normalize_data_path(data_path) == expected
+
+
+# Test que les littéraux de l'ATTACH sont échappés
+def test_build_attach_sql_escapes_literals() -> None:
+    """Test that quotes in paths, secret and timestamp are doubled."""
+    connector = DuckLakeConnector(
+        "o'cat.ducklake",
+        "s3://b/o'data/",
+        meta_secret="my'secret",
+        snapshot_time="2025'",
+    )
+    sql = connector._build_attach_sql()
+    assert "ATTACH 'ducklake:o''cat.ducklake'" in sql
+    assert "DATA_PATH 's3://b/o''data/'" in sql
+    assert "META_SECRET 'my''secret'" in sql
+    assert "SNAPSHOT_TIME '2025'''" in sql
+
+
+# Test qu'un catalogue créé avec un chemin relatif reste attachable
+def test_connect_legacy_relative_data_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: Any
+) -> None:
+    """Test the fallback on a catalog recording a relative data path.
+
+    The catalog is created by a raw ATTACH with a relative DATA_PATH, as earlier
+    versions did; the connector, which attaches with an absolute path, retries
+    with the path as given and warns.
+
+    Args:
+        tmp_path: pytest temporary directory.
+        monkeypatch: pytest fixture used to change the working directory.
+        caplog: pytest log capture.
+    """
+    monkeypatch.chdir(tmp_path)
+    os.makedirs("data")
+    raw = duckdb.connect()
+    raw.execute("LOAD ducklake")
+    raw.execute("ATTACH 'ducklake:legacy.ducklake' AS db (DATA_PATH 'data/')")
+    raw.execute("CREATE TABLE db.main.t AS SELECT 1 AS k")
+    raw.close()
+
+    with caplog.at_level(logging.WARNING):
+        conn = DuckLakeConnector("legacy.ducklake", "data/").connect()
+    assert conn.execute("SELECT k FROM db.main.t").fetchone()[0] == 1
+    assert any("relative data path" in r.getMessage() for r in caplog.records)
+    conn.close()
+
+
+# Test qu'un chemin absolu enregistré est retrouvé depuis un chemin relatif
+def test_connect_relative_path_matches_absolute_catalog(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Test that a catalog created by the connector accepts both path forms.
+
+    Args:
+        tmp_path: pytest temporary directory.
+        monkeypatch: pytest fixture used to change the working directory.
+    """
+    monkeypatch.chdir(tmp_path)
+    first = DuckLakeConnector("cat.ducklake", "data/").connect()
+    first.execute("CREATE TABLE t AS SELECT 1 AS k")
+    first.close()
+
+    again = DuckLakeConnector("cat.ducklake", str(tmp_path / "data")).connect()
+    assert again.execute("SELECT k FROM t").fetchone()[0] == 1
+    again.close()
+
+
+# ---------------------------------------------------------------------------
+# Tests des options DuckLake de from_postgres()
+# ---------------------------------------------------------------------------
+
+
+# Test que from_postgres transmet les options DuckLake et la limite d'inlining
+def test_from_postgres_forwards_ducklake_options() -> None:
+    """Test that from_postgres accepts ducklake_options and the inlining limit."""
+    connector = DuckLakeConnector.from_postgres(
+        "s3://bucket/prefix/",
+        dbname="ducklake",
+        meta_secret="external_secret",
+        ducklake_options="recommended",
+        data_inlining_row_limit=0,
+    )
+    assert connector.ducklake_options == "recommended"
+    assert connector.data_inlining_row_limit == 0
+    assert "DATA_INLINING_ROW_LIMIT 0" in connector._build_attach_sql()

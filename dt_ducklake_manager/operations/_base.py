@@ -5,7 +5,6 @@ import os
 import threading
 import time
 import warnings
-from abc import ABC, abstractmethod
 from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import datetime
@@ -17,8 +16,8 @@ import narwhals as nw
 from narwhals.typing import IntoDataFrame
 
 # Import des gestionnaires de maintenance
-from ..maintenance.auditor import DatabaseAuditor, ValidationLevel, ValidationReport
-from ..maintenance.compaction import DuckLakeMaintenance
+from ..maintenance.auditor import DatabaseAuditor, IssueSeverity, ValidationLevel
+from ..maintenance.policy import DuckLakeMaintenance
 
 # Import des utilitaires
 from ..reporting import (
@@ -33,22 +32,29 @@ from ..utils.logger import _init_logger
 from ..utils.sql import SchemaScoped, quote_ident, resolve_catalog
 from ..utils.types import (
     COLUMN_METADATA_KEYS,
+    check_supported_dtype,
     empty_metadata_frame,
     map_python_to_sql_type,
     metadata_table_ddl,
     normalize_default_aggregation,
     resolve_sql_type_conflict,
+    utc_now,
+    warn_nonstandard_column_name,
 )
+from ..utils.value_labels import check_value_label_dependency, validate_value_labels
 
 
 # Classe contenant des opérations utilitaires de base sur la base de données au schéma
 # (table des faits - méta-données - méta-données du jeu de résultats)
-class BaseSchemaManager(SchemaScoped, ABC):
+class BaseSchemaManager(SchemaScoped):
     """
     Base class for database schema management operations.
 
     Provides common functionality for metadata management, column operations,
-    and database introspection. All concrete managers should inherit from this class.
+    database introspection, the transaction hook shared by every public write
+    (:meth:`_transaction`) and the structural audit run after a write
+    (:meth:`_post_write_audit`). The concrete managers (``DatabaseUpdater``,
+    ``DatabaseDeleter``) inherit from this class.
 
     Attributes:
         conn (duckdb.DuckDBPyConnection): Database connection
@@ -59,12 +65,17 @@ class BaseSchemaManager(SchemaScoped, ABC):
             AS <alias>``), carried alongside ``schema`` so table references can be
             fully qualified by the catalog.
         logger: Logger instance for operation tracking
-        auditor (DatabaseAuditor | None): Auditor used for validation, set by the
-            concrete managers (None when validation is disabled)
+        auditor (DatabaseAuditor | None): Auditor of the schema, set by the
+            concrete managers.
+        audit_level (ValidationLevel | None): Level of the audit run inside the
+            transaction of a write, set by the concrete managers (None disables
+            it).
     """
 
-    # Auditeur de la base, renseigné par les gestionnaires concrets
+    # Auditeur de la base et niveau de l'audit post-écriture, renseignés par les
+    # gestionnaires concrets
     auditor: DatabaseAuditor | None = None
+    audit_level: ValidationLevel | None = None
 
     # Initialisation
     def __init__(
@@ -97,9 +108,9 @@ class BaseSchemaManager(SchemaScoped, ABC):
 
         Example:
             >>> conn = DuckLakeConnector('catalog.ducklake', 'data/').connect()
-            >>> manager = ConcreteManager(conn, categorical_threshold=30)
+            >>> manager = BaseSchemaManager(conn, categorical_threshold=30)
             >>> # Cibler un schéma dédié dans le même catalogue
-            >>> manager = ConcreteManager(conn, schema='predictions')
+            >>> manager = BaseSchemaManager(conn, schema='predictions')
         """
         # Initialisation de la connexion DuckLake.
         # Le fallback :memory: est réservé aux tests unitaires ; en production la
@@ -135,7 +146,9 @@ class BaseSchemaManager(SchemaScoped, ABC):
             self.conn, catalog_alias=self.catalog_alias, schema=self.schema
         )
 
-        # Cache thread-safe pour optimiser les accès aux métadonnées
+        # Cache thread-safe des métadonnées. Vidé à l'ouverture de chaque transaction
+        # et après chaque écriture de metadata : un autre gestionnaire partageant
+        # la connexion peut avoir modifié la table entre deux opérations.
         self._metadata_cache: nw.DataFrame[Any] | None = None
         self._cache_lock = threading.RLock()
 
@@ -257,6 +270,7 @@ class BaseSchemaManager(SchemaScoped, ABC):
         files_before, bytes_before, _, _ = self._table_info(table) or (0, 0, 0, 0)
         snapshot_before = self._current_snapshot()
 
+        # Initialisation du rapport
         report = OperationReport(
             operation=operation,
             schema=self.schema,
@@ -270,6 +284,10 @@ class BaseSchemaManager(SchemaScoped, ABC):
         )
         self._current_report = report
 
+        # Métadonnées relues depuis la base au sein de l'opération : le cache a pu
+        # vieillir depuis la précédente
+        self._invalidate_metadata_cache()
+
         # Connexion
         self.conn.begin()
         self._in_transaction = True
@@ -279,10 +297,12 @@ class BaseSchemaManager(SchemaScoped, ABC):
         try:
             yield report
         except Exception as e:
-            # Annulation : la base revient à son état d'avant le BEGIN
+            # Annulation : la base revient à son état d'avant le BEGIN, cache des
+            # métadonnées compris
             self.conn.rollback()
             self._in_transaction = False
             self._current_report = None
+            self._invalidate_metadata_cache()
             report.duration_seconds = time.time() - start_time
             report.warnings.append(f"{operation} failed: {e}")
             self.last_report = report
@@ -394,25 +414,29 @@ class BaseSchemaManager(SchemaScoped, ABC):
         if snapshot is not None:
             report.snapshot_after = snapshot
 
-    # Méthode de construction d'un rapport minimal pour un échec précoce
-    def _early_failure_report(
+    # Méthode de construction d'un rapport pour une opération arrêtée avant écriture
+    def _early_report(
         self, operation: str, run_id: str | None, warning: str
     ) -> OperationReport:
-        """Build and store a minimal report for a failure before any transaction.
+        """Build and store a minimal report for an operation stopped before writing.
 
-        Used by validation checks that reject an operation before
-        ``_transaction`` ever opens (e.g. pre-operation auditor validation),
-        so ``self.last_report``/the method's return value never sits at ``None``
-        even on the earliest possible failure.
+        Used when an operation decides not to open any transaction (e.g. an
+        ``update_database`` called with an empty DataFrame), so that
+        ``self.last_report`` always describes the last call.
 
         Args:
-            operation: Name of the operation that failed.
+            operation: Name of the operation.
             run_id: Run identifier the caller was about to use, if any.
             warning: Human-readable reason, appended to ``report.warnings`` and
                 logged at WARNING.
 
         Returns:
             OperationReport: the minimal report, also stored on ``self.last_report``.
+
+        Examples:
+            >>> report = manager._early_report('update', None, 'empty update_df')
+            >>> report.warnings
+            ['empty update_df']
         """
         # Création du rapport
         report = OperationReport(
@@ -428,6 +452,80 @@ class BaseSchemaManager(SchemaScoped, ABC):
         # Mise à jour du dernier rapport
         self.last_report = report
         return report
+
+    # Méthode de compaction post-écriture, après le commit
+    def _compact_after_write(
+        self, report: OperationReport, delete_threshold: float | None = None
+    ) -> None:
+        """Run the post-write compaction of the fact table, after the commit.
+
+        Merges the small files and rewrites the files carrying deletions
+        (``DuckLakeMaintenance.compact``), and records the counters in
+        ``report.maintenance``. Skipped with a DEBUG line on a connection with no
+        DuckLake catalog attached, where the DuckLake procedures do not exist.
+
+        Args:
+            report: Report of the committed operation, updated in place.
+            delete_threshold: Deleted-row share above which a file is rewritten.
+                Defaults to None (the procedure's default, 0.1).
+
+        Examples:
+            >>> manager._compact_after_write(manager.last_report)
+        """
+        # Aucun catalogue DuckLake attaché : pas de procédure de maintenance
+        if self._catalog is None:
+            self.logger.debug("Post-write compaction skipped: no DuckLake catalog")
+            return
+        # Compaction du schéma du gestionnaire
+        if delete_threshold is None:
+            self.maintenance.compact(schema=self.schema, report=report)
+        else:
+            self.maintenance.compact(
+                schema=self.schema, delete_threshold=delete_threshold, report=report
+            )
+
+    # Méthode d'audit structurel de la base à l'intérieur d'une écriture
+    def _post_write_audit(self, report: OperationReport) -> None:
+        """Audit the schema at ``audit_level`` from inside a write transaction.
+
+        Run by the write operations right before their commit, so that a write
+        leaving the result set structurally broken is rolled back. Critical issues
+        raise; high-severity issues are appended to ``report.warnings`` without
+        blocking the write. Does nothing when ``audit_level`` or ``auditor`` is
+        None.
+
+        Args:
+            report: In-progress report of the enclosing transaction.
+
+        Raises:
+            RuntimeError: If the audit finds at least one critical issue, whose
+                descriptions are listed in the message.
+
+        Examples:
+            >>> with manager._transaction('update') as report:
+            ...     manager._post_write_audit(report)
+        """
+        # Audit désactivé
+        if self.audit_level is None or self.auditor is None:
+            return
+
+        # Audit structurel
+        audit = self.auditor.validate_database(self.audit_level)
+
+        # Problèmes critiques : annulation de l'écriture
+        critical = audit.get_issues_by_severity(IssueSeverity.CRITICAL)
+        if critical:
+            descriptions = "; ".join(issue.description for issue in critical)
+            raise RuntimeError(
+                f"post-write audit ({self.audit_level.value}) found {len(critical)}"
+                f" critical issue(s): {descriptions}"
+            )
+
+        # Problèmes de sévérité haute : signalés sans bloquer l'écriture
+        for issue in audit.get_issues_by_severity(IssueSeverity.HIGH):
+            warning = f"post-write audit: {issue.description}"
+            self.logger.warning(warning)
+            report.warnings.append(warning)
 
     # Méthodes de gestion du cache des métadonnées
     # Méthode de chargement des méta-données
@@ -608,6 +706,46 @@ class BaseSchemaManager(SchemaScoped, ABC):
         decoded: list[str] = json.loads(result[0])
         return decoded
 
+    # Méthode de construction de la clause ORDER BY d'un lot d'écriture
+    @staticmethod
+    def _cluster_by_order_clause(
+        batch_columns: list[str], cluster_by: list[str] | None
+    ) -> str:
+        """
+        Build the ``ORDER BY`` clause sorting a write batch by ``cluster_by``.
+
+        Keeps only the ``cluster_by`` columns actually present in the batch (a
+        partial-column batch, e.g. from ``add_columns``, may not carry every sort
+        column), in the declared ``cluster_by`` order. Sorting the whole batch
+        before writing it is what lets DuckLake prune files and row groups on
+        these columns.
+
+        Args:
+            batch_columns: Columns present in the DataFrame being written.
+            cluster_by: Physical sort key read from ``dataset_metadata``, or None
+                when none is defined.
+
+        Returns:
+            str: The ``ORDER BY ...`` SQL clause, or ``""`` when no ``cluster_by``
+            column is present in the batch.
+
+        Examples:
+            >>> BaseSchemaManager._cluster_by_order_clause(
+            ...     ['id', 'value'], ['date', 'id'])
+            'ORDER BY "id"'
+            >>> BaseSchemaManager._cluster_by_order_clause(['value'], None)
+            ''
+        """
+        # Aucun tri déclaré
+        if not cluster_by:
+            return ""
+        # Restriction aux colonnes présentes dans le lot, dans l'ordre de cluster_by
+        batch_columns_set = set(batch_columns)
+        applicable = [c for c in cluster_by if c in batch_columns_set]
+        if not applicable:
+            return ""
+        return f"ORDER BY {', '.join(quote_ident(c) for c in applicable)}"
+
     # Méthode de mise à jour du tri physique (cluster_by) sur une base existante
     def update_cluster_by(self, columns: list[str]) -> None:
         """
@@ -702,11 +840,20 @@ class BaseSchemaManager(SchemaScoped, ABC):
         only ``sql_type`` is refreshed: the recorded ``label`` and
         ``is_categorical`` are never overwritten by a data update.
 
+        The recorded ``sql_type`` is the physical type read back from the fact table
+        (``DECIMAL(10,2)``, not ``DECIMAL``): the column must therefore already
+        exist there. The type inferred from ``df`` is only a fallback for a column
+        absent from the fact table.
+
         Args:
             column: Column name
             df: DataFrame containing the column (any narwhals-compatible backend)
             label: Custom label for the column. If None, a label is derived from the
                 column name on insertion, and the recorded label is kept on update.
+
+        Raises:
+            ValueError: If the column has a composite type (``List``, ``Array``,
+                ``Struct``).
 
         Example:
             >>> manager._add_column_to_metadata('score', df)
@@ -715,13 +862,18 @@ class BaseSchemaManager(SchemaScoped, ABC):
         df_nw = nw.from_native(df, eager_only=True)
         # Extraction du type narwhals de la colonne
         dtype_obj = df_nw.schema[column]
-        # Conversion du type narwhals en SQL
-        sql_type = map_python_to_sql_type(dtype_obj)
+        # Refus des types composites : pas de type SQL plat à enregistrer
+        check_supported_dtype(column, dtype_obj)
+        # Type SQL physique relu dans la table des faits ; le type inféré du
+        # DataFrame ne sert que de repli pour une colonne absente de la table
+        sql_type = self._physical_column_types().get(
+            column, map_python_to_sql_type(dtype_obj)
+        )
         # Statut catégoriel, calculé une seule fois à la création de la colonne :
         # colonne textuelle dont la cardinalité (hors valeurs manquantes) respecte le
         # seuil.
         is_categorical = (
-            isinstance(dtype_obj, (nw.String, nw.Categorical, nw.Enum))
+            isinstance(dtype_obj, nw.String | nw.Categorical | nw.Enum)
             and self.categorical_threshold is not None
             and df_nw[column].drop_nulls().n_unique() <= self.categorical_threshold
         )
@@ -748,6 +900,8 @@ class BaseSchemaManager(SchemaScoped, ABC):
             insert_label = (
                 label if label is not None else column.replace("_", " ").title()
             )
+            # Avertissement sur les noms hors snake_case (accepté, non refusé)
+            warn_nonstandard_column_name(column, self.logger)
             self.conn.execute(
                 f"""
                 INSERT INTO {metadata_table} (name, label, sql_type,
@@ -774,16 +928,16 @@ class BaseSchemaManager(SchemaScoped, ABC):
         self._invalidate_metadata_cache()
 
         # Logging
-        self.logger.info(f"Added/updated column {column} in metadata")
+        self.logger.debug(f"Added/updated column {column} in metadata")
 
     # Méthode de renseignement ou de correction des champs d'UI d'une colonne
     def update_column_metadata(self, column: str, **fields: str | bool | None) -> None:
         """
         Set or correct the producer-owned UI fields of an existing column.
 
-        Only ``label``, ``parent_name``, ``unit``, ``display_format``, ``family``,
-        ``description``, ``default_aggregation`` and ``is_categorical`` may be
-        updated. ``is_categorical`` is inferred only once, when the column is
+        Only ``label``, ``parent_name``, ``label_for``, ``unit``, ``display_format``,
+        ``family``, ``description``, ``default_aggregation`` and ``is_categorical``
+        may be updated. ``is_categorical`` is inferred only once, when the column is
         created: this method is the way to correct it (e.g. to switch the UI filter
         of a column from a search input to a select menu). The update
         touches nothing else, so a later data update never has to rebuild the base
@@ -792,23 +946,40 @@ class BaseSchemaManager(SchemaScoped, ABC):
         corrects) a column hierarchy link: the parent column must already
         exist in metadata, the resulting graph must stay a forest (no cycle), and
         both ``column`` and its new parent are forced categorical, with a warning,
-        if either is not already.
+        if either is not already. Setting ``label_for`` declares (or corrects) a
+        code/label column pair : the target code column must exist, must not
+        itself be a label column, ``column`` must be ``VARCHAR``, not a primary key
+        and outside any hierarchy (the label_for structural checks performed by
+        :func:`validate_value_labels`), and the functional dependency code -> label
+        must hold on the whole fact table (checked by
+        :func:`check_value_label_dependency`) before the write. A column cannot be
+        both a hierarchy member (``parent_name`` set, or a
+        hierarchy parent) and a label column (``label_for`` set) at the same time.
+        ``label_for=None`` just clears the link, with no validation, same as
+        ``parent_name=None``; unlike ``parent_name``, ``label_for`` has no effect on
+        ``is_categorical``.
 
         Args:
             column: Name of the column, which must already have a row in the
                 metadata table.
-            **fields: Field/value pairs among ``label``, ``parent_name``, ``unit``,
-                ``display_format``, ``family``, ``description``,
-                ``default_aggregation`` (strings, ``None`` clears the field) and
+            **fields: Field/value pairs among ``label``, ``parent_name``,
+                ``label_for``, ``unit``, ``display_format``, ``family``,
+                ``description``, ``default_aggregation`` (strings, ``None`` clears
+                the field, except for ``label`` which is required) and
                 ``is_categorical`` (bool).
 
         Raises:
             ValueError: If a field name is not one of the allowed fields, if
-                ``default_aggregation`` is invalid, if the column has no row in the
-                metadata table, if a non-``None`` ``parent_name`` references a
-                column absent from metadata, if it would create a cycle in the
-                ``parent_name`` graph, if ``is_categorical`` is not a bool, or if
-                ``is_categorical=False`` targets a column of a hierarchy.
+                ``label`` is ``None``, if ``default_aggregation`` is invalid, if
+                the column has no row in the metadata table, if a non-``None``
+                ``parent_name`` references a column absent from metadata, if it
+                would create a cycle in the ``parent_name`` graph, if
+                ``is_categorical`` is not a bool, if ``is_categorical=False``
+                targets a column of a hierarchy, if a
+                non-``None`` ``label_for`` violates the label_for structural
+                checks or the code -> label functional dependency, or
+                if ``parent_name`` and ``label_for`` are set (currently or in the same
+                call) on the same column.
 
         Example:
             >>> manager.update_column_metadata(
@@ -816,6 +987,7 @@ class BaseSchemaManager(SchemaScoped, ABC):
             ...     default_aggregation='sum')
             >>> manager.update_column_metadata('commune', parent_name='departement')
             >>> manager.update_column_metadata('model', is_categorical=True)
+            >>> manager.update_column_metadata('nc8_libelle', label_for='nc8')
         """
         # Contrôle des champs autorisés
         allowed = COLUMN_METADATA_KEYS | {"is_categorical"}
@@ -836,6 +1008,11 @@ class BaseSchemaManager(SchemaScoped, ABC):
         # Aucun champ fourni : rien à écrire
         if not fields:
             return
+
+        # Le libellé est obligatoire (colonne NOT NULL) : il se corrige, il ne s'efface
+        # pas
+        if "label" in fields and fields["label"] is None:
+            raise ValueError("label cannot be None: it is a required metadata field")
 
         # Normalisation et validation de l'agrégation par défaut
         if "default_aggregation" in fields:
@@ -858,10 +1035,13 @@ class BaseSchemaManager(SchemaScoped, ABC):
                 "update_column_metadata only corrects existing columns"
             )
 
+        # Extraction des nouvelles valeurs de parent_name / label_for, utilisées par
+        # plusieurs blocs de validation ci-dessous.
+        new_parent = fields.get("parent_name")
+        new_label_for = fields.get("label_for")
+
         # Validation spécifique à parent_name : existence de la colonne parente dans
         # l'état courant de metadata, puis détection de cycle sur le graphe complet.
-        # Extraction du nouveau parent
-        new_parent = fields.get("parent_name")
         if "parent_name" in fields and new_parent is not None:
             # Vérification que la colonne parent existe dans la table des
             # métadonnées (et est donc une colonne valide de la table des faits)
@@ -874,13 +1054,78 @@ class BaseSchemaManager(SchemaScoped, ABC):
                     f"Parent column {new_parent!r} has no row in the metadata table"
                 )
             # Extraction des paires parent/enfant
-            current_rows = self.conn.execute(
+            parent_rows = self.conn.execute(
                 f"SELECT name, parent_name FROM {metadata_table}"
             ).fetchall()
-            parent_of = {name: parent for name, parent in current_rows}
+            parent_of = {name: parent for name, parent in parent_rows}
             parent_of[column] = str(new_parent)
             # Validation de la hiérarchie
             validate_hierarchy_forest(parent_of)
+
+            # Une colonne de libellés ne peut pas aussi être membre d'une hiérarchie
+            if "label_for" in fields:
+                has_label_for = new_label_for is not None
+            else:
+                _lfrow = self.conn.execute(
+                    f"SELECT label_for FROM {metadata_table} WHERE name = ?", [column]
+                ).fetchone()
+                has_label_for = _lfrow is not None and _lfrow[0] is not None
+            if has_label_for:
+                raise ValueError(
+                    f"Column {column!r} is a label column (label_for is set) and"
+                    " cannot also declare a parent_name"
+                )
+
+        # Validation spécifique à label_for : contrôles structurels (cible, chaînage,
+        # forme de colonne) contre l'état courant de metadata, puis dépendance
+        # fonctionnelle sur toute la fact_table.
+        if "label_for" in fields and new_label_for is not None:
+            # Une colonne membre d'une hiérarchie (parente ou enfant) ne peut pas
+            # aussi être une colonne de libellés
+            hierarchy_children = self._get_hierarchy_children(column)
+            if "parent_name" in fields:
+                has_parent = new_parent is not None
+            else:
+                _prow4 = self.conn.execute(
+                    f"SELECT parent_name FROM {metadata_table} WHERE name = ?",
+                    [column],
+                ).fetchone()
+                has_parent = _prow4 is not None and _prow4[0] is not None
+            if hierarchy_children or has_parent:
+                raise ValueError(
+                    f"Column {column!r} is part of a column hierarchy (parent or"
+                    " child) and cannot also declare a label_for"
+                )
+
+            # Contrôles structurels de label_for : état complet de metadata, fusionné
+            # avec le changement en cours (même schéma que parent_name/validate_
+            # hierarchy_forest ci-dessus : on valide le graphe entier, pas seulement
+            # la paire).
+            label_for_rows = self.conn.execute(
+                f"SELECT name, sql_type, is_primary_key, parent_name, label_for"
+                f" FROM {metadata_table}"
+            ).fetchall()
+            columns_sql_types = {
+                name: sql_type for name, sql_type, _, _, _ in label_for_rows
+            }
+            primary_keys = [name for name, _, is_pk, _, _ in label_for_rows if is_pk]
+            parent_of_for_labels = {
+                name: parent for name, _, _, parent, _ in label_for_rows
+            }
+            label_for_map = {
+                name: lf for name, _, _, _, lf in label_for_rows if lf is not None
+            }
+            label_for_map[column] = str(new_label_for)
+            validate_value_labels(
+                label_for_map, columns_sql_types, primary_keys, parent_of_for_labels
+            )
+
+            # Dépendance fonctionnelle code -> libellé sur toute la fact_table (pas
+            # de restrict_to : la correction porte sur l'ensemble de la table,
+            # contrairement au contrôle restreint d'un update).
+            check_value_label_dependency(
+                self.conn, self._qualified("fact_table"), str(new_label_for), column
+            )
 
         # Une colonne de hiérarchie reste catégorielle : refus de is_categorical=False
         if fields.get("is_categorical") is False:
@@ -936,7 +1181,7 @@ class BaseSchemaManager(SchemaScoped, ABC):
                         stacklevel=2,
                     )
                     # Logging
-                    self.logger.info(
+                    self.logger.debug(
                         f"Forced is_categorical=True for hierarchy column"
                         f" {hierarchy_col!r}"
                     )
@@ -954,34 +1199,36 @@ class BaseSchemaManager(SchemaScoped, ABC):
         """
         Delete metadata for a specific column.
 
+        Only the ``metadata`` row is removed: the fact table column, its
+        ``cluster_by`` entry and the references to it are left untouched (see
+        ``_drop_column_with_references``).
+
         Args:
             column_name: Name of the column
+
+        Raises:
+            duckdb.Error: If the ``metadata`` table cannot be written.
+
+        Example:
+            >>> manager.delete_column_metadata('old_col')
         """
-        try:
-            # Requête de suppression des méta-données
-            delete_query = f"DELETE FROM {self._qualified('metadata')} WHERE name = ?"
-            # Exécution de la requête
-            self.conn.execute(delete_query, [column_name])
+        # Suppression de la ligne de méta-données
+        self.conn.execute(
+            f"DELETE FROM {self._qualified('metadata')} WHERE name = ?", [column_name]
+        )
 
-            # Invalidation du cache
-            self._invalidate_metadata_cache()
+        # Invalidation du cache
+        self._invalidate_metadata_cache()
 
-            # Logging
-            self.logger.info(f"Deleted metadata for column {column_name}")
-
-        except Exception as e:
-            # Logging
-            self.logger.error(
-                f"Failed to delete metadata for column {column_name}: {e}"
-            )
-            raise
+        # Logging
+        self.logger.debug(f"Deleted metadata for column {column_name}")
 
     # Méthode de détachement des colonnes enfants d'une colonne parente supprimée
     def _clear_child_parent_references(self, column: str) -> list[str]:
         """
         Clear ``parent_name`` on every column whose hierarchy parent is ``column``.
 
-        Used when a column that is the parent of another column (§2.5) is deleted
+        Used when a column that is the parent of another column is deleted
         with ``cascade=True``: rather than leaving children pointing at a column
         that no longer exists, their ``parent_name`` is reset to ``NULL`` and a
         warning is logged.
@@ -1016,82 +1263,134 @@ class BaseSchemaManager(SchemaScoped, ABC):
             )
         return children
 
+    # Méthode de détachement des colonnes de libellés d'un code supprimé
+    def _clear_label_for_references(self, column: str) -> list[str]:
+        """
+        Clear ``label_for`` on every label column pointing at ``column``.
+
+        Used when a code column targeted by one or more label columns is
+        deleted with ``cascade=True``: rather than leaving label columns pointing at
+        a code column that no longer exists, their ``label_for`` is reset to
+        ``NULL`` (they become ordinary columns) and a warning is logged.
+
+        Args:
+            column: Name of the code column about to be dropped, used as the
+                ``label_for`` target to detach.
+
+        Returns:
+            list[str]: Names of the label columns that were detached. Empty when
+            ``column`` was not targeted by any label column.
+
+        Example:
+            >>> manager._clear_label_for_references('nc8')
+            ['nc8_libelle']
+        """
+        # Extraction des colonnes de libellés associées à la colonne de code
+        label_columns = self._get_label_columns_for_code(column)
+        # Retrait du lien
+        if label_columns:
+            self.conn.execute(
+                f"UPDATE {self._qualified('metadata')} SET label_for = NULL"
+                " WHERE label_for = ?",
+                [column],
+            )
+            # Invalidation du cache
+            self._invalidate_metadata_cache()
+            # Logging
+            self.logger.warning(
+                f"Column {column!r} was the label_for target of {label_columns};"
+                f" their label_for was cleared to NULL (cascade=True)"
+            )
+        return label_columns
+
+    # Méthode de détachement de toutes les références (hiérarchie et libellés) à une
+    # colonne sur le point d'être supprimée
+    def _clear_references_to(self, column: str) -> None:
+        """
+        Clear every ``parent_name``/``label_for`` reference to ``column``.
+
+        Thin wrapper factoring the two independent cascade mechanics
+        (``_clear_child_parent_references`` for hierarchy children,
+        ``_clear_label_for_references`` for label columns) that ``cascade=True``
+        applies together before a column is dropped.
+
+        Args:
+            column: Name of the column about to be dropped.
+
+        Example:
+            >>> manager._clear_references_to('region')
+        """
+        # Nettoyage des références à la hiérarchie
+        self._clear_child_parent_references(column)
+        # Nettoyage des références au label
+        self._clear_label_for_references(column)
+
     # Méthode auxiliaire de suppression physique d'une colonne de la table des faits
-    def _drop_fact_table_column(self, column: str) -> bool:
+    def _drop_fact_table_column(self, column: str) -> None:
         """
         Drop a column from the fact table (``ALTER TABLE ... DROP COLUMN``).
 
         Only the physical column is dropped: its ``metadata`` row, ``cluster_by``
         and ``parent_name`` references are handled by
-        ``_drop_column_with_references``.
+        ``_drop_column_with_references``. A failure is never swallowed: inside a
+        DuckDB transaction a failed statement aborts the whole transaction, which
+        must then be rolled back by the caller.
 
         Args:
             column: Name of the column to drop.
 
-        Returns:
-            bool: True if the column was dropped, False on failure (logged).
+        Raises:
+            duckdb.Error: If the column does not exist or cannot be dropped.
 
         Example:
             >>> manager._drop_fact_table_column('old_col')
-            True
         """
-        try:
-            # Exécution de la requête de suppression de la colonne sur la table
-            self.conn.execute(
-                f"ALTER TABLE {self._qualified('fact_table')}"
-                f" DROP COLUMN {quote_ident(column)}"
-            )
-            # Logging
-            self.logger.info(f"Dropped column {column} from fact table")
-            return True
-        except Exception as e:
-            # Logging
-            self.logger.error(f"Error dropping fact table column {column}: {e}")
-            return False
+        # Suppression de la colonne de la table des faits
+        self.conn.execute(
+            f"ALTER TABLE {self._qualified('fact_table')}"
+            f" DROP COLUMN {quote_ident(column)}"
+        )
+        # Logging
+        self.logger.debug(f"Dropped column {column} from fact table")
 
     # Méthode de suppression d'une colonne et de toutes ses références
-    def _drop_column_with_references(self, column: str, cascade: bool = False) -> bool:
+    def _drop_column_with_references(self, column: str, cascade: bool = False) -> None:
         """
         Drop a fact table column together with every reference to it.
 
-        Ordered steps: children detachment (``parent_name`` set to ``NULL``, only
-        when ``cascade``), ``ALTER TABLE ... DROP COLUMN``, ``metadata`` row removal
-        and ``cluster_by`` update. Shared by ``DatabaseDeleter.delete_columns`` and
+        Ordered steps: references detachment (hierarchy children's ``parent_name``
+        and label columns' ``label_for`` set to ``NULL``, only when ``cascade``),
+        ``ALTER TABLE ... DROP COLUMN``, ``metadata`` row removal and ``cluster_by``
+        update. Shared by ``DatabaseDeleter.delete_columns`` and
         ``_cleanup_null_only_columns`` so that a dropped column never leaves a
         dangling reference behind. No transaction is opened here: the caller owns
         it.
 
         Args:
             column: Name of the column to drop. Must exist in the fact table.
-            cascade: Whether to detach the hierarchy children of ``column`` before
-                dropping it. Defaults to False.
-
-        Returns:
-            bool: True if the column was dropped, False if the ``DROP COLUMN``
-            failed (nothing else is then modified, except detached children).
+            cascade: Whether to detach the hierarchy children and label columns of
+                ``column`` before dropping it. Defaults to False.
 
         Raises:
-            Exception: Any error raised while removing the metadata row or updating
-                ``cluster_by``, re-raised as is.
+            duckdb.Error: If the column cannot be dropped, or its metadata row or
+                ``cluster_by`` entry cannot be updated; the caller's transaction
+                must then be rolled back.
 
         Example:
             >>> manager._drop_column_with_references('region', cascade=True)
-            True
         """
-        # Détachement des colonnes enfants d'une hiérarchie (cascade uniquement)
+        # Détachement des références (hiérarchie et libellés), cascade uniquement
         if cascade:
-            self._clear_child_parent_references(column)
+            self._clear_references_to(column)
 
         # Suppression physique de la colonne
-        if not self._drop_fact_table_column(column):
-            return False
+        self._drop_fact_table_column(column)
 
         # Suppression de la ligne de méta-données correspondante
         self.delete_column_metadata(column)
 
         # Retrait de la colonne de cluster_by si elle en faisait partie
         self._remove_from_cluster_by(column)
-        return True
 
     # Méthode de nettoyage des colonnes ne contenant que des valeurs nulles
     def _cleanup_null_only_columns(self, use_transaction: bool = True) -> list[str]:
@@ -1133,44 +1432,47 @@ class BaseSchemaManager(SchemaScoped, ABC):
         with self._transaction(
             "cleanup_null_only_columns", use_transaction=use_transaction
         ) as report:
-            # Table vide : toutes les colonnes sont trivialement nulles, rien à
-            # décider
-            if self._count_rows("fact_table") == 0:
+            # Colonnes entièrement nulles, en une seule lecture de la table ; table
+            # vide : toutes les colonnes sont trivialement nulles, rien à décider
+            null_only_columns = self._get_null_only_columns()
+            if null_only_columns is None:
                 # Logging
-                self.logger.info("Fact table is empty: null-only cleanup skipped")
+                self.logger.debug("Fact table is empty: null-only cleanup skipped")
                 return []
 
             # Colonnes candidates, clés primaires exclues
             primary_keys = set(self._get_primary_key_columns())
-            pending = [
-                c for c in self._get_null_only_columns() if c not in primary_keys
-            ]
+            pending = [c for c in null_only_columns if c not in primary_keys]
 
-            # Suppression itérative : une colonne parente devient supprimable dès que
-            # ses enfants (eux-mêmes nuls) ont été supprimés, quel que soit l'ordre
-            # des colonnes dans la table.
+            # Suppression itérative : une colonne parente (hiérarchie) ou de code
+            # (libellés) devient supprimable dès que ses enfants / colonnes de
+            # libellés (eux-mêmes nuls, par la dépendance fonctionnelle) ont été
+            # supprimés, quel que soit l'ordre des colonnes dans la table.
             dropped: list[str] = []
             progress = True
             while pending and progress:
                 progress = False
                 for column in list(pending):
-                    if self._get_hierarchy_children(column):
+                    if self._get_hierarchy_children(
+                        column
+                    ) or self._get_label_columns_for_code(column):
                         continue
                     pending.remove(column)
-                    if self._drop_column_with_references(column):
-                        dropped.append(column)
-                        progress = True
-                    else:
-                        report.warnings.append(
-                            f"Null-only column '{column}' could not be dropped"
-                        )
+                    self._drop_column_with_references(column)
+                    dropped.append(column)
+                    progress = True
 
-            # Colonnes parentes conservées : enfants non nuls
+            # Colonnes conservées : enfants de hiérarchie ou colonnes de libellés non
+            # nulles
             for column in pending:
                 # Message
-                warning = (
-                    f"Null-only column '{column}' kept: it is the hierarchy parent of"
-                    f" {self._get_hierarchy_children(column)}"
+                reasons = []
+                if children := self._get_hierarchy_children(column):
+                    reasons.append(f"the hierarchy parent of {children}")
+                if label_columns := self._get_label_columns_for_code(column):
+                    reasons.append(f"the label_for target of {label_columns}")
+                warning = f"Null-only column '{column}' kept: it is " + " and ".join(
+                    reasons
                 )
                 # Logging
                 self.logger.warning(warning)
@@ -1182,7 +1484,7 @@ class BaseSchemaManager(SchemaScoped, ABC):
                 report.columns_dropped.extend(dropped)
                 self._touch_dataset_metadata()
                 # Logging
-                self.logger.info(f"Dropped null-only columns: {dropped}")
+                self.logger.debug(f"Dropped null-only columns: {dropped}")
 
             return dropped
 
@@ -1210,6 +1512,30 @@ class BaseSchemaManager(SchemaScoped, ABC):
             ).fetchall()
         ]
 
+    # Méthode de lecture des colonnes de libellés d'une colonne de code
+    def _get_label_columns_for_code(self, column: str) -> list[str]:
+        """
+        Get the columns whose ``label_for`` is ``column``.
+
+        Args:
+            column: Name of the potential code column.
+
+        Returns:
+            list[str]: Names of the label columns targeting ``column``. Empty when
+            ``column`` is not the target of any label column.
+
+        Example:
+            >>> manager._get_label_columns_for_code('nc8')
+            ['nc8_libelle']
+        """
+        return [
+            row[0]
+            for row in self.conn.execute(
+                f"SELECT name FROM {self._qualified('metadata')} WHERE label_for = ?",
+                [column],
+            ).fetchall()
+        ]
+
     # Méthodes de résolution des conflits de types
     def _resolve_type_conflicts(
         self,
@@ -1233,9 +1559,18 @@ class BaseSchemaManager(SchemaScoped, ABC):
             report: When given and the type is actually widened, appended to
                 ``report.metadata_changes``.
 
+        Raises:
+            ValueError: If the incoming column has a composite type (``List``,
+                ``Array``, ``Struct``).
+            duckdb.Error: If the fact table column cannot be widened to the
+                resolved type.
+
         Example:
             >>> manager._resolve_type_conflicts('amount', df, metadata)
         """
+        # Refus des types composites, y compris sur une colonne déjà existante
+        check_supported_dtype(column, df.schema[column])
+
         # Identification du type SQL actuellement enregistré
         matching = current_metadata.filter(nw.col("name") == column)["sql_type"]
         if len(matching) == 0:
@@ -1258,7 +1593,7 @@ class BaseSchemaManager(SchemaScoped, ABC):
         resolved_type = resolve_sql_type_conflict(current_type, new_type)
         if resolved_type is None:
             # Type non ordonné ou lot plus étroit : le type enregistré est conservé
-            self.logger.info(
+            self.logger.debug(
                 f"Type conflict for {column}: incoming {new_type} does not widen"
                 f" stored {current_type}; metadata left unchanged"
             )
@@ -1266,134 +1601,104 @@ class BaseSchemaManager(SchemaScoped, ABC):
 
         # Élargissement de la colonne de la table des faits, pour que le type
         # enregistré et le type physique restent cohérents (contrôlé par l'auditeur).
-        # Échec non bloquant : la métadonnée reste la référence déclarative.
-        try:
-            self.conn.execute(
-                f"ALTER TABLE {self._qualified('fact_table')}"
-                f" ALTER {quote_ident(column)} SET DATA TYPE {resolved_type}"
-            )
-        except Exception as e:
-            self.logger.warning(
-                f"Could not widen fact_table.{column} to {resolved_type}: {e}"
-            )
+        # Un échec n'est pas avalé : dans une transaction DuckDB, une instruction en
+        # échec invalide toute la transaction, qui doit alors être annulée.
+        self.conn.execute(
+            f"ALTER TABLE {self._qualified('fact_table')}"
+            f" ALTER {quote_ident(column)} SET DATA TYPE {resolved_type}"
+        )
 
-        # Mise à jour du type SQL enregistré
+        # Mise à jour du type SQL enregistré : type physique relu après l'ALTER
+        physical_type = self._physical_column_types().get(column, resolved_type)
         self.conn.execute(
             f"""
             UPDATE {self._qualified("metadata")}
             SET sql_type = ?
             WHERE name = ?
         """,
-            [resolved_type, column],
+            [physical_type, column],
         )
         # Invalidation du cache
         self._invalidate_metadata_cache()
         # Logging
-        self.logger.info(
-            f"Type conflict resolution for {column}: {current_type} -> {resolved_type}"
+        self.logger.debug(
+            f"Type conflict resolution for {column}: {current_type} -> {physical_type}"
         )
         # Ajout au rapport
         if report is not None:
             report.metadata_changes.append(
-                f"sql_type({column}): {current_type} -> {resolved_type}"
+                f"sql_type({column}): {current_type} -> {physical_type}"
             )
 
     # Méthode utilitaire pour les colonnes contenant uniquement des valeurs nulles
-    def _get_null_only_columns(self) -> list[str]:
+    def _get_null_only_columns(self) -> list[str] | None:
         """
-        Get list of columns that contain only null values in the fact table.
+        Get the fact table columns holding only null values, in a single scan.
+
+        Every column's non-null count is read by one query
+        (``SELECT COUNT(*), COUNT(c1), COUNT(c2), … FROM fact_table``) rather than
+        one scan per column.
 
         Returns:
-            List of column names that contain only null values
+            list[str] | None: Names of the null-only columns, in column order, or
+            None when the fact table is empty (every column is then trivially
+            null-only and nothing can be decided).
+
+        Raises:
+            duckdb.Error: If the fact table cannot be read.
+
+        Examples:
+            >>> manager._get_null_only_columns()
+            ['score']
         """
-        # Initialisation de la liste des colonnes vides
-        null_only_columns = []
-
-        try:
-            # Récupération des colonnes de la fact table
-            columns = self._get_fact_table_columns()
-            # Parcours des données
-            for column in columns:
-                # Vérification si la colonne ne contient que des valeurs nulles
-                query = (
-                    f"SELECT COUNT(*) FROM {self._qualified('fact_table')} "
-                    f"WHERE {quote_ident(column)} IS NOT NULL"
-                )
-                _row = self.conn.execute(query).fetchone()
-                non_null_count = _row[0] if _row is not None else 0
-                # Ajout à la liste si ne contient que des colonnes nulles
-                if non_null_count == 0:
-                    null_only_columns.append(column)
-            # Logging
-            if null_only_columns:
-                self.logger.info(
-                    f"Columns containing only null values detected: {null_only_columns}"
-                )
-            return null_only_columns
-
-        except Exception as e:
-            self.logger.error(f"An error occurred while detecting null values: {e}")
-            raise
+        # Comptage de toutes les colonnes en une lecture
+        columns = self._get_fact_table_columns()
+        counts = ", ".join(f"COUNT({quote_ident(c)})" for c in columns)
+        row = self.conn.execute(
+            f"SELECT COUNT(*), {counts} FROM {self._qualified('fact_table')}"
+        ).fetchone()
+        # Table vide : aucune décision possible
+        if row is None or row[0] == 0:
+            return None
+        null_only_columns = [
+            column
+            for column, non_null in zip(columns, row[1:], strict=True)
+            if non_null == 0
+        ]
+        # Logging
+        if null_only_columns:
+            self.logger.debug(
+                f"Columns containing only null values detected: {null_only_columns}"
+            )
+        return null_only_columns
 
     # Méthode d'horodatage de la dernière écriture réussie
     def _touch_dataset_metadata(self) -> None:
         """
-        Stamp ``dataset_metadata.updated_at`` with the current timestamp.
+        Stamp ``dataset_metadata.updated_at`` with the current UTC timestamp.
 
-        The table holds exactly one row per schema, so no ``WHERE`` clause is
-        needed. Failure is non-blocking: the timestamp is descriptive metadata and
-        must never invalidate an otherwise successful write.
+        Called inside the transaction of every write, so that the timestamp is
+        atomic with the write it describes and lands in the same DuckLake snapshot
+        (with the same ``run_id``). The table holds exactly one row per schema, so
+        no ``WHERE`` clause is needed; a schema without ``dataset_metadata`` is
+        left as is.
+
+        Raises:
+            duckdb.Error: If ``dataset_metadata`` exists but cannot be updated; the
+                enclosing write is then rolled back, like any other failed step.
 
         Example:
             >>> manager._touch_dataset_metadata()
         """
-        try:
-            # Horodatage de la dernière écriture réussie.
-            # Valeur liée en Python plutôt que via now() : la colonne est un
-            # TIMESTAMP sans fuseau, là où now() renvoie un TIMESTAMP WITH TIME ZONE.
-            self.conn.execute(
-                f"UPDATE {self._qualified('dataset_metadata')} SET updated_at = ?",
-                [datetime.now()],
-            )
-        except Exception as e:
-            # Erreur non bloquante : l'horodatage ne conditionne pas l'écriture
-            self.logger.warning(f"Could not stamp dataset_metadata.updated_at: {e}")
-
-    # Méthode de validation de l'état de la base de données
-    def validate_database_state(
-        self, validation_level: ValidationLevel = ValidationLevel.STANDARD
-    ) -> ValidationReport | None:
-        """
-        Validate the current state of the database.
-
-        Args:
-            validation_level: Level of validation to perform.
-
-        Returns:
-            ValidationReport | None: The auditor's report, or None when validation
-            is disabled (no auditor).
-
-        Example:
-            >>> report = updater.validate_database_state(ValidationLevel.COMPREHENSIVE)
-            >>> if report is not None and report.get_critical_issues_count() > 0:
-            ...     print("Critical issues detected!")
-        """
-        # Vérification qu'un auditeur est renseigné
-        if self.auditor is None:
-            self.logger.warning("Validation disabled - no auditor available")
-            return None
-        return self.auditor.validate_database(validation_level)
-
-    @abstractmethod
-    def validate_operation(self, operation_type: str, **kwargs: Any) -> bool:
-        """
-        Abstract method to validate operations before execution.
-
-        Args:
-            operation_type: Type of operation to validate
-            **kwargs: Operation-specific parameters
-
-        Returns:
-            True if operation is valid
-        """
-        pass
+        # Schéma sans table dataset_metadata : rien à horodater
+        if not self._table_exists("dataset_metadata"):
+            self.logger.debug("No dataset_metadata table: updated_at not stamped")
+            return
+        # Horodatage de la dernière écriture réussie.
+        # Valeur liée en Python plutôt que via now() : la colonne est un
+        # TIMESTAMP sans fuseau, là où now() renvoie un TIMESTAMP WITH TIME ZONE.
+        # Valeur en UTC (l'API la publie suffixée Z).
+        self.conn.execute(
+            f"UPDATE {self._qualified('dataset_metadata')} SET updated_at = ?",
+            [utc_now()],
+        )

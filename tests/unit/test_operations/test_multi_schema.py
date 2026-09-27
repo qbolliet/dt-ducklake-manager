@@ -41,7 +41,7 @@ def test_update_isolated_between_schemas(
     updater = DatabaseUpdater(
         connection=conn,
         categorical_threshold=4,
-        enable_validation=False,
+        audit_level=None,
         schema="predictions",
     )
     assert updater.update_database(new_pred, use_transaction=False) is True
@@ -83,7 +83,7 @@ def test_delete_isolated_between_schemas(
     # Suppression d'une ligne dans 'shapley' uniquement
     deleter = DatabaseDeleter(
         connection=conn,
-        enable_validation=False,
+        audit_level=None,
         auto_cleanup=False,
         schema="shapley",
     )
@@ -119,7 +119,7 @@ def test_audit_targets_correct_schema(
         connection=multi_schema_connection,
         schema=schema_name,
     )
-    report = auditor.validate_database(ValidationLevel.STANDARD)
+    report = auditor.validate_database(ValidationLevel.BASIC)
     # Un schéma fraîchement construit ne doit pas comporter de problème critique
     assert report.get_critical_issues_count() == 0
     # La fact_table du schéma ciblé est bien reconnue
@@ -141,17 +141,15 @@ def test_catalog_alias_travels_with_schema(
     updater = DatabaseUpdater(
         connection=multi_schema_connection,
         categorical_threshold=4,
-        enable_validation=True,
         schema=schema_name,
         catalog_alias="db",
     )
-    # Le schéma et l'alias voyagent ensemble jusqu'aux sous-gestionnaires
-    assert updater.data_mgr is not None
+    # Le schéma et l'alias voyagent ensemble jusqu'à l'auditeur et à la maintenance
     assert updater.auditor is not None
     for mgr in (
         updater,
-        updater.data_mgr,
         updater.auditor,
+        updater.maintenance,
     ):
         assert mgr.schema == schema_name
         assert mgr.catalog_alias == "db"

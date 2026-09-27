@@ -29,7 +29,8 @@ from ..utils.sql import (
 )
 
 # Modules ad hoc
-from ..utils.types import METADATA_COLUMNS, metadata_table_ddl
+from ..utils.types import METADATA_COLUMNS, metadata_table_ddl, utc_now
+from ..utils.value_labels import check_value_label_dependency
 from .inference import SchemaBuilder
 
 # Version du schéma de base de données écrite dans dataset_metadata.
@@ -92,6 +93,7 @@ class DuckLakeTablesBuilder(SchemaScoped):
         primary_keys: list[str] | None = None,
         categorical_overrides: dict[str, bool] | None = None,
         hierarchies: dict[str, str] | None = None,
+        value_labels: dict[str, str] | None = None,
         connection: duckdb.DuckDBPyConnection | None = None,
         schema: str = "main",
         catalog_alias: str = "db",
@@ -120,6 +122,11 @@ class DuckLakeTablesBuilder(SchemaScoped):
                 ``metadata.parent_name``. Must agree with
                 any ``parent_name`` also supplied through ``column_metadata``.
                 Defaults to None.
+            value_labels (Optional[Dict[str, str]]): Code/label column pairs,
+                declared as a mapping of label column name to code column name,
+                written to ``metadata.label_for``, carried by the label column. Must
+                agree with any ``label_for`` also supplied through
+                ``column_metadata``. Defaults to None.
             connection (Optional[duckdb.DuckDBPyConnection]): DuckLake-attached DuckDB
                 connection obtained from ``DuckLakeConnector.connect()``. If None, an
                 in-memory DuckDB connection is used (for unit tests only).
@@ -154,6 +161,7 @@ class DuckLakeTablesBuilder(SchemaScoped):
             primary_keys=primary_keys,
             categorical_overrides=categorical_overrides,
             hierarchies=hierarchies,
+            value_labels=value_labels,
             log_filename=log_filename,
         )
 
@@ -239,7 +247,7 @@ class DuckLakeTablesBuilder(SchemaScoped):
         self.conn.execute("DROP VIEW temp_metadata")
 
         # Logging
-        self.logger.info("Successfully registered duckdb meta-data table")
+        self.logger.debug("Successfully registered duckdb meta-data table")
 
     # Méthode de création de la table d'informations
     def create_duckdb_fact_table(
@@ -333,8 +341,8 @@ class DuckLakeTablesBuilder(SchemaScoped):
                 )
 
                 # Logging
-                self.logger.info(
-                    f"The fact_table is successfully partitionned on"
+                self.logger.debug(
+                    f"The fact_table is successfully partitioned on"
                     f" the following keys : ({partition_by})"
                 )
 
@@ -351,7 +359,7 @@ class DuckLakeTablesBuilder(SchemaScoped):
             # Logging des clés logiques (non contraintes DDL)
             if primary_keys and len(primary_keys) > 0:
                 pk_columns = ", ".join(primary_keys)
-                self.logger.info(
+                self.logger.debug(
                     f"Logical primary keys registered in the metadata table for the"
                     f" fact_table : ({pk_columns})"
                 )
@@ -371,7 +379,7 @@ class DuckLakeTablesBuilder(SchemaScoped):
         self.conn.execute("DROP VIEW temp_fact")
 
         # Logging
-        self.logger.info("Successfully registered duckdb fact table")
+        self.logger.debug("Successfully registered duckdb fact table")
 
     # Méthode de création de la table des méta-données du jeu de résultats
     def create_duckdb_dataset_metadata_table(
@@ -382,7 +390,7 @@ class DuckLakeTablesBuilder(SchemaScoped):
         """
         Create the single-row ``dataset_metadata`` table describing the result set.
 
-        ``updated_at`` and ``schema_version`` are always filled in; ``label``,
+        ``updated_at`` (UTC) and ``schema_version`` are always filled in; ``label``,
         ``description`` and ``source`` come from the optional builder arguments.
         ``cluster_by`` is left NULL unless explicitly provided: it is written as a
         JSON list of column names, kept in sync with the physical sort order applied
@@ -415,8 +423,8 @@ class DuckLakeTablesBuilder(SchemaScoped):
         """)
 
         # Insertion de l'unique ligne descriptive.
-        # Horodatage lié en Python plutôt que via now() : la colonne est un TIMESTAMP
-        # sans fuseau, là où now() renvoie un TIMESTAMP WITH TIME ZONE.
+        # Horodatage : la colonne est un TIMESTAMP sans fuseau. Valeur en UTC
+        # (l'API la publie suffixée Z).
         self.conn.execute(
             f"""
             INSERT INTO {qualified_name}
@@ -427,17 +435,46 @@ class DuckLakeTablesBuilder(SchemaScoped):
                 self.dataset_label,
                 self.dataset_description,
                 self.dataset_source,
-                datetime.now(),
+                utc_now(),
                 SCHEMA_VERSION,
                 json.dumps(cluster_by) if cluster_by else None,
             ],
         )
 
         # Logging
-        self.logger.info(
+        self.logger.debug(
             f"Successfully registered duckdb dataset meta-data table"
             f" (schema_version={SCHEMA_VERSION})"
         )
+
+    # Méthode de contrôle de la dépendance fonctionnelle des colonnes de libellés
+    def _check_value_labels_dependency(self) -> None:
+        """
+        Check the code -> label functional dependency of every declared pair
+        before writing.
+
+        Runs on ``self.schema_builder.df`` — the deduplicated source DataFrame,
+        already resolved by ``create_duckdb_metadata_table`` into
+        ``self.schema_builder.value_labels_resolved`` — via a temporary view, so the
+        check happens before the fact table itself is ever created. A no-op when no
+        code/label pair is declared.
+
+        Raises:
+            ValueError: If the functional dependency code -> label is violated for
+                any declared pair.
+        """
+        value_labels_resolved = self.schema_builder.value_labels_resolved
+        if not value_labels_resolved:
+            return
+
+        df = self.schema_builder.df
+        view_name = "_value_labels_check_src"
+        self.conn.register(view_name, df.to_arrow().select(list(df.columns)))
+        try:
+            for label_col, code_col in value_labels_resolved.items():
+                check_value_label_dependency(self.conn, view_name, code_col, label_col)
+        finally:
+            self.conn.unregister(view_name)
 
     # Méthode de construction du schéma
     def build_schema(
@@ -474,9 +511,10 @@ class DuckLakeTablesBuilder(SchemaScoped):
             column_labels (Optional[Dict[str, str]]): Optional mapping of column names
                 to labels.
             column_metadata (Optional[Dict[str, Dict[str, str]]]): Optional per-column
-                UI metadata (``label``, ``parent_name``, ``unit``, ``display_format``,
-                ``family``, ``description``, ``default_aggregation``), written into
-                the metadata table. Defaults to None.
+                UI metadata (``label``, ``parent_name``, ``label_for``, ``unit``,
+                ``display_format``, ``family``, ``description``,
+                ``default_aggregation``), written into the metadata table. Defaults
+                to None.
             check_duplicates (bool): Whether to check and remove duplicates. Defaults to
                 True.
             keep (Literal['any', 'none', 'first', 'last']): Which duplicates to keep.
@@ -498,7 +536,10 @@ class DuckLakeTablesBuilder(SchemaScoped):
 
         Raises:
             ValueError: If ``cluster_by`` references a column absent from the source
-                DataFrame, in addition to the existing primary-key duplicate check.
+                DataFrame, in addition to the existing primary-key duplicate check, or
+                if a declared code/label pair (``value_labels``/``label_for``)
+                violates the functional dependency code -> label on the deduplicated
+                DataFrame (nothing is written, including the ``metadata`` rows).
 
         Returns:
             OperationReport: report describing the tables just built
@@ -588,6 +629,12 @@ class DuckLakeTablesBuilder(SchemaScoped):
                 column_metadata=column_metadata,
             )
 
+            # Contrôle de la dépendance fonctionnelle code -> libellé, sur le DataFrame
+            # dédupliqué, avant l'écriture de la fact_table : une violation annule
+            # tout, y compris les lignes de metadata déjà insérées ci-dessus (même
+            # transaction).
+            self._check_value_labels_dependency()
+
             # Création de la table d'informations avec partitionnement et tri
             # optionnels
             self.create_duckdb_fact_table(
@@ -595,6 +642,13 @@ class DuckLakeTablesBuilder(SchemaScoped):
                 column_labels=column_labels,
                 partition_by=partition_by,
                 cluster_by=cluster_by,
+            )
+
+            # Enregistrement du type physique relu dans la table des faits : le type
+            # inféré (ex. DECIMAL) diffère du type stocké (DECIMAL(10,2))
+            self._sync_physical_sql_types(
+                metadata_table=metadata_table or "metadata",
+                fact_table=fact_table or "fact_table",
             )
 
             # Création de la table des méta-données du jeu de résultats
@@ -664,6 +718,50 @@ class DuckLakeTablesBuilder(SchemaScoped):
         # Logging
         self.logger.info(report.summary())
         return report
+
+    # Méthode d'alignement de metadata.sql_type sur le type physique des colonnes
+    def _sync_physical_sql_types(
+        self, metadata_table: str = "metadata", fact_table: str = "fact_table"
+    ) -> None:
+        """Record the physical column types of the fact table in ``sql_type``.
+
+        The metadata rows are first written with the type inferred from the
+        DataFrame (``DECIMAL``, ``VARCHAR`` …), which is what the explicit DDL
+        declares; the fact table may then store a more precise type (``DECIMAL(10,2)``
+        on the CTAS path). The contract records what is stored, so the type is read
+        back with ``DESCRIBE`` and any difference is written to the metadata.
+
+        Args:
+            metadata_table: Bare name of the metadata table. Defaults to
+                ``'metadata'``.
+            fact_table: Bare name of the fact table. Defaults to ``'fact_table'``.
+
+        Raises:
+            duckdb.Error: If the fact table cannot be described or the metadata
+                cannot be updated (the enclosing build is then rolled back).
+
+        Examples:
+            >>> builder._sync_physical_sql_types()
+        """
+        # Extraction de la table des métadonnées
+        metadata_ref = self._qualified(metadata_table)
+        # Types stockés, relus dans la table plutôt que déduits du DataFrame
+        physical_types = self._physical_column_types(fact_table)
+        recorded = dict(
+            self.conn.execute(f"SELECT name, sql_type FROM {metadata_ref}").fetchall()
+        )
+        # Parcours des colonnes et de leurs types
+        for column, physical in physical_types.items():
+            if column in recorded and recorded[column] != physical:
+                # Mise à jour du type dans les métadonnées
+                self.conn.execute(
+                    f"UPDATE {metadata_ref} SET sql_type = ? WHERE name = ?",
+                    [physical, column],
+                )
+                # Logging
+                self.logger.debug(
+                    f"sql_type({column}): {recorded[column]} -> {physical} (physical)"
+                )
 
     # Méthode auxiliaire de comptage des lignes de la table des faits
     def _count_fact_table_rows(self, table: str) -> int:

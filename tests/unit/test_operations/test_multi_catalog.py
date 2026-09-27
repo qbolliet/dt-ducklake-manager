@@ -115,7 +115,7 @@ def test_updater_writes_only_to_its_catalog(
     updater = DatabaseUpdater(
         connection=conn,
         categorical_threshold=4,
-        enable_validation=False,
+        audit_level=None,
         schema="main",
         catalog_alias="lake_a",
     )
@@ -142,7 +142,7 @@ def test_deleter_touches_only_its_catalog(
 
     deleter = DatabaseDeleter(
         connection=conn,
-        enable_validation=False,
+        audit_level=None,
         auto_cleanup=False,
         schema="main",
         catalog_alias="lake_a",

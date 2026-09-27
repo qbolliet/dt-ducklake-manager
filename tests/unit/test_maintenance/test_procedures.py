@@ -15,29 +15,11 @@ import pytest
 from dt_ducklake_manager.connection import DuckLakeConnector
 from dt_ducklake_manager.maintenance import DuckLakeMaintenance, MaintenancePolicy
 from dt_ducklake_manager.reporting import OperationReport
-
-# ---------------------------------------------------------------------------
-# Fonctions auxiliaires
-# ---------------------------------------------------------------------------
-
-
-def _ducklake_available() -> bool:
-    """Vérifie si l'extension DuckLake est disponible dans l'environnement de test."""
-    try:
-        conn = duckdb.connect(":memory:")
-        conn.execute("INSTALL ducklake; LOAD ducklake;")
-        conn.close()
-        return True
-    except Exception:
-        return False
-
+from tests.utils.ducklake import requires_ducklake
 
 # Marqueur appliqué à l'ensemble du module : tous les tests sont ignorés si
 # l'extension ducklake n'est pas disponible dans l'environnement.
-pytestmark = pytest.mark.skipif(
-    not _ducklake_available(),
-    reason="Extension ducklake non disponible dans cet environnement",
-)
+pytestmark = requires_ducklake
 
 
 # ---------------------------------------------------------------------------
@@ -139,7 +121,7 @@ def test_merge_files_executes_without_error(maint: Any, ducklake_conn: Any) -> N
     """
     _, table = ducklake_conn
     # Aucune exception ne doit être levée
-    result = maint.merge_files("main", table)
+    result = maint.merge_files(table, schema="main")
     schema_name, table_name, files_processed, files_created = result
     assert schema_name == "main"
     assert table_name == table
@@ -159,8 +141,8 @@ def test_merge_files_accepts_custom_parameters(maint: Any, ducklake_conn: Any) -
     # Aucune exception ne doit être levée avec des paramètres personnalisés (entiers
     # en octets — DuckLake rejette une valeur avec unité, cf. spécification §5.5)
     maint.merge_files(
-        "main",
         table,
+        schema="main",
         min_file_size=1_000,
         max_file_size=10_000_000,
         max_compacted_files=10,
@@ -178,7 +160,7 @@ def test_rewrite_data_files_executes_without_error(
         ducklake_conn: Fixture providing (connection, table_name).
     """
     _, table = ducklake_conn
-    result = maint.rewrite_data_files("main", table)
+    result = maint.rewrite_data_files(table, schema="main")
     schema_name, table_name, files_processed, files_created = result
     assert schema_name == "main"
     assert table_name == table
@@ -186,22 +168,32 @@ def test_rewrite_data_files_executes_without_error(
 
 # Test que rewrite_data_files ne réécrit rien sous le seuil de suppression
 def test_rewrite_data_files_zero_when_no_deletions(
-    maint: Any, ducklake_conn: Any, caplog: Any
+    maint: Any, ducklake_conn: Any
 ) -> None:
-    """Test that rewrite_data_files reports 0 files when nothing crosses the
-    threshold, with an explicit log message (no silent zero, spec §6).
+    """Test that rewrite_data_files returns explicit zeros when nothing crosses the
+    threshold, and that compact reports them in the operation report.
+
+    The zero is asserted on the returned counters, not on the wording of the log.
 
     Args:
         maint: DuckLakeMaintenance fixture.
         ducklake_conn: Fixture providing (connection, table_name).
-        caplog: pytest fixture capturing log records.
     """
     _, table = ducklake_conn
     # Aucune suppression n'a eu lieu sur cette table : le seuil par défaut (0.1)
     # ne peut pas être atteint
-    _, _, files_processed, _ = maint.rewrite_data_files("main", table)
-    assert files_processed == 0
-    assert any("deletion threshold" in record.message for record in caplog.records)
+    assert maint.rewrite_data_files(table, schema="main") == ("main", table, 0, 0)
+
+    report = OperationReport(
+        operation="update",
+        schema="main",
+        run_id=None,
+        started_at=datetime.now(),
+        duration_seconds=0.0,
+    )
+    maint.compact(table, report=report)
+    assert report.maintenance["rewrite_files_processed"] == 0
+    assert report.maintenance["rewrite_files_created"] == 0
 
 
 # Test que rewrite_data_files réécrit effectivement après un UPDATE partiel
@@ -229,7 +221,7 @@ def test_rewrite_data_files_low_threshold_rewrites_after_update(
 
     maint = DuckLakeMaintenance(conn)
     _, _, files_processed, files_created = maint.rewrite_data_files(
-        "main", "fact_table", delete_threshold=0.01
+        "fact_table", delete_threshold=0.01
     )
     assert files_processed > 0
     assert files_created > 0
@@ -243,7 +235,7 @@ def test_expire_snapshots_default_days(maint: Any) -> None:
     Args:
         maint: DuckLakeMaintenance fixture.
     """
-    result = maint.expire_snapshots("main")
+    result = maint.expire_snapshots()
     assert isinstance(result, list)
 
 
@@ -254,7 +246,7 @@ def test_expire_snapshots_custom_days(maint: Any) -> None:
     Args:
         maint: DuckLakeMaintenance fixture.
     """
-    maint.expire_snapshots("main", older_than_days=7)
+    maint.expire_snapshots(older_than_days=7)
 
 
 # Test que expire_snapshots accepte dry_run
@@ -264,7 +256,7 @@ def test_expire_snapshots_dry_run(maint: Any) -> None:
     Args:
         maint: DuckLakeMaintenance fixture.
     """
-    result = maint.expire_snapshots("main", older_than_days=0, dry_run=True)
+    result = maint.expire_snapshots(older_than_days=0, dry_run=True)
     assert isinstance(result, list)
 
 
@@ -275,7 +267,7 @@ def test_cleanup_files_executes_without_error(maint: Any) -> None:
     Args:
         maint: DuckLakeMaintenance fixture.
     """
-    result = maint.cleanup_files("main")
+    result = maint.cleanup_files()
     assert isinstance(result, list)
 
 
@@ -286,7 +278,7 @@ def test_cleanup_files_dry_run(maint: Any) -> None:
     Args:
         maint: DuckLakeMaintenance fixture.
     """
-    result = maint.cleanup_files("main", dry_run=True)
+    result = maint.cleanup_files(dry_run=True)
     assert isinstance(result, list)
 
 
@@ -451,7 +443,7 @@ def test_maintain_with_retention_flushes_then_expires_and_cleans(
     maint.flush_inlined_data = tracking_flush
     maint.expire_snapshots = tracking_expire
 
-    report = maint.maintain(MaintenancePolicy(retention_days=30), table, "main")
+    report = maint.maintain(MaintenancePolicy(retention_days=30), table, schema="main")
 
     assert call_log == ["flush_inlined_data", "expire_snapshots"]
     assert report.maintenance["flush_inlined_rows"] == 3
@@ -497,7 +489,7 @@ def test_maintain_continues_on_step_failure(maint: Any, ducklake_conn: Any) -> N
     maint.cleanup_files = tracking_cleanup
 
     # maintain ne doit pas lever d'exception malgré l'échec du flush
-    report = maint.maintain(MaintenancePolicy(retention_days=30), table, "main")
+    report = maint.maintain(MaintenancePolicy(retention_days=30), table, schema="main")
 
     assert call_log == ["flush_inlined_data", "expire_snapshots", "cleanup_files"]
     assert any("flush_inlined_data failed" in w for w in report.warnings)
@@ -518,7 +510,7 @@ def test_set_partitioned_by_simple(maint: Any, ducklake_conn: Any) -> None:
     """
     conn, table = ducklake_conn
     # Aucune exception ne doit être levée
-    maint.set_partitioned_by(table, ["id"])
+    maint.set_partitioned_by(table, partition_by=["id"])
 
 
 # Test que set_partitioned_by lève ValueError sur liste vide
@@ -530,8 +522,8 @@ def test_set_partitioned_by_empty_raises(maint: Any, ducklake_conn: Any) -> None
         ducklake_conn: Fixture providing (connection, table_name).
     """
     _, table = ducklake_conn
-    with pytest.raises(ValueError, match="partition_by ne peut pas être vide"):
-        maint.set_partitioned_by(table, [])
+    with pytest.raises(ValueError, match="partition_by must not be empty"):
+        maint.set_partitioned_by(table, partition_by=[])
 
 
 # Test que set_partitioned_by accepte plusieurs clés
@@ -544,7 +536,7 @@ def test_set_partitioned_by_multiple_keys(maint: Any, ducklake_conn: Any) -> Non
     """
     conn, table = ducklake_conn
     # id et value sont toutes les deux des colonnes valides de fact_table
-    maint.set_partitioned_by(table, ["id", "value"])
+    maint.set_partitioned_by(table, partition_by=["id", "value"])
 
 
 # ---------------------------------------------------------------------------
@@ -562,7 +554,7 @@ def test_reset_partitioned_by(maint: Any, ducklake_conn: Any) -> None:
     """
     conn, table = ducklake_conn
     # On définit d'abord un partitionnement pour avoir quelque chose à supprimer
-    maint.set_partitioned_by(table, ["id"])
+    maint.set_partitioned_by(table, partition_by=["id"])
     # La suppression ne doit pas lever d'exception
     maint.reset_partitioned_by(table)
 
@@ -598,7 +590,7 @@ def test_repartition_change_key(maint: Any, ducklake_conn: Any) -> None:
     """
     conn, table = ducklake_conn
     # Partitionnement initial
-    maint.set_partitioned_by(table, ["id"])
+    maint.set_partitioned_by(table, partition_by=["id"])
     # Repartitionnement sur une autre colonne, sans réécriture pour accélérer le test
     maint.repartition(table, partition_by=["value"], run_maintenance=False)
 
@@ -612,7 +604,7 @@ def test_repartition_remove_partitioning(maint: Any, ducklake_conn: Any) -> None
         ducklake_conn: Fixture providing (connection, table_name).
     """
     conn, table = ducklake_conn
-    maint.set_partitioned_by(table, ["id"])
+    maint.set_partitioned_by(table, partition_by=["id"])
     # Suppression sans nouveau partitionnement
     maint.repartition(table, partition_by=None, run_maintenance=False)
 
@@ -633,13 +625,13 @@ def test_repartition_with_maintenance(maint: Any, ducklake_conn: Any) -> None:
     original_merge = maint.merge_files
     original_rewrite = maint.rewrite_data_files
 
-    def tracking_merge(schema: Any, tbl: Any) -> None:
+    def tracking_merge(tbl: Any, **kwargs: Any) -> None:
         call_log.append("merge_files")
-        original_merge(schema, tbl)
+        original_merge(tbl, **kwargs)
 
-    def tracking_rewrite(schema: Any, tbl: Any) -> None:
+    def tracking_rewrite(tbl: Any, **kwargs: Any) -> None:
         call_log.append("rewrite_data_files")
-        original_rewrite(schema, tbl)
+        original_rewrite(tbl, **kwargs)
 
     maint.merge_files = tracking_merge
     maint.rewrite_data_files = tracking_rewrite
@@ -662,10 +654,10 @@ def test_repartition_without_maintenance(maint: Any, ducklake_conn: Any) -> None
     _, table = ducklake_conn
     call_log: list[str] = []
 
-    def tracking_merge(schema: Any, tbl: Any) -> None:
+    def tracking_merge(tbl: Any, **kwargs: Any) -> None:
         call_log.append("merge_files")
 
-    def tracking_rewrite(schema: Any, tbl: Any) -> None:
+    def tracking_rewrite(tbl: Any, **kwargs: Any) -> None:
         call_log.append("rewrite_data_files")
 
     maint.merge_files = tracking_merge
@@ -676,3 +668,135 @@ def test_repartition_without_maintenance(maint: Any, ducklake_conn: Any) -> None
     # Aucune méthode de maintenance ne doit avoir été appelée
     assert "merge_files" not in call_log
     assert "rewrite_data_files" not in call_log
+
+
+# ---------------------------------------------------------------------------
+# Fusion effective des petits fichiers
+# ---------------------------------------------------------------------------
+
+
+# Catalogue dont la table est répartie en plusieurs petits fichiers
+@pytest.fixture
+def fragmented_conn(tmp_path: Any) -> Generator[duckdb.DuckDBPyConnection]:
+    """Provide a real catalog whose table is split into six small files.
+
+    Args:
+        tmp_path: pytest temporary directory.
+
+    Yields:
+        duckdb.DuckDBPyConnection: connection holding ``fact_table`` (6 files).
+    """
+    data_dir = str(tmp_path / "data")
+    os.makedirs(data_dir)
+    conn = DuckLakeConnector(
+        str(tmp_path / "frag.ducklake"), data_dir, data_inlining_row_limit=0
+    ).connect()
+    conn.execute("CREATE TABLE fact_table (id INTEGER, value DOUBLE)")
+    for i in range(6):
+        conn.execute(
+            f"INSERT INTO fact_table SELECT range, range::DOUBLE"
+            f" FROM range({i * 1000}, {(i + 1) * 1000})"
+        )
+    yield conn
+    conn.close()
+
+
+# Nombre de fichiers de données actifs d'une table
+def _active_files(conn: duckdb.DuckDBPyConnection) -> int:
+    """Count the active data files of ``fact_table``.
+
+    Args:
+        conn: Connection attached to the ``db`` catalog.
+
+    Returns:
+        int: Number of data files of the current snapshot.
+    """
+    row = conn.execute(
+        "SELECT file_count FROM ducklake_table_info('db')"
+        " WHERE table_name = 'fact_table'"
+    ).fetchone()
+    return int(row[0])
+
+
+# Test que la fusion par défaut réduit réellement le nombre de fichiers
+def test_merge_files_default_reduces_file_count(
+    fragmented_conn: duckdb.DuckDBPyConnection,
+) -> None:
+    """Test that merging with the default bounds combines the small files.
+
+    The small files are the very ones to merge: no lower bound may exclude them,
+    and the procedure result must be fully read for DuckLake to apply the merge.
+
+    Args:
+        fragmented_conn: Catalog whose table is split into six small files.
+    """
+    assert _active_files(fragmented_conn) == 6
+    maint = DuckLakeMaintenance(fragmented_conn)
+
+    _, _, processed, created = maint.merge_files()
+
+    assert (processed, created) == (6, 1)
+    assert _active_files(fragmented_conn) == 1
+    assert fragmented_conn.execute("SELECT COUNT(*) FROM fact_table").fetchone()[0] == (
+        6000
+    )
+
+
+# Test qu'un seuil bas exclut les fichiers plus petits que lui
+def test_merge_files_min_file_size_excludes_smaller_files(
+    fragmented_conn: duckdb.DuckDBPyConnection,
+) -> None:
+    """Test that min_file_size is a lower bound: smaller files are left alone.
+
+    Args:
+        fragmented_conn: Catalog whose table is split into six small files.
+    """
+    maint = DuckLakeMaintenance(fragmented_conn)
+
+    _, _, processed, _ = maint.merge_files(min_file_size=10**12)
+
+    assert processed == 0
+    assert _active_files(fragmented_conn) == 6
+
+
+# Test que la borne haute par défaut est la taille cible du catalogue
+def test_merge_files_default_max_is_target_file_size(
+    fragmented_conn: duckdb.DuckDBPyConnection,
+) -> None:
+    """Test that the default upper bound follows the catalog's target_file_size.
+
+    Args:
+        fragmented_conn: Catalog whose table is split into six small files.
+    """
+    maint = DuckLakeMaintenance(fragmented_conn)
+    fragmented_conn.execute("CALL db.set_option('target_file_size', '2MB')")
+    assert maint._target_file_size() == 2_000_000
+
+
+# Test que compact fusionne les petits fichiers après une écriture
+def test_compact_merges_small_files(
+    fragmented_conn: duckdb.DuckDBPyConnection,
+) -> None:
+    """Test that the post-write compaction actually merges the small files.
+
+    Args:
+        fragmented_conn: Catalog whose table is split into six small files.
+    """
+    counters = DuckLakeMaintenance(fragmented_conn).compact()
+    assert counters["merge_files_processed"] == 6
+    assert _active_files(fragmented_conn) == 1
+
+
+# Test que les procédures à l'échelle du catalogue refusent un schéma positionnel
+def test_catalog_wide_procedures_take_no_schema(maint: Any) -> None:
+    """Test that expire_snapshots/cleanup_files reject a positional schema.
+
+    They act on the whole catalog: a schema argument would be misleading.
+
+    Args:
+        maint: DuckLakeMaintenance fixture.
+    """
+    with pytest.raises(TypeError):
+        maint.expire_snapshots("main")
+    with pytest.raises(TypeError):
+        maint.cleanup_files("main")

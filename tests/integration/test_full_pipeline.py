@@ -122,7 +122,6 @@ def test_build_then_update(
     updater = DatabaseUpdater(
         connection=built_ducklake_schema,
         categorical_threshold=4,
-        enable_validation=True,
     )
     result = updater.update_database(new_data, use_transaction=False)
     assert result is True
@@ -184,7 +183,7 @@ def test_build_then_delete_rows(
     # Suppression de la ligne avec id=1
     deleter = DatabaseDeleter(
         connection=built_ducklake_schema,
-        enable_validation=False,  # Désactivé pour simplifier le test d'intégration
+        audit_level=None,  # Désactivé pour simplifier le test d'intégration
         auto_cleanup=False,
     )
     deleted = deleter.delete_rows(filters=[("id", "=", 1)], use_transaction=False)
@@ -226,7 +225,7 @@ def test_build_then_audit(built_ducklake_schema: duckdb.DuckDBPyConnection) -> N
     """
     # Audit de la base fraîchement construite
     auditor = DatabaseAuditor(connection=built_ducklake_schema)
-    report = auditor.validate_database(ValidationLevel.STANDARD)
+    report = auditor.validate_database(ValidationLevel.BASIC)
 
     # Vérification que le rapport est bien retourné
     from dt_ducklake_manager.maintenance import ValidationReport
@@ -287,7 +286,7 @@ def test_full_pipeline_build_update_delete_audit(sample_df: pl.DataFrame) -> Non
         }
     )
     updater = DatabaseUpdater(
-        connection=conn, categorical_threshold=4, enable_validation=False
+        connection=conn, categorical_threshold=4, audit_level=None
     )
     update_result = updater.update_database(new_data, use_transaction=False)
     assert update_result is True
@@ -301,7 +300,7 @@ def test_full_pipeline_build_update_delete_audit(sample_df: pl.DataFrame) -> Non
     # Étape 3 : Suppression d'une ligne
     deleter = DatabaseDeleter(
         connection=conn,
-        enable_validation=False,
+        audit_level=None,
         auto_cleanup=False,
     )
     deleted = deleter.delete_rows(filters=[("id", "=", 200)], use_transaction=False)
@@ -372,7 +371,7 @@ def test_multi_schema_pipeline_in_single_catalog() -> None:
     updater = DatabaseUpdater(
         connection=conn,
         categorical_threshold=4,
-        enable_validation=False,
+        audit_level=None,
         schema="predictions",
     )
     assert updater.update_database(new_pred, use_transaction=False) is True
@@ -385,7 +384,7 @@ def test_multi_schema_pipeline_in_single_catalog() -> None:
     # Étape 3 : suppression dans 'shapley' uniquement
     deleter = DatabaseDeleter(
         connection=conn,
-        enable_validation=False,
+        audit_level=None,
         auto_cleanup=False,
         schema="shapley",
     )

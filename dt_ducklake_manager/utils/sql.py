@@ -34,6 +34,32 @@ def quote_ident(name: str) -> str:
     return '"' + str(name).replace('"', '""') + '"'
 
 
+# Fonction de mise entre apostrophes d'un littéral de chaîne SQL
+def quote_literal(value: str) -> str:
+    """
+    Quote a SQL string literal following the SQL standard.
+
+    Wraps ``value`` in single quotes and doubles any embedded single quote, so that
+    a value that cannot be passed as a bound parameter (arguments of ``ATTACH``,
+    catalog and table names given to the ``ducklake_*`` table functions) can be
+    interpolated into a statement without breaking it.
+
+    Args:
+        value (str): Raw value (e.g. a path, a table name or a timestamp).
+
+    Returns:
+        str: The single-quoted literal.
+
+    Examples:
+        >>> quote_literal("data/")
+        "'data/'"
+        >>> quote_literal("it's")
+        "'it''s'"
+    """
+    # Doublage des apostrophes internes puis encadrement (norme SQL)
+    return "'" + str(value).replace("'", "''") + "'"
+
+
 # Fonction de résolution de l'alias de catalogue effectif d'une connexion
 def resolve_catalog(
     conn: "duckdb.DuckDBPyConnection | None", catalog_alias: str | None
@@ -217,6 +243,30 @@ class SchemaScoped:
             return 0
         return int(row[0]) if row is not None else 0
 
+    # Méthode de lecture des types physiques des colonnes d'une table du schéma
+    def _physical_column_types(self, table: str = "fact_table") -> dict[str, str]:
+        """Read the physical SQL type of every column of a table of this schema.
+
+        The type is the one DuckDB reports for the stored column (``DESCRIBE``), with
+        its parameters: ``DECIMAL(10,2)``, not ``DECIMAL``. This is the value recorded
+        in ``metadata.sql_type``.
+
+        Args:
+            table: Bare table name. Defaults to ``'fact_table'``.
+
+        Returns:
+            dict[str, str]: Column name -> physical SQL type, in column order.
+
+        Raises:
+            duckdb.Error: If the table cannot be described.
+
+        Examples:
+            >>> manager._physical_column_types()["score"]
+            'DECIMAL(10,2)'
+        """
+        rows = self.conn.execute(f"DESCRIBE {self._qualified(table)}").fetchall()
+        return {str(row[0]): str(row[1]) for row in rows}
+
 
 # Fonction de suppression des duplicats d'un jeu de données
 def remove_dataframe_duplicates(
@@ -278,78 +328,6 @@ def remove_dataframe_duplicates(
         )
 
     return df_cleaned
-
-
-# Fonction de construction d'une requête SQL de suppression des duplicats en base
-def build_database_duplicate_removal_query(
-    columns_to_check: list[str],
-    keep: Literal["any", "none", "first", "last"],
-    table_name: str = "fact_table",
-) -> str:
-    """
-    Build SQL query for removing duplicates from a database table.
-
-    The column identifiers, which appear several times in the generated query
-    (``WHERE``, ``SELECT``, ``GROUP BY`` / ``PARTITION BY``), are quoted via
-    :func:`quote_ident` so every occurrence stays consistent. ``table_name`` is
-    used verbatim as a table reference: the caller is expected to pass an already
-    schema-/catalog-qualified name (e.g. from a manager's ``_qualified``).
-
-    Args:
-        columns_to_check (list): List of column names to check for duplicates
-        keep (Literal['any', 'none', 'first', 'last']): Strategy for keeping duplicates
-        table_name (str): Table reference to deduplicate (used as-is).
-
-    Returns:
-        str: SQL DELETE query for removing duplicates
-
-    Examples:
-        >>> query = build_database_duplicate_removal_query(['col1', 'col2'], 'first')
-        >>> 'DELETE FROM fact_table' in query
-        True
-    """
-    if not columns_to_check:
-        return ""
-
-    # Référence de table utilisée telle quelle (qualification à la charge de l'appelant)
-    table_ref = table_name
-    # Mise entre guillemets des colonnes issues des données (occurrences multiples)
-    quoted_columns = [quote_ident(col) for col in columns_to_check]
-
-    # Construction de la chaîne des colonnes
-    columns_str = ", ".join(quoted_columns)
-
-    if keep == "none":
-        # Suppression de TOUTES les occurrences des clés en doublon.
-        # On identifie les groupes ayant plus d'une ligne par leur valeur de colonnes.
-        return f"""
-        DELETE FROM {table_ref}
-        WHERE ({columns_str}) IN (
-            SELECT {columns_str}
-            FROM {table_ref}
-            GROUP BY {columns_str}
-            HAVING COUNT(*) > 1
-        )
-        """
-    else:
-        # Conservation du premier ou dernier doublon selon l'ordre de scan DuckLake.
-        # rowid est utilisé comme discriminant au sein d'une seule instruction DML :
-        # il est stable dans ce contexte (file + row-group offset Parquet, cohérent
-        # pour toute la durée du DELETE). Il n'est pas supposé stable entre sessions.
-        # 'any' est traité comme 'first' (conservation d'une occurrence arbitraire).
-        order_clause = "ASC" if keep in ("first", "any") else "DESC"
-        return f"""
-        DELETE FROM {table_ref}
-        WHERE rowid NOT IN (
-            SELECT rowid FROM (
-                SELECT rowid, ROW_NUMBER() OVER (
-                    PARTITION BY {columns_str}
-                    ORDER BY rowid {order_clause}
-                ) as rn
-                FROM {table_ref}
-            ) WHERE rn = 1
-        )
-        """
 
 
 # Méthode auxiliaire de création d'un filtre de conjonction

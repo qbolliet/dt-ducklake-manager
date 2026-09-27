@@ -56,8 +56,9 @@ class OperationReport:
 
     Attributes:
         operation (str): Operation kind, e.g. ``'build'``, ``'update'``,
-            ``'add_columns'``, ``'delete_columns'``, ``'delete_rows'``,
-            ``'maintenance'``.
+            ``'add_columns'``, ``'update_value_labels'``, ``'delete_columns'``,
+            ``'delete_rows'``, ``'recluster'``, ``'maintenance'``,
+            ``'restore_snapshot'``.
         schema (str): DuckLake schema the operation targeted.
         run_id (str | None): Caller-supplied run identifier, also recorded in the
             DuckLake commit message (``ducklake_set_commit_message``) when a real

@@ -15,24 +15,7 @@ import pytest
 
 # Module à tester
 from dt_ducklake_manager.schema import DuckLakeTablesBuilder
-
-# ---------------------------------------------------------------------------
-# Fonctions auxiliaires
-# ---------------------------------------------------------------------------
-
-
-def _ducklake_available() -> bool:
-    """Vérifie si l'extension DuckLake est disponible dans l'environnement de test."""
-    try:
-        import duckdb as _ddb
-
-        conn = _ddb.connect(":memory:")
-        conn.execute("INSTALL ducklake; LOAD ducklake;")
-        conn.close()
-        return True
-    except Exception:
-        return False
-
+from tests.utils.ducklake import requires_ducklake
 
 # ---------------------------------------------------------------------------
 # Fixture locale
@@ -483,9 +466,7 @@ def test_query_nonexistent_table(
 
 
 # Test de la création de la fact table avec partitionnement
-@pytest.mark.skipif(
-    not _ducklake_available(), reason="Extension ducklake non disponible"
-)
+@requires_ducklake
 def test_create_duckdb_fact_table_with_partition_by(sample_df: pl.DataFrame) -> None:
     """Test that create_duckdb_fact_table accepts partition_by without error.
 
@@ -520,9 +501,7 @@ def test_create_duckdb_fact_table_with_partition_by(sample_df: pl.DataFrame) -> 
 
 
 # Test de build_schema avec partition_by
-@pytest.mark.skipif(
-    not _ducklake_available(), reason="Extension ducklake non disponible"
-)
+@requires_ducklake
 def test_build_schema_with_partition_by(sample_df: pl.DataFrame) -> None:
     """Test that build_schema propagates partition_by to create_duckdb_fact_table.
 
@@ -793,6 +772,71 @@ def test_build_schema_hierarchy_cycle_raises(sample_df: pl.DataFrame) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Tests des colonnes de libellés (value_labels / label_for, §2.6)
+# ---------------------------------------------------------------------------
+
+
+# Test que build_schema écrit la paire code/libellé déclarée via value_labels
+def test_build_schema_writes_value_labels(sample_df: pl.DataFrame) -> None:
+    """Test that value_labels passed to the constructor reach the metadata table.
+
+    ``status`` (label) -> ``category`` (code) respects the functional dependency
+    on ``sample_df`` (each category maps to a single status).
+
+    Args:
+        sample_df: Sample polars DataFrame.
+    """
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        builder = DuckLakeTablesBuilder(
+            sample_df,
+            categorical_threshold=4,
+            primary_keys=["id"],
+            value_labels={"status": "category"},
+        )
+
+    builder.build_schema()
+
+    row = builder.conn.execute(
+        "SELECT label_for FROM metadata WHERE name = 'status'"
+    ).fetchone()
+    assert row[0] == "category"
+
+
+# Test que build_schema propage une violation de la dépendance fonctionnelle
+def test_build_schema_value_label_dependency_violation_raises(
+    sample_df: pl.DataFrame,
+) -> None:
+    """Test that a functional dependency violation aborts build_schema, writing
+    nothing.
+
+    ``category`` (label) -> ``status`` (code) violates the dependency on
+    ``sample_df``: ``status='active'`` maps to both ``category='A'`` and
+    ``category='C'``.
+
+    Args:
+        sample_df: Sample polars DataFrame.
+    """
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        builder = DuckLakeTablesBuilder(
+            sample_df,
+            categorical_threshold=4,
+            primary_keys=["id"],
+            value_labels={"category": "status"},
+        )
+
+    with pytest.raises(ValueError, match="Functional dependency"):
+        builder.build_schema()
+
+    # Rien n'a été écrit, y compris la table metadata (déjà créée avant le contrôle)
+    tables = builder.conn.execute(
+        "SELECT table_name FROM information_schema.tables WHERE table_schema = 'main'"
+    ).fetchall()
+    assert tables == []
+
+
+# ---------------------------------------------------------------------------
 # Tests de cluster_by (§5.3)
 # ---------------------------------------------------------------------------
 
@@ -916,10 +960,7 @@ def test_create_duckdb_dataset_metadata_table_with_cluster_by(
 
 # Test que le tri physique produit des fichiers Parquet dont les plages ne se
 # recouvrent pas (élagage par fichier, §5.3)
-@pytest.mark.skipif(
-    not _ducklake_available(),
-    reason="Extension ducklake non disponible dans cet environnement",
-)
+@requires_ducklake
 def test_build_schema_cluster_by_produces_non_overlapping_files(
     tmp_path: Path,
 ) -> None:
@@ -935,8 +976,8 @@ def test_build_schema_cluster_by_produces_non_overlapping_files(
     files non-monotonically (measured, annexe A — the same effect documented for
     ``recluster``); ``SET threads = 1`` around the write is the same technique the
     specification itself uses to observe the physical effect deterministically. It
-    is applied only in this test, not in production code (single-threaded writes
-    are prompt 9's ``recluster`` concern, not this one).
+    is applied only in this test, not in production code (only
+    ``DuckLakeMaintenance.recluster`` writes single-threaded).
 
     Args:
         tmp_path: pytest temporary directory.
