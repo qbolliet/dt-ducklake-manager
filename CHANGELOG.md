@@ -4,6 +4,28 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0](https://github.com/qbolliet/dt-ducklake-manager/compare/v0.3.1...v0.4.0) (2026-09-27)
+
+
+### Features
+
+* label_for logic ([fb84f9e](https://github.com/qbolliet/dt-ducklake-manager/commit/fb84f9e85485c97778ab3b57a19efd84e5c31657))
+
+
+### Bug Fixes
+
+* record physical SQL types and UTC timestamps in the metadata contract ([17b2ec4](https://github.com/qbolliet/dt-ducklake-manager/commit/17b2ec4664bd0600013f885341da25b8f209b390))
+* update + delete bugs + simplify maintenance logic ([fbe766b](https://github.com/qbolliet/dt-ducklake-manager/commit/fbe766b8fe7873e73224abb9a9817dd80168dd7e))
+
+
+### Documentation
+
+* label for behavior in database builder ([9c29946](https://github.com/qbolliet/dt-ducklake-manager/commit/9c29946f2497ea3faec0ae4b4d359f6063effed7))
+* label logic ([82fae86](https://github.com/qbolliet/dt-ducklake-manager/commit/82fae869a4184d81c3dc9ccf7ee24e2d3eb200cf))
+* label specification + prompts ([90ce954](https://github.com/qbolliet/dt-ducklake-manager/commit/90ce9549c912f1d66249b094811521c7b6efa08a))
+* remove specification markdowns ([71d8fc9](https://github.com/qbolliet/dt-ducklake-manager/commit/71d8fc9d275a2d5afa783d495e0aecb9a36d9a7f))
+* review example notebooks ([6b196a5](https://github.com/qbolliet/dt-ducklake-manager/commit/6b196a5ce7773306ba16f880b1c11ac031391305))
+
 ## [0.3.1](https://github.com/qbolliet/dt-ducklake-manager/compare/v0.3.0...v0.3.1) (2026-09-18)
 
 
