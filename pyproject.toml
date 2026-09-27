@@ -1,6 +1,6 @@
 [project]
 name = "dt-ducklake-manager"
-version = "0.3.1"
+version = "0.4.0"
 description = "DuckDB Database for dashboard template"
 authors = [{ name = "Quentin Bolliet", email = "bolliet.quentin@gmail.com" }]
 requires-python = ">=3.13,<4"
