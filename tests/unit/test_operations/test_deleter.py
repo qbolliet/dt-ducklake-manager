@@ -1,5 +1,6 @@
 # Importation des modules
 # Modules de base
+import inspect
 import os
 import warnings
 
@@ -866,3 +867,10 @@ def test_deleter_has_no_removed_api(deleter: DatabaseDeleter, name: str) -> None
         name: Removed attribute name.
     """
     assert not hasattr(deleter, name)
+
+
+# Test que la compaction après suppression est désactivée par défaut
+def test_delete_rows_compact_after_update_defaults_to_false() -> None:
+    """Test that delete_rows skips compaction unless explicitly asked."""
+    signature = inspect.signature(DatabaseDeleter.delete_rows)
+    assert signature.parameters["compact_after_update"].default is False

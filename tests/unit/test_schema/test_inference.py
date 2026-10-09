@@ -1,7 +1,7 @@
 # Importation des modules
 # Modules de base
 import warnings
-from typing import Any
+from typing import Any, Literal
 
 import narwhals as nw
 import polars as pl
@@ -11,6 +11,7 @@ import pytest
 
 # Modules du package à tester
 from dt_ducklake_manager.schema import SchemaBuilder
+from dt_ducklake_manager.utils import UI_METADATA_FIELDS
 
 # ---------------------------------------------------------------------------
 # Fixture locale
@@ -1078,3 +1079,43 @@ def test_value_labels_two_label_columns_for_one_code() -> None:
 
     assert metadata.filter(nw.col("name") == "nc8_libelle_fr")["label_for"][0] == "nc8"
     assert metadata.filter(nw.col("name") == "nc8_libelle_en")["label_for"][0] == "nc8"
+
+
+# ---------------------------------------------------------------------------
+# Tests de la nullité des champs d'UI selon le backend d'entrée
+# ---------------------------------------------------------------------------
+
+
+# Test que les champs d'UI non renseignés restent NULL quel que soit le backend
+@pytest.mark.parametrize("backend", ["pandas", "polars", "pyarrow"])
+def test_metadata_ui_fields_stay_null_for_every_backend(
+    backend: Literal["pandas", "polars", "pyarrow"],
+) -> None:
+    """Test that unset UI metadata fields are real NULLs, never the text 'None'.
+
+    Regression test: under pandas 2.x, casting an ``object`` column to String goes
+    through ``astype(str)`` and turned every ``None`` into the literal ``'None'``,
+    which later broke ``update_database`` (``label_for = 'None'`` was read as a
+    column name).
+
+    Args:
+        backend: Native backend used to build the input DataFrame.
+    """
+    data = {"id": [1, 2, 3], "category": ["A", "B", "A"], "value": [0.1, 0.2, 0.3]}
+    df: Any = nw.from_dict(data, backend=backend).to_native()
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        builder = SchemaBuilder(df, categorical_threshold=4, primary_keys=["id"])
+    metadata = builder.create_metadata_table(column_metadata={"value": {"unit": "EUR"}})
+
+    # Vérification : aucune chaîne 'None' et des NULL là où rien n'est renseigné
+    for field in UI_METADATA_FIELDS:
+        values = metadata[field].to_list()
+        assert "None" not in values
+        assert metadata.schema[field] == nw.String
+    unit_is_null = dict(
+        zip(metadata["name"].to_list(), metadata["unit"].is_null().to_list())
+    )
+    assert unit_is_null == {"id": True, "category": True, "value": False}
+    assert metadata.filter(nw.col("name") == "value")["unit"].to_list() == ["EUR"]
+    assert metadata["label_for"].is_null().all()
