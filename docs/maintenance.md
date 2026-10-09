@@ -115,7 +115,7 @@ else. The build accepts `partition_by`; on an existing table:
 
 ```python
 maintenance.set_partitioned_by("fact_table", partition_by=["model_version"])
-maintenance.reset_partitioned_by("fact_table")              # future writes only
+maintenance.reset_partitioned_by("fact_table")  # future writes only
 maintenance.repartition("fact_table", partition_by=["year(date)"])  # + rewrite
 ```
 
@@ -226,7 +226,9 @@ maintenance.delete_orphaned_files(dry_run=False)
 
 ```python
 recovery = DatabaseRecoveryManager(conn)
-print(recovery.list_ducklake_snapshots())  # snapshot_id, author (run_id), commit_message, commit_extra_info, ...
+print(
+    recovery.list_ducklake_snapshots()
+)  # snapshot_id, author (run_id), commit_message, commit_extra_info, ...
 ```
 
 See [Traceability of runs](schema.md#traceability-of-runs) for how `run_id` and

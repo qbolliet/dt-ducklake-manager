@@ -196,7 +196,7 @@ that was itself committed:
 
 ```python
 recovery = DatabaseRecoveryManager(conn)
-print(recovery.list_ducklake_snapshots())          # pick a snapshot_id (author = run_id)
+print(recovery.list_ducklake_snapshots())  # pick a snapshot_id (author = run_id)
 recovery.restore_snapshot(17, run_id="rollback-run-42")
 ```
 

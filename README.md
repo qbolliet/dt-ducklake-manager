@@ -63,12 +63,14 @@ connection = DuckLakeConnector(
 
 # 1. Build the schema from an initial dataset, with a column hierarchy
 # (commune -> region) and UI metadata
-df = pd.DataFrame({
-    "date": ["2026-01-01", "2026-01-01", "2026-01-02"],
-    "region": ["Île-de-France", "Bretagne", "Île-de-France"],
-    "commune": ["Paris", "Rennes", "Boulogne"],
-    "score": [0.9, 0.7, 0.5],
-})
+df = pd.DataFrame(
+    {
+        "date": ["2026-01-01", "2026-01-01", "2026-01-02"],
+        "region": ["Île-de-France", "Bretagne", "Île-de-France"],
+        "commune": ["Paris", "Rennes", "Boulogne"],
+        "score": [0.9, 0.7, 0.5],
+    }
+)
 builder = DuckLakeTablesBuilder(
     df,
     categorical_threshold=200,
@@ -85,10 +87,15 @@ builder.build_schema(
 
 # 2. Update the database with new observations (upsert), adding a new
 # column on the fly
-df_new = pd.DataFrame({
-    "date": ["2026-01-02"], "region": ["Bretagne"], "commune": ["Rennes"],
-    "score": [0.8], "rank": [1],
-})
+df_new = pd.DataFrame(
+    {
+        "date": ["2026-01-02"],
+        "region": ["Bretagne"],
+        "commune": ["Rennes"],
+        "score": [0.8],
+        "rank": [1],
+    }
+)
 updater = DatabaseUpdater(connection=connection)
 updater.update_database(
     update_df=df_new,
@@ -141,7 +148,10 @@ if PRODUCTION:
     # Update job (read-write) — credentials passed once to build a DuckDB secret
     conn = DuckLakeConnector.from_postgres(
         data_path="s3://my-bucket/data/",
-        dbname="ducklake", host="db.internal", user="app", password="***",
+        dbname="ducklake",
+        host="db.internal",
+        user="app",
+        password="***",
     ).connect()
     # The GraphQL API repository connects read-only to the SAME catalog + data_path:
     #   DuckLakeConnector.from_postgres(

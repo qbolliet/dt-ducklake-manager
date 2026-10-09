@@ -145,7 +145,8 @@ Declare a hierarchy at build time:
 
 ```python
 builder = DuckLakeTablesBuilder(
-    df, primary_keys=["date", "commune"],
+    df,
+    primary_keys=["date", "commune"],
     hierarchies={"commune": "departement", "departement": "region"},
     connection=connection,
 )
@@ -200,7 +201,8 @@ Declare a code/label pair at build time:
 
 ```python
 builder = DuckLakeTablesBuilder(
-    df, primary_keys=["date", "nc8"],
+    df,
+    primary_keys=["date", "nc8"],
     hierarchies={"nc8": "nc6"},
     value_labels={"nc8_libelle_fr": "nc8", "nc8_libelle_en": "nc8"},
     connection=connection,
@@ -360,7 +362,8 @@ text to display, linked by `label_for`:
 
 ```python
 builder = DuckLakeTablesBuilder(
-    df, primary_keys=["date", "severity_rank"],
+    df,
+    primary_keys=["date", "severity_rank"],
     value_labels={"severity": "severity_rank"},
     connection=connection,
 )
@@ -406,7 +409,9 @@ No technical column is ever added to the fact table to answer "which run
 produced this state?" — the question is answered by reading the snapshots:
 
 ```python
-conn.execute("SELECT snapshot_id, author, commit_message, commit_extra_info FROM ducklake_snapshots('db')").fetchall()
+conn.execute(
+    "SELECT snapshot_id, author, commit_message, commit_extra_info FROM ducklake_snapshots('db')"
+).fetchall()
 # or, through the package:
 DatabaseRecoveryManager(conn).list_ducklake_snapshots()
 ```
