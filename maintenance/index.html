@@ -21,7 +21,7 @@
       
       
       <link rel="icon" href="../assets/logo.svg">
-      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.6">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
     
     
       
@@ -29,7 +29,7 @@
       
     
     
-      <link rel="stylesheet" href="../assets/stylesheets/main.484c7ddc.min.css">
+      <link rel="stylesheet" href="../assets/stylesheets/main.ec1eaa64.min.css">
       
         
         <link rel="stylesheet" href="../assets/stylesheets/palette.ab4e12ef.min.css">
@@ -2211,11 +2211,14 @@ old files stay reachable through time travel. <em>Expire</em> and <em>cleanup</e
 happen in planned maintenance, because they are what actually destroy
 recoverability and free space.</p>
 <p>The write operations (<code>DatabaseUpdater.update_database</code>,
-<code>DatabaseUpdater.add_columns</code>, <code>DatabaseDeleter.delete_rows</code>) call only the
-safe half of this cycle automatically, right after their own commit, through
+<code>DatabaseUpdater.add_columns</code>, <code>DatabaseUpdater.update_value_labels</code>,
+<code>DatabaseDeleter.delete_rows</code>) can run the safe half of this cycle right after
+their own commit, through
 <a class="autorefs autorefs-internal" title="compact" href="../api/maintenance/DuckLakeProcedures/#dt_ducklake_manager.maintenance.procedures.DuckLakeProcedures.compact"><code>DuckLakeMaintenance.compact</code></a>
 (<code>merge_files</code> up to the catalog's <code>target_file_size</code>, then
-<code>rewrite_data_files</code>; <code>compact_after_update=True</code> by default). On a
+<code>rewrite_data_files</code>), when called with <code>compact_after_update=True</code> (opt-in:
+the default is <code>False</code>, so a burst of writes does not pay one compaction per
+call — compact once at the end instead). On a
 connection with no DuckLake catalog attached (in-memory tests), the compaction
 is skipped. They never call <code>expire_snapshots</code>, <code>cleanup_files</code> or
 <code>delete_orphaned_files</code> — those are only ever triggered by a deliberate,
@@ -2386,8 +2389,8 @@ whether it is worth going further:</p>
 </span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="nb">print</span><span class="p">(</span><span class="n">report</span><span class="o">.</span><span class="n">summary</span><span class="p">())</span>
 </span></code></pre></div>
 <h3 id="after-a-massive-deletion">After a massive deletion</h3>
-<p>Same as above — <code>delete_rows(..., compact_after_update=True)</code> already merged
-and rewrote. If the deletion also emptied every value of some columns,
+<p>Call <code>delete_rows(..., compact_after_update=True)</code> so it merges and rewrites
+right after the deletion (or run <code>compact</code> afterwards). If the deletion also emptied every value of some columns,
 <code>delete_rows</code> drops them automatically (<code>perform_cleanup</code>, default follows
 <code>auto_cleanup</code>); check <code>report.columns_dropped</code>.</p>
 <h3 id="after-n-updates-file-range-overlap">After N updates (file-range overlap)</h3>
@@ -2534,7 +2537,7 @@ real DuckLake catalog attached, unknown table) rather than raising.</p>
       <script id="__config" type="application/json">{"annotate": null, "base": "..", "features": ["content.tabs.link", "content.code.annotate", "content.code.copy", "navigation.sections", "navigation.path"], "search": "../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
     
     
-      <script src="../assets/javascripts/bundle.79ae519e.min.js"></script>
+      <script src="../assets/javascripts/bundle.d7400e89.min.js"></script>
       
         <script src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/2.7.4/MathJax.js?config=TeX-AMS-MML_HTMLorMML"></script>
       
