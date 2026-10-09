@@ -244,7 +244,7 @@ def test_maintenance_no_effect_explicit_zero(real_catalog_conn: Any) -> None:
     # rien avoir à réécrire (seuil de suppression jamais atteint).
     update_df = pl.DataFrame({"id": [10], "category": ["A"], "value": [10.0]})
 
-    success = updater.update_database(update_df)
+    success = updater.update_database(update_df, compact_after_update=True)
 
     assert success is True
     report = updater.last_report

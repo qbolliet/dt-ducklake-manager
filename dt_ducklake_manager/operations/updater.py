@@ -136,7 +136,7 @@ class DatabaseUpdater(BaseSchemaManager):
         keep: Literal["any", "none", "first", "last"] = "none",
         use_batch_processing: bool | None = None,
         use_transaction: bool = True,
-        compact_after_update: bool = True,
+        compact_after_update: bool = False,
         allow_new_columns: bool = False,
         column_metadata: dict[str, dict[str, str]] | None = None,
         run_id: str | None = None,
@@ -178,7 +178,7 @@ class DatabaseUpdater(BaseSchemaManager):
                 autocommit mode and a failure leaves partial state behind.
             compact_after_update: Whether to run DuckLake compaction (merge small
                 files and rewrite delete files) right after a successful update.
-                Defaults to True.
+                Defaults to False.
             allow_new_columns: Whether a column of ``update_df`` absent from the
                 fact table may be added. Defaults to False: an unknown column then
                 raises ``ValueError``. When True, each new column is added (SQL type
@@ -692,7 +692,7 @@ class DatabaseUpdater(BaseSchemaManager):
         df: IntoDataFrame,
         column_metadata: dict[str, dict[str, str]] | None = None,
         overwrite: bool = False,
-        compact_after_update: bool = True,
+        compact_after_update: bool = False,
         run_id: str | None = None,
         commit_message: str | None = None,
         commit_info: dict[str, Any] | None = None,
@@ -737,7 +737,7 @@ class DatabaseUpdater(BaseSchemaManager):
                 column then raises ``ValueError`` instead.
             compact_after_update: Whether to run DuckLake compaction
                 (``rewrite_data_files`` with a low ``delete_threshold``) after a
-                successful commit. Defaults to True.
+                successful commit. Defaults to False.
             run_id: Run identifier recorded on the resulting DuckLake snapshot
                 (``ducklake_set_commit_message``). Ignored (skipped with a DEBUG
                 log) on a connection with no real DuckLake catalog attached.
@@ -940,7 +940,7 @@ class DatabaseUpdater(BaseSchemaManager):
         run_id: str | None = None,
         commit_message: str | None = None,
         commit_info: dict[str, Any] | None = None,
-        compact_after_update: bool = True,
+        compact_after_update: bool = False,
     ) -> OperationReport:
         """
         Replace the label of one or more codes of a code/label column pair.
@@ -971,7 +971,7 @@ class DatabaseUpdater(BaseSchemaManager):
             commit_info: Extra JSON-serializable fields merged into the commit's
                 ``extra_info``.
             compact_after_update: Whether to run DuckLake compaction
-                (``rewrite_data_files``) after a successful commit. Defaults to True.
+                (``rewrite_data_files``) after a successful commit. Defaults to False.
 
         Returns:
             OperationReport: report describing the rows rewritten

@@ -63,11 +63,14 @@ happen in planned maintenance, because they are what actually destroy
 recoverability and free space.
 
 The write operations (`DatabaseUpdater.update_database`,
-`DatabaseUpdater.add_columns`, `DatabaseDeleter.delete_rows`) call only the
-safe half of this cycle automatically, right after their own commit, through
+`DatabaseUpdater.add_columns`, `DatabaseUpdater.update_value_labels`,
+`DatabaseDeleter.delete_rows`) can run the safe half of this cycle right after
+their own commit, through
 [`DuckLakeMaintenance.compact`][dt_ducklake_manager.maintenance.procedures.DuckLakeProcedures.compact]
 (`merge_files` up to the catalog's `target_file_size`, then
-`rewrite_data_files`; `compact_after_update=True` by default). On a
+`rewrite_data_files`), when called with `compact_after_update=True` (opt-in:
+the default is `False`, so a burst of writes does not pay one compaction per
+call — compact once at the end instead). On a
 connection with no DuckLake catalog attached (in-memory tests), the compaction
 is skipped. They never call `expire_snapshots`, `cleanup_files` or
 `delete_orphaned_files` — those are only ever triggered by a deliberate,
@@ -187,8 +190,8 @@ print(report.summary())
 
 ### After a massive deletion
 
-Same as above — `delete_rows(..., compact_after_update=True)` already merged
-and rewrote. If the deletion also emptied every value of some columns,
+Call `delete_rows(..., compact_after_update=True)` so it merges and rewrites
+right after the deletion (or run `compact` afterwards). If the deletion also emptied every value of some columns,
 `delete_rows` drops them automatically (`perform_cleanup`, default follows
 `auto_cleanup`); check `report.columns_dropped`.
 

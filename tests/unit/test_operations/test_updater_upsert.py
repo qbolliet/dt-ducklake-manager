@@ -559,7 +559,7 @@ def test_update_compaction_merges_small_files(real_catalog: Any) -> None:
     assert files_before >= 4
 
     batch = pl.DataFrame({"id": [200], "category": ["B"], "value": [2.0]})
-    assert updater.update_database(batch)
+    assert updater.update_database(batch, compact_after_update=True)
     report = updater.last_report
     assert report is not None
     assert report.maintenance["merge_files_processed"] > 0

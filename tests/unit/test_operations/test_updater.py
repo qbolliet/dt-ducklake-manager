@@ -1,5 +1,6 @@
 # Importation des modules
 # Modules de base
+import inspect
 import logging
 import os
 import warnings
@@ -495,7 +496,7 @@ def test_update_database_compacts_on_real_ducklake_catalog(tmp_path: Any) -> Non
     The in-memory ``built_ducklake_schema`` fixture used elsewhere in this file
     can't exercise ``DuckLakeMaintenance.compact`` for real: DuckLake table functions
     need an actually attached catalog. This test attaches a real one and checks
-    that ``update_database`` (with ``compact_after_update=True``, the default)
+    that ``update_database`` (with ``compact_after_update=True``, passed explicitly)
     still returns True and the new rows land — i.e. the ``DuckLakeMaintenance``
     wiring in ``DuckLakeMaintenance.compact`` doesn't break the write path.
 
@@ -527,7 +528,10 @@ def test_update_database_compacts_on_real_ducklake_catalog(tmp_path: Any) -> Non
 
     assert (
         updater.update_database(
-            update_df=update_df, keep="first", use_transaction=False
+            update_df=update_df,
+            keep="first",
+            use_transaction=False,
+            compact_after_update=True,
         )
         is True
     )
@@ -1484,3 +1488,58 @@ def test_add_columns_logs_rows_left_null(updater: DatabaseUpdater, caplog: Any) 
     assert any(
         "3 fact_table row(s) left NULL" in r.getMessage() for r in caplog.records
     )
+
+
+# ---------------------------------------------------------------------------
+# Tests de non-régression : construction depuis pandas et défaut de compaction
+# ---------------------------------------------------------------------------
+
+
+# Test qu'un schéma construit depuis pandas accepte un update_database ultérieur
+def test_update_database_after_pandas_build() -> None:
+    """Test that a schema built from a pandas DataFrame can then be updated.
+
+    Regression test: under pandas 2.x the metadata UI fields were written as the
+    text ``'None'`` instead of NULL, so the next ``update_database`` failed with
+    ``Binder Error: Table "f" does not have a column named "None"``.
+    """
+    pd = pytest.importorskip("pandas")
+    df = pd.DataFrame(
+        {"id": [1, 2, 3], "category": ["A", "B", "A"], "value": [0.1, 0.2, 0.3]}
+    )
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        builder = DuckLakeTablesBuilder(
+            df, categorical_threshold=4, primary_keys=["id"]
+        )
+    builder.build_schema()
+    conn = builder.conn
+
+    # Vérification : aucun champ d'UI ne contient la chaîne 'None'
+    none_text = conn.execute(
+        "SELECT COUNT(*) FROM metadata WHERE 'None' IN"
+        " (parent_name, label_for, unit, display_format, family, description,"
+        " default_aggregation)"
+    ).fetchone()[0]
+    assert none_text == 0
+
+    updater = DatabaseUpdater(connection=conn, categorical_threshold=4)
+    update_df = pd.DataFrame(
+        {"id": [3, 4], "category": ["C", "B"], "value": [1.0, 2.0]}
+    )
+    assert updater.update_database(update_df=update_df) is True
+    assert conn.execute("SELECT COUNT(*) FROM fact_table").fetchone()[0] == 4
+
+
+# Test que la compaction après écriture est désactivée par défaut
+@pytest.mark.parametrize(
+    "method", ["update_database", "add_columns", "update_value_labels"]
+)
+def test_compact_after_update_defaults_to_false(method: str) -> None:
+    """Test that every DatabaseUpdater write method skips compaction by default.
+
+    Args:
+        method: Name of the DatabaseUpdater write method.
+    """
+    signature = inspect.signature(getattr(DatabaseUpdater, method))
+    assert signature.parameters["compact_after_update"].default is False

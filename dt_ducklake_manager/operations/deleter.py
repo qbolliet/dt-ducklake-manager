@@ -112,7 +112,7 @@ class DatabaseDeleter(BaseSchemaManager):
         filters: RowFilters,
         use_transaction: bool = True,
         perform_cleanup: bool | None = None,
-        compact_after_update: bool = True,
+        compact_after_update: bool = False,
         run_id: str | None = None,
         commit_message: str | None = None,
         commit_info: dict[str, Any] | None = None,
@@ -139,7 +139,7 @@ class DatabaseDeleter(BaseSchemaManager):
                 without restoring the deleted rows.
             compact_after_update: Whether to run DuckLake compaction (merge small
                 files and rewrite delete files) right after a successful deletion.
-                Defaults to True.
+                Defaults to False.
             run_id: Run identifier recorded on the resulting DuckLake snapshot
                 (``ducklake_set_commit_message``). Ignored (skipped with a DEBUG
                 log) on a connection with no real DuckLake catalog attached.
