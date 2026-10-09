@@ -2378,10 +2378,11 @@ DISTINCT region, departement, commune</code> gives the full tree, no auxiliary t
 required.</p>
 <p>Declare a hierarchy at build time:</p>
 <div class="language-python highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="n">builder</span> <span class="o">=</span> <span class="n">DuckLakeTablesBuilder</span><span class="p">(</span>
-</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>    <span class="n">df</span><span class="p">,</span> <span class="n">primary_keys</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;date&quot;</span><span class="p">,</span> <span class="s2">&quot;commune&quot;</span><span class="p">],</span>
-</span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>    <span class="n">hierarchies</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;commune&quot;</span><span class="p">:</span> <span class="s2">&quot;departement&quot;</span><span class="p">,</span> <span class="s2">&quot;departement&quot;</span><span class="p">:</span> <span class="s2">&quot;region&quot;</span><span class="p">},</span>
-</span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a>    <span class="n">connection</span><span class="o">=</span><span class="n">connection</span><span class="p">,</span>
-</span><span id="__span-1-5"><a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a><span class="p">)</span>
+</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>    <span class="n">df</span><span class="p">,</span>
+</span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>    <span class="n">primary_keys</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;date&quot;</span><span class="p">,</span> <span class="s2">&quot;commune&quot;</span><span class="p">],</span>
+</span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a>    <span class="n">hierarchies</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;commune&quot;</span><span class="p">:</span> <span class="s2">&quot;departement&quot;</span><span class="p">,</span> <span class="s2">&quot;departement&quot;</span><span class="p">:</span> <span class="s2">&quot;region&quot;</span><span class="p">},</span>
+</span><span id="__span-1-5"><a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a>    <span class="n">connection</span><span class="o">=</span><span class="n">connection</span><span class="p">,</span>
+</span><span id="__span-1-6"><a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a><span class="p">)</span>
 </span></code></pre></div>
 <p>or per column through <code>column_metadata={"commune": {"parent_name":
 "departement"}}</code> — both sources must agree where they overlap. On an existing
@@ -2448,14 +2449,15 @@ level of a code hierarchy carries its own labels; the hierarchy itself
 relates the codes.</p>
 <p>Declare a code/label pair at build time:</p>
 <div class="language-python highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="n">builder</span> <span class="o">=</span> <span class="n">DuckLakeTablesBuilder</span><span class="p">(</span>
-</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>    <span class="n">df</span><span class="p">,</span> <span class="n">primary_keys</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;date&quot;</span><span class="p">,</span> <span class="s2">&quot;nc8&quot;</span><span class="p">],</span>
-</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a>    <span class="n">hierarchies</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;nc8&quot;</span><span class="p">:</span> <span class="s2">&quot;nc6&quot;</span><span class="p">},</span>
-</span><span id="__span-2-4"><a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a>    <span class="n">value_labels</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;nc8_libelle_fr&quot;</span><span class="p">:</span> <span class="s2">&quot;nc8&quot;</span><span class="p">,</span> <span class="s2">&quot;nc8_libelle_en&quot;</span><span class="p">:</span> <span class="s2">&quot;nc8&quot;</span><span class="p">},</span>
-</span><span id="__span-2-5"><a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a>    <span class="n">connection</span><span class="o">=</span><span class="n">connection</span><span class="p">,</span>
-</span><span id="__span-2-6"><a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a><span class="p">)</span>
-</span><span id="__span-2-7"><a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a><span class="n">builder</span><span class="o">.</span><span class="n">build_schema</span><span class="p">(</span>
-</span><span id="__span-2-8"><a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a>    <span class="n">column_metadata</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;nc8_libelle_fr&quot;</span><span class="p">:</span> <span class="p">{</span><span class="s2">&quot;label&quot;</span><span class="p">:</span> <span class="s2">&quot;Libellé NC8 (FR)&quot;</span><span class="p">}},</span>
-</span><span id="__span-2-9"><a id="__codelineno-2-9" name="__codelineno-2-9" href="#__codelineno-2-9"></a><span class="p">)</span>
+</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>    <span class="n">df</span><span class="p">,</span>
+</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a>    <span class="n">primary_keys</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;date&quot;</span><span class="p">,</span> <span class="s2">&quot;nc8&quot;</span><span class="p">],</span>
+</span><span id="__span-2-4"><a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a>    <span class="n">hierarchies</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;nc8&quot;</span><span class="p">:</span> <span class="s2">&quot;nc6&quot;</span><span class="p">},</span>
+</span><span id="__span-2-5"><a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a>    <span class="n">value_labels</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;nc8_libelle_fr&quot;</span><span class="p">:</span> <span class="s2">&quot;nc8&quot;</span><span class="p">,</span> <span class="s2">&quot;nc8_libelle_en&quot;</span><span class="p">:</span> <span class="s2">&quot;nc8&quot;</span><span class="p">},</span>
+</span><span id="__span-2-6"><a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a>    <span class="n">connection</span><span class="o">=</span><span class="n">connection</span><span class="p">,</span>
+</span><span id="__span-2-7"><a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a><span class="p">)</span>
+</span><span id="__span-2-8"><a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a><span class="n">builder</span><span class="o">.</span><span class="n">build_schema</span><span class="p">(</span>
+</span><span id="__span-2-9"><a id="__codelineno-2-9" name="__codelineno-2-9" href="#__codelineno-2-9"></a>    <span class="n">column_metadata</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;nc8_libelle_fr&quot;</span><span class="p">:</span> <span class="p">{</span><span class="s2">&quot;label&quot;</span><span class="p">:</span> <span class="s2">&quot;Libellé NC8 (FR)&quot;</span><span class="p">}},</span>
+</span><span id="__span-2-10"><a id="__codelineno-2-10" name="__codelineno-2-10" href="#__codelineno-2-10"></a><span class="p">)</span>
 </span></code></pre></div>
 <p>or per column through <code>column_metadata={"nc8_libelle_fr": {"label_for":
 "nc8"}}</code> — both sources must agree where they overlap, exactly like
@@ -2628,10 +2630,11 @@ text to display, linked by <code>label_for</code>:</p>
 </tbody>
 </table>
 <div class="language-python highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="n">builder</span> <span class="o">=</span> <span class="n">DuckLakeTablesBuilder</span><span class="p">(</span>
-</span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>    <span class="n">df</span><span class="p">,</span> <span class="n">primary_keys</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;date&quot;</span><span class="p">,</span> <span class="s2">&quot;severity_rank&quot;</span><span class="p">],</span>
-</span><span id="__span-4-3"><a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a>    <span class="n">value_labels</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;severity&quot;</span><span class="p">:</span> <span class="s2">&quot;severity_rank&quot;</span><span class="p">},</span>
-</span><span id="__span-4-4"><a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a>    <span class="n">connection</span><span class="o">=</span><span class="n">connection</span><span class="p">,</span>
-</span><span id="__span-4-5"><a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a><span class="p">)</span>
+</span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>    <span class="n">df</span><span class="p">,</span>
+</span><span id="__span-4-3"><a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a>    <span class="n">primary_keys</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;date&quot;</span><span class="p">,</span> <span class="s2">&quot;severity_rank&quot;</span><span class="p">],</span>
+</span><span id="__span-4-4"><a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a>    <span class="n">value_labels</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;severity&quot;</span><span class="p">:</span> <span class="s2">&quot;severity_rank&quot;</span><span class="p">},</span>
+</span><span id="__span-4-5"><a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a>    <span class="n">connection</span><span class="o">=</span><span class="n">connection</span><span class="p">,</span>
+</span><span id="__span-4-6"><a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a><span class="p">)</span>
 </span></code></pre></div>
 <p>The interface sorts on the code column and displays the label column, so the
 menu reads <code>Low</code>, <code>Medium</code>, <code>High</code>. Prefer an integer code; a text code must be
@@ -2665,9 +2668,11 @@ free-form fields passed through <code>commit_info</code> (e.g. <code>{"model_ver
 "1.3"}</code>).</p>
 <p>No technical column is ever added to the fact table to answer "which run
 produced this state?" — the question is answered by reading the snapshots:</p>
-<div class="language-python highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="n">conn</span><span class="o">.</span><span class="n">execute</span><span class="p">(</span><span class="s2">&quot;SELECT snapshot_id, author, commit_message, commit_extra_info FROM ducklake_snapshots(&#39;db&#39;)&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">fetchall</span><span class="p">()</span>
-</span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="c1"># or, through the package:</span>
-</span><span id="__span-5-3"><a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="n">DatabaseRecoveryManager</span><span class="p">(</span><span class="n">conn</span><span class="p">)</span><span class="o">.</span><span class="n">list_ducklake_snapshots</span><span class="p">()</span>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="n">conn</span><span class="o">.</span><span class="n">execute</span><span class="p">(</span>
+</span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>    <span class="s2">&quot;SELECT snapshot_id, author, commit_message, commit_extra_info FROM ducklake_snapshots(&#39;db&#39;)&quot;</span>
+</span><span id="__span-5-3"><a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="p">)</span><span class="o">.</span><span class="n">fetchall</span><span class="p">()</span>
+</span><span id="__span-5-4"><a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a><span class="c1"># or, through the package:</span>
+</span><span id="__span-5-5"><a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a><span class="n">DatabaseRecoveryManager</span><span class="p">(</span><span class="n">conn</span><span class="p">)</span><span class="o">.</span><span class="n">list_ducklake_snapshots</span><span class="p">()</span>
 </span></code></pre></div>
 <p>On a connection with no real DuckLake catalog attached (in-memory test
 connections), <code>run_id</code>/<code>commit_message</code> are silently skipped with a DEBUG log

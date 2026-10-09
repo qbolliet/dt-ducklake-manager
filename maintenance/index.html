@@ -2255,7 +2255,7 @@ pays off on a column of <strong>very low cardinality</strong> that nearly every 
 on (e.g. a model version or a year), and it multiplies small files on anything
 else. The build accepts <code>partition_by</code>; on an existing table:</p>
 <div class="language-python highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">maintenance</span><span class="o">.</span><span class="n">set_partitioned_by</span><span class="p">(</span><span class="s2">&quot;fact_table&quot;</span><span class="p">,</span> <span class="n">partition_by</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;model_version&quot;</span><span class="p">])</span>
-</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="n">maintenance</span><span class="o">.</span><span class="n">reset_partitioned_by</span><span class="p">(</span><span class="s2">&quot;fact_table&quot;</span><span class="p">)</span>              <span class="c1"># future writes only</span>
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="n">maintenance</span><span class="o">.</span><span class="n">reset_partitioned_by</span><span class="p">(</span><span class="s2">&quot;fact_table&quot;</span><span class="p">)</span>  <span class="c1"># future writes only</span>
 </span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="n">maintenance</span><span class="o">.</span><span class="n">repartition</span><span class="p">(</span><span class="s2">&quot;fact_table&quot;</span><span class="p">,</span> <span class="n">partition_by</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;year(date)&quot;</span><span class="p">])</span>  <span class="c1"># + rewrite</span>
 </span></code></pre></div>
 <p><code>set_partitioned_by</code> and <code>reset_partitioned_by</code> only affect the files written
@@ -2411,7 +2411,9 @@ right after the deletion (or run <code>compact</code> afterwards). If the deleti
 </span></code></pre></div>
 <h3 id="finding-the-run-behind-a-given-state">Finding the run behind a given state</h3>
 <div class="language-python highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="n">recovery</span> <span class="o">=</span> <span class="n">DatabaseRecoveryManager</span><span class="p">(</span><span class="n">conn</span><span class="p">)</span>
-</span><span id="__span-6-2"><a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="nb">print</span><span class="p">(</span><span class="n">recovery</span><span class="o">.</span><span class="n">list_ducklake_snapshots</span><span class="p">())</span>  <span class="c1"># snapshot_id, author (run_id), commit_message, commit_extra_info, ...</span>
+</span><span id="__span-6-2"><a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="nb">print</span><span class="p">(</span>
+</span><span id="__span-6-3"><a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a>    <span class="n">recovery</span><span class="o">.</span><span class="n">list_ducklake_snapshots</span><span class="p">()</span>
+</span><span id="__span-6-4"><a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a><span class="p">)</span>  <span class="c1"># snapshot_id, author (run_id), commit_message, commit_extra_info, ...</span>
 </span></code></pre></div>
 <p>See <a href="../schema/#traceability-of-runs">Traceability of runs</a> for how <code>run_id</code> and
 <code>commit_message</code> land on a snapshot in the first place.</p>

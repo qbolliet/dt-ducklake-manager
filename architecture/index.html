@@ -2088,7 +2088,7 @@ successful write.</p>
 DuckLake already persists the full snapshot history. To recover from a bad write
 that was itself committed:</p>
 <div class="language-python highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">recovery</span> <span class="o">=</span> <span class="n">DatabaseRecoveryManager</span><span class="p">(</span><span class="n">conn</span><span class="p">)</span>
-</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="nb">print</span><span class="p">(</span><span class="n">recovery</span><span class="o">.</span><span class="n">list_ducklake_snapshots</span><span class="p">())</span>          <span class="c1"># pick a snapshot_id (author = run_id)</span>
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="nb">print</span><span class="p">(</span><span class="n">recovery</span><span class="o">.</span><span class="n">list_ducklake_snapshots</span><span class="p">())</span>  <span class="c1"># pick a snapshot_id (author = run_id)</span>
 </span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="n">recovery</span><span class="o">.</span><span class="n">restore_snapshot</span><span class="p">(</span><span class="mi">17</span><span class="p">,</span> <span class="n">run_id</span><span class="o">=</span><span class="s2">&quot;rollback-run-42&quot;</span><span class="p">)</span>
 </span></code></pre></div>
 <p><code>restore_snapshot</code> copies the result set's tables as they were at the snapshot
