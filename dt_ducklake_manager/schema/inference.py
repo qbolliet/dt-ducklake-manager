@@ -592,17 +592,9 @@ class SchemaBuilder:
         # Typage explicite des champs d'UI en VARCHAR : une colonne entièrement NULL
         # serait sinon inférée en type ``Null`` par le backend, incompatible avec le
         # DDL VARCHAR de la table metadata.
-        # Restriction du cast aux champs qui ne sont pas déjà textuels : sous pandas
-        # 2.x, un cast String d'une colonne object passe par ``astype(str)`` et
-        # convertit les None en chaîne littérale 'None' au lieu de NULL.
-        schema_metadata = self.df_metadata.schema
-        fields_to_cast = [
-            field for field in UI_METADATA_FIELDS if schema_metadata[field] != nw.String
-        ]
-        if fields_to_cast:
-            self.df_metadata = self.df_metadata.with_columns(
-                nw.col(field).cast(nw.String) for field in fields_to_cast
-            )
+        self.df_metadata = self.df_metadata.with_columns(
+            nw.col(field).cast(nw.String) for field in UI_METADATA_FIELDS
+        )
 
         # Logging
         self.logger.info("Successfully built the meta-data DataFrame")
