@@ -13,7 +13,13 @@ import narwhals as nw
 # Import des utilitaires
 from ..utils.hierarchy import validate_hierarchy_forest
 from ..utils.logger import _init_logger
-from ..utils.sql import SchemaScoped, quote_ident, resolve_catalog
+from ..utils.sql import (
+    SchemaScoped,
+    fetch_arrow,
+    fetch_one,
+    quote_ident,
+    resolve_catalog,
+)
 from ..utils.types import METADATA_COLUMNS
 from ..utils.value_labels import check_value_label_dependency, validate_value_labels
 
@@ -419,9 +425,10 @@ class DatabaseAuditor(SchemaScoped):
         metadata: nw.DataFrame[Any] | None = None
         if "metadata" in tables:
             metadata = nw.from_native(
-                self.conn.execute(
-                    f"SELECT * FROM {self._qualified('metadata')}"
-                ).to_arrow_table(),
+                fetch_arrow(
+                    self.conn,
+                    f"SELECT * FROM {self._qualified('metadata')}",
+                ),
                 eager_only=True,
             )
 
@@ -573,9 +580,12 @@ class DatabaseAuditor(SchemaScoped):
         """
         if "dataset_metadata" not in state.tables:
             return
-        row = self.conn.execute(
-            f"SELECT COUNT(*) FROM {self._qualified('dataset_metadata')}"
-        ).fetchone()
+        # Extraction de la ligne
+        row = fetch_one(
+            self.conn.execute(
+                f"SELECT COUNT(*) FROM {self._qualified('dataset_metadata')}"
+            )
+        )
         row_count = int(row[0]) if row is not None else 0
         if row_count != 1:
             report.add_issue(
@@ -809,13 +819,15 @@ class DatabaseAuditor(SchemaScoped):
 
         # Combinaisons de clés présentes plus d'une fois
         key_columns = ", ".join(quote_ident(c) for c in primary_keys)
-        row = self.conn.execute(f"""
+        row = fetch_one(
+            self.conn.execute(f"""
             SELECT COUNT(*) FROM (
                 SELECT 1 FROM {self._qualified("fact_table")}
                 GROUP BY {key_columns}
                 HAVING COUNT(*) > 1
             )
-        """).fetchone()
+        """)
+        )
 
         # Comptage des duplicats de clés primaires
         duplicate_count = int(row[0]) if row is not None else 0
@@ -905,9 +917,11 @@ class DatabaseAuditor(SchemaScoped):
         columns = list(state.fact_columns)
         # Comptage des modalités non nulles par colonne
         counts = ", ".join(f"COUNT({quote_ident(c)})" for c in columns)
-        row = self.conn.execute(
-            f"SELECT COUNT(*), {counts} FROM {self._qualified('fact_table')}"
-        ).fetchone()
+        row = fetch_one(
+            self.conn.execute(
+                f"SELECT COUNT(*), {counts} FROM {self._qualified('fact_table')}"
+            )
+        )
         if row is None:
             return
         # Extraction du total

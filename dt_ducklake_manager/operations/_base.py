@@ -29,7 +29,13 @@ from ..reporting import (
 )
 from ..utils.hierarchy import validate_hierarchy_forest
 from ..utils.logger import _init_logger
-from ..utils.sql import SchemaScoped, quote_ident, resolve_catalog
+from ..utils.sql import (
+    SchemaScoped,
+    fetch_arrow,
+    fetch_one,
+    quote_ident,
+    resolve_catalog,
+)
 from ..utils.types import (
     COLUMN_METADATA_KEYS,
     check_supported_dtype,
@@ -542,13 +548,15 @@ class BaseSchemaManager(SchemaScoped):
                 try:
                     # Chargement Arrow (backend interne) puis encapsulation narwhals
                     self._metadata_cache = nw.from_native(
-                        self.conn.execute(
-                            f"SELECT * FROM {self._qualified('metadata')}"
-                        ).to_arrow_table(),
+                        fetch_arrow(
+                            self.conn,
+                            f"SELECT * FROM {self._qualified('metadata')}",
+                        ),
                         eager_only=True,
                     )
-                except Exception:
-                    # Table absente : DataFrame vide typé sur le schéma cible
+                except duckdb.CatalogException:
+                    # Table absente (seule erreur attendue, les autres sont propagées
+                    # au lieu de passer pour une table vide) : DataFrame vide typé
                     self._metadata_cache = empty_metadata_frame()
 
             return self._metadata_cache.clone()
@@ -632,10 +640,13 @@ class BaseSchemaManager(SchemaScoped):
             True
         """
         # Recherche du statut catégoriel
-        result = self.conn.execute(
-            f"SELECT is_categorical FROM {self._qualified('metadata')} WHERE name = ?",
-            [column],
-        ).fetchone()
+        result = fetch_one(
+            self.conn.execute(
+                f"SELECT is_categorical FROM {self._qualified('metadata')}"
+                " WHERE name = ?",
+                [column],
+            )
+        )
         return result[0] if result else False
 
     # Méthode de vérification si une colonne est marquée comme clé primaire
@@ -654,10 +665,13 @@ class BaseSchemaManager(SchemaScoped):
             True
         """
         # Recherche du statut de clé primaire dans les méta-données
-        result = self.conn.execute(
-            f"SELECT is_primary_key FROM {self._qualified('metadata')} WHERE name = ?",
-            [column],
-        ).fetchone()
+        result = fetch_one(
+            self.conn.execute(
+                f"SELECT is_primary_key FROM {self._qualified('metadata')}"
+                " WHERE name = ?",
+                [column],
+            )
+        )
         return result[0] if result else False
 
     # Méthode d'extraction de toutes les colonnes marquées comme clés primaires
@@ -697,9 +711,11 @@ class BaseSchemaManager(SchemaScoped):
         if not self._table_exists("dataset_metadata"):
             return None
         # Lecture de l'unique ligne de dataset_metadata
-        result = self.conn.execute(
-            f"SELECT cluster_by FROM {self._qualified('dataset_metadata')}"
-        ).fetchone()
+        result = fetch_one(
+            self.conn.execute(
+                f"SELECT cluster_by FROM {self._qualified('dataset_metadata')}"
+            )
+        )
         if result is None or result[0] is None:
             return None
         # Décodage de la liste JSON persistée
@@ -886,9 +902,11 @@ class BaseSchemaManager(SchemaScoped):
 
         # Upsert manuel
         # Vérification de l'existence de la colonne avant d'insérer ou de mettre à jour.
-        _row = self.conn.execute(
-            f"SELECT COUNT(*) FROM {metadata_table} WHERE name = ?", [column]
-        ).fetchone()
+        _row = fetch_one(
+            self.conn.execute(
+                f"SELECT COUNT(*) FROM {metadata_table} WHERE name = ?", [column]
+            )
+        )
         existing_count = _row[0] if _row is not None else 0
 
         if existing_count == 0:
@@ -1025,9 +1043,11 @@ class BaseSchemaManager(SchemaScoped):
         metadata_table = self._qualified("metadata")
         exists = False
         if self._table_exists("metadata"):
-            _row = self.conn.execute(
-                f"SELECT COUNT(*) FROM {metadata_table} WHERE name = ?", [column]
-            ).fetchone()
+            _row = fetch_one(
+                self.conn.execute(
+                    f"SELECT COUNT(*) FROM {metadata_table} WHERE name = ?", [column]
+                )
+            )
             exists = _row is not None and _row[0] > 0
         if not exists:
             raise ValueError(
@@ -1045,9 +1065,12 @@ class BaseSchemaManager(SchemaScoped):
         if "parent_name" in fields and new_parent is not None:
             # Vérification que la colonne parent existe dans la table des
             # métadonnées (et est donc une colonne valide de la table des faits)
-            _prow = self.conn.execute(
-                f"SELECT COUNT(*) FROM {metadata_table} WHERE name = ?", [new_parent]
-            ).fetchone()
+            _prow = fetch_one(
+                self.conn.execute(
+                    f"SELECT COUNT(*) FROM {metadata_table} WHERE name = ?",
+                    [new_parent],
+                )
+            )
             # Cas d'erreur si la colonne n'est pas trouvée
             if _prow is None or _prow[0] == 0:
                 raise ValueError(
@@ -1066,9 +1089,12 @@ class BaseSchemaManager(SchemaScoped):
             if "label_for" in fields:
                 has_label_for = new_label_for is not None
             else:
-                _lfrow = self.conn.execute(
-                    f"SELECT label_for FROM {metadata_table} WHERE name = ?", [column]
-                ).fetchone()
+                _lfrow = fetch_one(
+                    self.conn.execute(
+                        f"SELECT label_for FROM {metadata_table} WHERE name = ?",
+                        [column],
+                    )
+                )
                 has_label_for = _lfrow is not None and _lfrow[0] is not None
             if has_label_for:
                 raise ValueError(
@@ -1086,10 +1112,12 @@ class BaseSchemaManager(SchemaScoped):
             if "parent_name" in fields:
                 has_parent = new_parent is not None
             else:
-                _prow4 = self.conn.execute(
-                    f"SELECT parent_name FROM {metadata_table} WHERE name = ?",
-                    [column],
-                ).fetchone()
+                _prow4 = fetch_one(
+                    self.conn.execute(
+                        f"SELECT parent_name FROM {metadata_table} WHERE name = ?",
+                        [column],
+                    )
+                )
                 has_parent = _prow4 is not None and _prow4[0] is not None
             if hierarchy_children or has_parent:
                 raise ValueError(
@@ -1130,20 +1158,24 @@ class BaseSchemaManager(SchemaScoped):
         # Une colonne de hiérarchie reste catégorielle : refus de is_categorical=False
         if fields.get("is_categorical") is False:
             # Colonne parente d'une autre colonne
-            _crow = self.conn.execute(
-                f"SELECT COUNT(*) FROM {metadata_table} WHERE parent_name = ?",
-                [column],
-            ).fetchone()
+            _crow = fetch_one(
+                self.conn.execute(
+                    f"SELECT COUNT(*) FROM {metadata_table} WHERE parent_name = ?",
+                    [column],
+                )
+            )
             is_parent = _crow is not None and _crow[0] > 0
             # Colonne enfant : le parent déclaré dans ce même appel prime sur l'état
             # stocké
             if "parent_name" in fields:
                 has_parent = new_parent is not None
             else:
-                _prow2 = self.conn.execute(
-                    f"SELECT parent_name FROM {metadata_table} WHERE name = ?",
-                    [column],
-                ).fetchone()
+                _prow2 = fetch_one(
+                    self.conn.execute(
+                        f"SELECT parent_name FROM {metadata_table} WHERE name = ?",
+                        [column],
+                    )
+                )
                 has_parent = _prow2 is not None and _prow2[0] is not None
             if is_parent or has_parent:
                 raise ValueError(
@@ -1162,10 +1194,12 @@ class BaseSchemaManager(SchemaScoped):
         # déclaré.
         if "parent_name" in fields and new_parent is not None:
             for hierarchy_col in (column, new_parent):
-                _crow = self.conn.execute(
-                    f"SELECT is_categorical FROM {metadata_table} WHERE name = ?",
-                    [hierarchy_col],
-                ).fetchone()
+                _crow = fetch_one(
+                    self.conn.execute(
+                        f"SELECT is_categorical FROM {metadata_table} WHERE name = ?",
+                        [hierarchy_col],
+                    )
+                )
                 if _crow is not None and not _crow[0]:
                     # Forçage du statut catégoriel
                     self.conn.execute(
@@ -1654,9 +1688,11 @@ class BaseSchemaManager(SchemaScoped):
         # Comptage de toutes les colonnes en une lecture
         columns = self._get_fact_table_columns()
         counts = ", ".join(f"COUNT({quote_ident(c)})" for c in columns)
-        row = self.conn.execute(
-            f"SELECT COUNT(*), {counts} FROM {self._qualified('fact_table')}"
-        ).fetchone()
+        row = fetch_one(
+            self.conn.execute(
+                f"SELECT COUNT(*), {counts} FROM {self._qualified('fact_table')}"
+            )
+        )
         # Table vide : aucune décision possible
         if row is None or row[0] == 0:
             return None

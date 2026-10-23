@@ -7,6 +7,7 @@ from narwhals.typing import IntoDataFrame
 
 if TYPE_CHECKING:
     import duckdb
+    import pyarrow as pa
 
 
 # Fonction de mise entre guillemets d'un identifiant SQL
@@ -60,6 +61,94 @@ def quote_literal(value: str) -> str:
     return "'" + str(value).replace("'", "''") + "'"
 
 
+# Fonction de lecture de la première ligne d'un résultat execute()
+def fetch_one(cursor: "duckdb.DuckDBPyConnection") -> tuple[Any, ...] | None:
+    """
+    Fetch the first row of the pending ``execute()`` result, then close it.
+
+    Since DuckDB 2.0, a result is only released once a fetch returns no rows: a
+    bare ``fetchone()`` leaves it open, and the next ``register()`` or ``sql()``
+    on the connection — ours or the caller's — raises ``ResourceInUseException``.
+    ``complete()`` runs the rest of the result to its end (a no-op once it is
+    exhausted) without failing an open transaction, unlike ``abort()``.
+
+    Args:
+        cursor (duckdb.DuckDBPyConnection): Connection (or cursor) returned by
+            ``execute()``, holding the result to read.
+
+    Returns:
+        tuple[Any, ...] | None: The first row, or ``None`` for an empty result.
+
+    Examples:
+        >>> import duckdb
+        >>> conn = duckdb.connect(":memory:")
+        >>> fetch_one(conn.execute("SELECT 42"))
+        (42,)
+        >>> fetch_one(conn.execute("SELECT 1 WHERE false")) is None
+        True
+    """
+    # Fetch
+    row = cursor.fetchone()
+    # Libération du résultat : la connexion redevient utilisable par sql()/register()
+    cursor.complete()
+    return row
+
+
+# Fonction de lecture d'une requête en table Arrow
+def fetch_arrow(conn: "duckdb.DuckDBPyConnection", query: str) -> "pa.Table":
+    """
+    Run ``query`` and return its whole result as a PyArrow table.
+
+    Goes through a relation (``conn.sql(query).to_arrow_table()``): since DuckDB
+    2.0, Arrow output on an ``execute()`` result copies the rows and warns. A
+    relation, unlike ``execute()``, refuses to run while an earlier ``execute()``
+    result is still open — e.g. a caller's ``fetchone()`` — so any such result is
+    first completed, as the next ``execute()`` would have replaced it anyway.
+
+    Args:
+        conn (duckdb.DuckDBPyConnection): Connection to query.
+        query (str): SQL query without bound parameters (relations take none
+            here).
+
+    Returns:
+        pa.Table: The full result.
+
+    Examples:
+        >>> import duckdb
+        >>> fetch_arrow(duckdb.connect(":memory:"), "SELECT 1 AS a").num_rows
+        1
+    """
+    # Libération d'un éventuel résultat execute() encore ouvert
+    conn.complete()
+    return conn.sql(query).to_arrow_table()
+
+
+# Fonction d'enregistrement d'une vue temporaire sur des données Python
+def register_view(conn: "duckdb.DuckDBPyConnection", name: str, data: Any) -> None:
+    """
+    Register ``data`` (Arrow table, pandas or Polars DataFrame) as view ``name``.
+
+    Same as ``conn.register(name, data)``, except that an ``execute()`` result
+    still open on the connection is completed first: since DuckDB 2.0,
+    ``register()`` raises ``ResourceInUseException`` otherwise.
+
+    Args:
+        conn (duckdb.DuckDBPyConnection): Connection to register the view on.
+        name (str): View name.
+        data (Any): Object accepted by ``DuckDBPyConnection.register``.
+
+    Examples:
+        >>> import duckdb, pyarrow as pa
+        >>> conn = duckdb.connect(":memory:")
+        >>> register_view(conn, "v", pa.table({"a": [1, 2]}))
+        >>> conn.execute("SELECT count(*) FROM v").fetchall()
+        [(2,)]
+    """
+    # Libération d'un éventuel résultat execute() encore ouvert
+    conn.complete()
+    conn.register(name, data)
+
+
 # Fonction de résolution de l'alias de catalogue effectif d'une connexion
 def resolve_catalog(
     conn: "duckdb.DuckDBPyConnection | None", catalog_alias: str | None
@@ -90,10 +179,12 @@ def resolve_catalog(
         return None
     try:
         # Recherche de l'alias parmi les bases attachées à la connexion
-        row = conn.execute(
-            "SELECT 1 FROM duckdb_databases() WHERE database_name = ?",
-            [catalog_alias],
-        ).fetchone()
+        row = fetch_one(
+            conn.execute(
+                "SELECT 1 FROM duckdb_databases() WHERE database_name = ?",
+                [catalog_alias],
+            )
+        )
     except Exception:
         return None
     return catalog_alias if row is not None else None
@@ -211,11 +302,13 @@ class SchemaScoped:
         if self._catalog is not None:
             params.append(self._catalog)
         try:
-            row = self.conn.execute(
-                "SELECT COUNT(*) FROM information_schema.tables"
-                f" WHERE table_name = ? AND table_schema = ?{catalog_filter}",
-                params,
-            ).fetchone()
+            row = fetch_one(
+                self.conn.execute(
+                    "SELECT COUNT(*) FROM information_schema.tables"
+                    f" WHERE table_name = ? AND table_schema = ?{catalog_filter}",
+                    params,
+                )
+            )
         except Exception:
             return False
         return row is not None and row[0] > 0
@@ -236,9 +329,9 @@ class SchemaScoped:
             3
         """
         try:
-            row = self.conn.execute(
-                f"SELECT COUNT(*) FROM {self._qualified(table)}"
-            ).fetchone()
+            row = fetch_one(
+                self.conn.execute(f"SELECT COUNT(*) FROM {self._qualified(table)}")
+            )
         except Exception:
             return 0
         return int(row[0]) if row is not None else 0

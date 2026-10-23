@@ -9,6 +9,7 @@ from typing import Any, Literal
 # Duckdb
 import duckdb
 import narwhals as nw
+import pyarrow as pa
 from narwhals.typing import IntoDataFrame
 
 # Rapport d'opération et traçabilité des runs
@@ -23,7 +24,9 @@ from ..reporting import (
 # Utilitaires de traitement des données
 from ..utils.sql import (
     SchemaScoped,
+    fetch_one,
     quote_ident,
+    register_view,
     remove_dataframe_duplicates,
     resolve_catalog,
 )
@@ -231,8 +234,8 @@ class DuckLakeTablesBuilder(SchemaScoped):
         df_meta = self.schema_builder.df_metadata
         # Nom qualifié par le schéma (et le catalogue) cible
         qualified_name = self._qualified(table_name or "metadata")
-        self.conn.register(
-            "temp_metadata", df_meta.to_arrow().select(list(df_meta.columns))
+        register_view(
+            self.conn, "temp_metadata", df_meta.to_arrow().select(list(df_meta.columns))
         )
         self.conn.execute(metadata_table_ddl(qualified_name))
 
@@ -293,9 +296,8 @@ class DuckLakeTablesBuilder(SchemaScoped):
         # backend narwhals.
         # Note : .select() filtre l'index pandas éventuel (cf.
         # create_duckdb_metadata_table).
-        self.conn.register(
-            "temp_fact", df_fact.to_arrow().select(list(df_fact.columns))
-        )
+        fact_arrow = df_fact.to_arrow().select(list(df_fact.columns))
+        register_view(self.conn, "temp_fact", fact_arrow)
 
         # Inférence du schéma de colonnes depuis la table de métadonnées.
         # Utilisée dans les deux chemins DDL explicites (avec primary_keys ou avec
@@ -365,8 +367,25 @@ class DuckLakeTablesBuilder(SchemaScoped):
                 )
         else:
             # Chemin CTAS (sans partition ni clés primaires) : plus performant, pas de
-            # DDL intermédiaire
-            fact_columns_sql = ", ".join(quote_ident(c) for c in df_fact.columns)
+            # DDL intermédiaire.
+            # Colonne entièrement nulle (type Arrow null) : typée explicitement par
+            # son type SQL inféré, comme dans le chemin DDL. Sans CAST, DuckDB
+            # lui donne le type "NULL" qui refuse toute valeur
+            # non nulle et fuiterait dans metadata.sql_type.
+            inferred_types = dict(
+                zip(
+                    df_metadata.get_column("name").to_list(),
+                    df_metadata.get_column("sql_type").to_list(),
+                    strict=True,
+                )
+            )
+            fact_columns_sql = ", ".join(
+                f"CAST({quote_ident(field.name)} AS {inferred_types[field.name]})"
+                f" AS {quote_ident(field.name)}"
+                if pa.types.is_null(field.type) and field.name in inferred_types
+                else quote_ident(field.name)
+                for field in fact_arrow.schema
+            )
             query = f"""
                 CREATE TABLE {qualified_name} AS
                 SELECT {fact_columns_sql}
@@ -463,13 +482,15 @@ class DuckLakeTablesBuilder(SchemaScoped):
             ValueError: If the functional dependency code -> label is violated for
                 any declared pair.
         """
+        # Extraction des couples valeurs/labels
         value_labels_resolved = self.schema_builder.value_labels_resolved
         if not value_labels_resolved:
             return
 
+        # Extraction du jeu de données source
         df = self.schema_builder.df
         view_name = "_value_labels_check_src"
-        self.conn.register(view_name, df.to_arrow().select(list(df.columns)))
+        register_view(self.conn, view_name, df.to_arrow().select(list(df.columns)))
         try:
             for label_col, code_col in value_labels_resolved.items():
                 check_value_label_dependency(self.conn, view_name, code_col, label_col)
@@ -774,9 +795,9 @@ class DuckLakeTablesBuilder(SchemaScoped):
             int: Row count, or ``0`` if it cannot be read.
         """
         try:
-            row = self.conn.execute(
-                f"SELECT COUNT(*) FROM {self._qualified(table)}"
-            ).fetchone()
+            row = fetch_one(
+                self.conn.execute(f"SELECT COUNT(*) FROM {self._qualified(table)}")
+            )
             return int(row[0]) if row is not None else 0
         except Exception:
             return 0

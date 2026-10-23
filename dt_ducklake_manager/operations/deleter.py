@@ -10,7 +10,7 @@ from ..maintenance.auditor import DatabaseAuditor, ValidationLevel
 from ..reporting import OperationReport
 
 # Import des utilitaires
-from ..utils.sql import _build_where_clause
+from ..utils.sql import _build_where_clause, fetch_one
 
 # Import du gestionnaire de base
 from ._base import BaseSchemaManager
@@ -187,9 +187,11 @@ class DatabaseDeleter(BaseSchemaManager):
         ) as report:
             # Suppression des lignes ; le nombre renvoyé par le DELETE sert de
             # comptage de repli, remplacé par la mesure DuckLake après commit
-            row = self.conn.execute(
-                f"DELETE FROM {self._qualified('fact_table')} {where_clause}"
-            ).fetchone()
+            row = fetch_one(
+                self.conn.execute(
+                    f"DELETE FROM {self._qualified('fact_table')} {where_clause}"
+                )
+            )
             rows_deleted = int(row[0]) if row is not None else 0
             report.rows_deleted = rows_deleted
 

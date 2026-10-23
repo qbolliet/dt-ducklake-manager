@@ -38,7 +38,9 @@ from ..reporting import (
     _set_commit_message,
     _table_info,
 )
-from ..utils.sql import qualify_table, quote_ident, quote_literal
+
+# Utilitaires
+from ..utils.sql import fetch_one, qualify_table, quote_ident, quote_literal
 
 # Procédures DuckLake enveloppées
 from .procedures import (
@@ -335,10 +337,12 @@ class DuckLakeMaintenance(DuckLakeProcedures):
         # Snapshots : nombre et âge du plus ancien. L'âge est calculé en SQL (epoch)
         # car la récupération d'un TIMESTAMPTZ en Python exige pytz (mesuré).
         try:
-            row = self.conn.execute(
-                "SELECT count(*), epoch(now()) - epoch(min(snapshot_time))"
-                f" FROM ducklake_snapshots({quote_literal(self.catalog_alias)})"
-            ).fetchone()
+            row = fetch_one(
+                self.conn.execute(
+                    "SELECT count(*), epoch(now()) - epoch(min(snapshot_time))"
+                    f" FROM ducklake_snapshots({quote_literal(self.catalog_alias)})"
+                )
+            )
             if row is not None:
                 report.snapshot_count = int(row[0])
                 if row[1] is not None:
@@ -478,7 +482,7 @@ class DuckLakeMaintenance(DuckLakeProcedures):
         )
 
         # Valeur courante de threads, restaurée en finally (SET non transactionnel)
-        row = self.conn.execute("SELECT current_setting('threads')").fetchone()
+        row = fetch_one(self.conn.execute("SELECT current_setting('threads')"))
         previous_threads = int(row[0]) if row is not None else None
 
         # Nettoyage d'une éventuelle table temporaire laissée par un échec antérieur
@@ -838,10 +842,12 @@ class DuckLakeMaintenance(DuckLakeProcedures):
             is absent or ``cluster_by`` is NULL/empty.
         """
         try:
-            row = self.conn.execute(
-                "SELECT cluster_by FROM"
-                f" {qualify_table('dataset_metadata', schema, self.catalog_alias)}"
-            ).fetchone()
+            row = fetch_one(
+                self.conn.execute(
+                    "SELECT cluster_by FROM"
+                    f" {qualify_table('dataset_metadata', schema, self.catalog_alias)}"
+                )
+            )
         except Exception:
             return None
         if row is None or row[0] is None:
@@ -885,16 +891,18 @@ class DuckLakeMaintenance(DuckLakeProcedures):
                 DuckLake catalog attached).
         """
         meta = self._metadata_catalog()
-        row = self.conn.execute(
-            f"""
+        row = fetch_one(
+            self.conn.execute(
+                f"""
             SELECT t.table_id
             FROM {meta}.ducklake_table t
             JOIN {meta}.ducklake_schema s ON s.schema_id = t.schema_id
             WHERE t.table_name = ? AND s.schema_name = ?
               AND t.end_snapshot IS NULL AND s.end_snapshot IS NULL
             """,
-            [table, schema],
-        ).fetchone()
+                [table, schema],
+            )
+        )
         return int(row[0]) if row is not None else None
 
     # Résolution non fatale de l'identifiant DuckLake d'une table
@@ -930,8 +938,9 @@ class DuckLakeMaintenance(DuckLakeProcedures):
         meta = self._metadata_catalog()
         try:
             # Fichiers de suppression visant un fichier de données actif
-            row = self.conn.execute(
-                f"""
+            row = fetch_one(
+                self.conn.execute(
+                    f"""
                 SELECT count(*), coalesce(sum(d.file_size_bytes), 0)
                 FROM {meta}.ducklake_delete_file d
                 JOIN {meta}.ducklake_data_file f
@@ -939,8 +948,9 @@ class DuckLakeMaintenance(DuckLakeProcedures):
                 WHERE d.table_id = ? AND d.end_snapshot IS NULL
                   AND f.end_snapshot IS NULL
                 """,
-                [table_id],
-            ).fetchone()
+                    [table_id],
+                )
+            )
             if row is not None:
                 report.delete_file_count = int(row[0])
                 report.delete_bytes = int(row[1])
@@ -950,12 +960,14 @@ class DuckLakeMaintenance(DuckLakeProcedures):
                     else 0.0
                 )
             # Fichiers de données actifs sous le seuil de taille
-            row = self.conn.execute(
-                f"SELECT count(*) FROM {meta}.ducklake_data_file"
-                " WHERE table_id = ? AND end_snapshot IS NULL"
-                " AND file_size_bytes < ?",
-                [table_id, report.min_file_size_bytes],
-            ).fetchone()
+            row = fetch_one(
+                self.conn.execute(
+                    f"SELECT count(*) FROM {meta}.ducklake_data_file"
+                    " WHERE table_id = ? AND end_snapshot IS NULL"
+                    " AND file_size_bytes < ?",
+                    [table_id, report.min_file_size_bytes],
+                )
+            )
             report.small_file_count = int(row[0]) if row is not None else 0
         except Exception as e:
             # Logging
@@ -1017,11 +1029,13 @@ class DuckLakeMaintenance(DuckLakeProcedures):
             int | None: The ``column_id``, or None when not found.
         """
         # Extraction de l'identifiant de la colonne
-        row = self.conn.execute(
-            f"SELECT column_id FROM {self._metadata_catalog()}.ducklake_column"
-            " WHERE table_id = ? AND column_name = ? AND end_snapshot IS NULL",
-            [table_id, column],
-        ).fetchone()
+        row = fetch_one(
+            self.conn.execute(
+                f"SELECT column_id FROM {self._metadata_catalog()}.ducklake_column"
+                " WHERE table_id = ? AND column_name = ? AND end_snapshot IS NULL",
+                [table_id, column],
+            )
+        )
         return int(row[0]) if row is not None else None
 
     # Part des fichiers dont la plage chevauche celle d'un autre fichier
@@ -1051,8 +1065,9 @@ class DuckLakeMaintenance(DuckLakeProcedures):
         if query is None:
             return None
         # Exécution de la requête
-        row = self.conn.execute(
-            f"""
+        row = fetch_one(
+            self.conn.execute(
+                f"""
             WITH r AS (
                 SELECT * FROM ({query})
                 WHERE record_count > 0 AND lo IS NOT NULL AND hi IS NOT NULL
@@ -1064,7 +1079,8 @@ class DuckLakeMaintenance(DuckLakeProcedures):
                     AND ((b.lo < a.hi AND a.lo < b.hi)
                          OR (a.lo = b.lo AND a.hi = b.hi)))
             """
-        ).fetchone()
+            )
+        )
         if row is None or row[0] <= 1:
             return 0.0
         return float(row[1]) / float(row[0])
@@ -1098,9 +1114,11 @@ class DuckLakeMaintenance(DuckLakeProcedures):
     ) -> tuple[int | None, bool]:
         """Measure the unflushed inlined rows of a table.
 
-        Counts the live rows (``end_snapshot IS NULL``) of every inlined-data table
-        registered for the table in ``ducklake_inlined_data_tables`` (measured:
-        emptied by ``flush_inlined_data``). Falls back to a catalog-wide boolean
+        Counts the live rows (``_ducklake_end_snapshot IS NULL`` on a DuckLake 1.1
+        catalog, ``end_snapshot IS NULL`` on a non-migrated 1.0 one) of every
+        inlined-data table registered for the table in
+        ``ducklake_inlined_data_tables`` (measured: emptied by
+        ``flush_inlined_data``). Falls back to a catalog-wide boolean
         read from ``ducklake_snapshots.changes`` (an ``inlined_insert`` more recent
         than the last ``flushed_inlined``) when the internal tables are unreadable.
 
@@ -1128,11 +1146,14 @@ class DuckLakeMaintenance(DuckLakeProcedures):
                 total = 0
                 # Parcours des noms de table
                 for (name,) in names:
+                    inlined = f"{meta}.{quote_ident(name)}"
                     # Comptable des snapshots actifs associés
-                    row = self.conn.execute(
-                        f"SELECT count(*) FROM {meta}.{quote_ident(name)}"
-                        " WHERE end_snapshot IS NULL"
-                    ).fetchone()
+                    row = fetch_one(
+                        self.conn.execute(
+                            f"SELECT count(*) FROM {inlined} "
+                            "WHERE _ducklake_end_snapshot IS NULL"
+                        )
+                    )
                     total += int(row[0]) if row is not None else 0
                 return total, total > 0
             except Exception as e:
@@ -1140,12 +1161,14 @@ class DuckLakeMaintenance(DuckLakeProcedures):
                 self.logger.debug(f"inlined rows of {schema}.{table} unreadable: {e}")
         # Repli : indicateur booléen depuis l'historique des snapshots
         try:
-            row = self.conn.execute(
-                "SELECT max(snapshot_id) FILTER (WHERE changes::VARCHAR LIKE"
-                " '%inlined_insert%'), max(snapshot_id) FILTER (WHERE"
-                " changes::VARCHAR LIKE '%flushed_inlined%')"
-                f" FROM ducklake_snapshots({quote_literal(self.catalog_alias)})"
-            ).fetchone()
+            row = fetch_one(
+                self.conn.execute(
+                    "SELECT max(snapshot_id) FILTER (WHERE changes::VARCHAR LIKE"
+                    " '%inlined_insert%'), max(snapshot_id) FILTER (WHERE"
+                    " changes::VARCHAR LIKE '%flushed_inlined%')"
+                    f" FROM ducklake_snapshots({quote_literal(self.catalog_alias)})"
+                )
+            )
         except Exception as e:
             # Logging
             self.logger.warning(f"inlined state of {schema}.{table} unreadable: {e}")

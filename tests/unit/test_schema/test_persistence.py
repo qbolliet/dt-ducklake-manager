@@ -90,7 +90,7 @@ def test_create_duckdb_metadata_table(ducklake_builder: DuckLakeTablesBuilder) -
     ducklake_builder.create_duckdb_metadata_table(table_name="test_metadata")
 
     # Vérification que la table existe et a la structure attendue
-    result = ducklake_builder.conn.execute("SELECT * FROM test_metadata").pl()
+    result = ducklake_builder.conn.sql("SELECT * FROM test_metadata").pl()
     assert "name" in result.columns
     assert "label" in result.columns
     assert "is_categorical_forced" not in result.columns
@@ -115,7 +115,7 @@ def test_create_duckdb_dataset_metadata_table(
     # Création de la table descriptive du jeu de résultats
     ducklake_builder.create_duckdb_dataset_metadata_table()
 
-    result = ducklake_builder.conn.execute("SELECT * FROM dataset_metadata").pl()
+    result = ducklake_builder.conn.sql("SELECT * FROM dataset_metadata").pl()
 
     # Une seule ligne par schéma
     assert result.shape[0] == 1
@@ -149,7 +149,7 @@ def test_dataset_metadata_carries_builder_arguments(
         )
     builder.create_duckdb_dataset_metadata_table()
 
-    result = builder.conn.execute("SELECT * FROM dataset_metadata").pl()
+    result = builder.conn.sql("SELECT * FROM dataset_metadata").pl()
     assert result["label"][0] == "Prédictions"
     assert result["description"][0] == "Sorties du modèle"
     assert result["source"][0] == "pipeline-ml"
@@ -177,7 +177,7 @@ def test_create_duckdb_fact_table(
     ducklake_builder.create_duckdb_fact_table(table_name="test_fact")
 
     # Vérification que la table des faits existe et a la bonne forme
-    result = ducklake_builder.conn.execute("SELECT * FROM test_fact").pl()
+    result = ducklake_builder.conn.sql("SELECT * FROM test_fact").pl()
     assert result.shape[0] == len(sample_df)
     assert "category" in result.columns
     assert "status" in result.columns
@@ -185,6 +185,50 @@ def test_create_duckdb_fact_table(
     # Vérification que les colonnes catégorielles portent les libellés d'origine
     assert result["category"].to_list() == sample_df["category"].to_list()
     assert result["status"].to_list() == sample_df["status"].to_list()
+
+
+# Test qu'une colonne entièrement nulle est typée par son type inféré (chemin CTAS)
+@pytest.mark.parametrize("primary_keys", [None, ["id"]])
+def test_all_null_column_gets_inferred_type(primary_keys: list[str] | None) -> None:
+    """Test that an all-null column is stored as VARCHAR, not the "NULL" type.
+
+    Without an explicit cast, DuckDB 2.0 gives a CTAS column built from an Arrow
+    ``null`` array the ``"NULL"`` type (``INTEGER`` in 1.x), which rejects every
+    non-null value and would leak into ``metadata.sql_type``. The CTAS path
+    (no primary key) and the explicit DDL path must agree.
+
+    Args:
+        primary_keys: None for the CTAS path, ``['id']`` for the DDL path.
+    """
+    conn = duckdb.connect(":memory:")
+    df = pl.DataFrame({"id": [1, 2], "value": [1.0, 2.0], "empty": [None, None]})
+    assert df["empty"].dtype == pl.Null
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        DuckLakeTablesBuilder(
+            df, primary_keys=primary_keys, connection=conn
+        ).build_schema()
+
+    physical = conn.execute(
+        "SELECT data_type FROM information_schema.columns"
+        " WHERE table_name = 'fact_table' AND column_name = 'empty'"
+    ).fetchall()
+    declared = conn.execute(
+        "SELECT sql_type FROM metadata WHERE name = 'empty'"
+    ).fetchall()
+    assert physical == [("VARCHAR",)]
+    assert declared == [("VARCHAR",)]
+    # La colonne accepte des valeurs non nulles
+    conn.execute("INSERT INTO fact_table (id, value, empty) VALUES (3, 3.0, 'x')")
+    # Les autres colonnes gardent leur type
+    types = dict(
+        conn.execute(
+            "SELECT column_name, data_type FROM information_schema.columns"
+            " WHERE table_name = 'fact_table'"
+        ).fetchall()
+    )
+    assert types["id"] == "BIGINT"
+    assert types["value"] == "DOUBLE"
 
 
 # ---------------------------------------------------------------------------

@@ -61,7 +61,7 @@ def _facts(conn: Any) -> list[dict[str, Any]]:
         list[dict]: One dict per row, sorted by ``id``.
     """
     rows: list[dict[str, Any]] = (
-        conn.execute("SELECT * FROM fact_table ORDER BY id").pl().to_dicts()
+        conn.sql("SELECT * FROM fact_table ORDER BY id").pl().to_dicts()
     )
     return rows
 

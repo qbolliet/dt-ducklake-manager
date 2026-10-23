@@ -13,7 +13,13 @@ from ..maintenance.auditor import DatabaseAuditor, ValidationLevel
 from ..reporting import OperationReport
 
 # Import des utilitaires
-from ..utils.sql import quote_ident, remove_dataframe_duplicates
+from ..utils.sql import (
+    fetch_arrow,
+    fetch_one,
+    quote_ident,
+    register_view,
+    remove_dataframe_duplicates,
+)
 from ..utils.types import (
     check_supported_dtype,
     map_python_to_sql_type,
@@ -520,7 +526,7 @@ class DatabaseUpdater(BaseSchemaManager):
         )
 
         # Enregistrement du lot comme vue temporaire
-        self.conn.register(view_name, nw.to_native(update_df))
+        register_view(self.conn, view_name, nw.to_native(update_df))
         try:
             # Mise à jour des seules lignes existantes dont une valeur change.
             # Noms non qualifiés côté gauche du SET : DuckDB rejette les
@@ -534,24 +540,28 @@ class DatabaseUpdater(BaseSchemaManager):
                     f"f.{quote_ident(c)} IS DISTINCT FROM t.{quote_ident(c)}"
                     for c in value_columns
                 )
-                row = self.conn.execute(f"""
+                row = fetch_one(
+                    self.conn.execute(f"""
                     UPDATE {fact_table} f SET {set_clause}
                     FROM {view_name} t
                     WHERE {join_condition} AND ({changed})
-                """).fetchone()
+                """)
+                )
                 rows_updated = int(row[0]) if row is not None else 0
 
             # Insertion des combinaisons de clés absentes, triées selon cluster_by
             column_list = ", ".join(quote_ident(c) for c in columns)
             order_clause = self._cluster_by_order_clause(columns, cluster_by)
-            row = self.conn.execute(f"""
+            row = fetch_one(
+                self.conn.execute(f"""
                 INSERT INTO {fact_table} ({column_list})
                 SELECT {column_list} FROM {view_name} t
                 WHERE NOT EXISTS (
                     SELECT 1 FROM {fact_table} f WHERE {join_condition}
                 )
                 {order_clause}
-            """).fetchone()
+            """)
+            )
             rows_inserted = int(row[0]) if row is not None else 0
         finally:
             # Suppression de la vue, succès comme échec
@@ -650,7 +660,7 @@ class DatabaseUpdater(BaseSchemaManager):
         fact_table = self._qualified("fact_table")
         batch_view = "_value_label_check_batch"
         codes_view = "_value_label_check_codes"
-        self.conn.register(batch_view, nw.to_native(df.select(primary_keys)))
+        register_view(self.conn, batch_view, nw.to_native(df.select(primary_keys)))
         try:
             # Condition de jointure sur les clés primaires
             join_condition = " AND ".join(
@@ -846,7 +856,7 @@ class DatabaseUpdater(BaseSchemaManager):
                 f"f.{quote_ident(k)} = t.{quote_ident(k)}" for k in primary_keys
             )
 
-            self.conn.register(view_name, nw.to_native(df_nw))
+            register_view(self.conn, view_name, nw.to_native(df_nw))
             try:
                 # Un seul UPDATE ... FROM pour toutes les colonnes concernées,
                 # restreint aux lignes dont une valeur change (noms non qualifiés
@@ -859,12 +869,14 @@ class DatabaseUpdater(BaseSchemaManager):
                     f"f.{quote_ident(c)} IS DISTINCT FROM t.{quote_ident(c)}"
                     for c in new_columns
                 )
-                row = self.conn.execute(f"""
+                row = fetch_one(
+                    self.conn.execute(f"""
                     UPDATE {fact_table} f
                     SET {set_clause}
                     FROM {view_name} t
                     WHERE {join_condition} AND ({changed})
-                """).fetchone()
+                """)
+                )
                 rows_updated = int(row[0]) if row is not None else 0
 
                 # Insertion des combinaisons absentes de la base (fusion externe) :
@@ -876,14 +888,16 @@ class DatabaseUpdater(BaseSchemaManager):
                 order_clause = self._cluster_by_order_clause(
                     list(df_nw.columns), cluster_by
                 )
-                row = self.conn.execute(f"""
+                row = fetch_one(
+                    self.conn.execute(f"""
                     INSERT INTO {fact_table} ({insert_columns})
                     SELECT {insert_columns} FROM {view_name} t
                     WHERE NOT EXISTS (
                         SELECT 1 FROM {fact_table} f WHERE {join_condition}
                     )
                     {order_clause}
-                """).fetchone()
+                """)
+                )
                 rows_inserted = int(row[0]) if row is not None else 0
             finally:
                 # Suppression de la vue, succès comme échec
@@ -999,9 +1013,11 @@ class DatabaseUpdater(BaseSchemaManager):
 
         # Résolution de la colonne de code associée à la colonne de libellés
         metadata_table = self._qualified("metadata")
-        _row = self.conn.execute(
-            f"SELECT label_for FROM {metadata_table} WHERE name = ?", [label_column]
-        ).fetchone()
+        _row = fetch_one(
+            self.conn.execute(
+                f"SELECT label_for FROM {metadata_table} WHERE name = ?", [label_column]
+            )
+        )
         code_column = _row[0] if _row is not None else None
         if code_column is None:
             raise ValueError(
@@ -1042,7 +1058,7 @@ class DatabaseUpdater(BaseSchemaManager):
             commit_info=commit_info,
         ) as report:
             # Enregistrement d'une vue temporaire pour la jointure
-            self.conn.register(view_name, nw.to_native(labels_nw))
+            register_view(self.conn, view_name, nw.to_native(labels_nw))
             try:
                 # Codes absents de la base : jamais insérés, seulement signalés.
                 # NOT EXISTS plutôt que NOT IN : un code NULL dans la table des
@@ -1069,12 +1085,14 @@ class DatabaseUpdater(BaseSchemaManager):
 
                 # UPDATE unique portant sur tous les codes du lot, restreint aux
                 # lignes dont le libellé change
-                row = self.conn.execute(f"""
+                row = fetch_one(
+                    self.conn.execute(f"""
                     UPDATE {fact_table} f SET {quoted_label} = t.{quoted_label}
                     FROM {view_name} t
                     WHERE f.{quoted_code} = t.{quoted_code}
                       AND f.{quoted_label} IS DISTINCT FROM t.{quoted_label}
-                """).fetchone()
+                """)
+                )
                 # Comptage de repli, remplacé par la mesure DuckLake après commit
                 report.rows_updated = int(row[0]) if row is not None else 0
 
@@ -1156,8 +1174,9 @@ class DatabaseUpdater(BaseSchemaManager):
 
         # Création de la requête
         column_list = ", ".join(quote_ident(c) for c in columns)
-        result = self.conn.execute(
-            f"SELECT DISTINCT {column_list} FROM {self._qualified('fact_table')}"
-        ).to_arrow_table()
+        result = fetch_arrow(
+            self.conn,
+            f"SELECT DISTINCT {column_list} FROM {self._qualified('fact_table')}",
+        )
         combinations: nw.DataFrame[Any] = nw.from_native(result, eager_only=True)
         return combinations

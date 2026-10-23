@@ -563,11 +563,9 @@ def _snapshot_state(conn: Any) -> dict[str, Any]:
         dict: row count, sorted fact table content and metadata content.
     """
     return {
-        "count": conn.execute("SELECT COUNT(*) FROM fact_table").fetchone()[0],
-        "facts": conn.execute("SELECT * FROM fact_table ORDER BY id").pl().to_dicts(),
-        "metadata": conn.execute("SELECT * FROM metadata ORDER BY name")
-        .pl()
-        .to_dicts(),
+        "count": conn.execute("SELECT COUNT(*) FROM fact_table").fetchall()[0][0],
+        "facts": conn.sql("SELECT * FROM fact_table ORDER BY id").pl().to_dicts(),
+        "metadata": conn.sql("SELECT * FROM metadata ORDER BY name").pl().to_dicts(),
     }
 
 

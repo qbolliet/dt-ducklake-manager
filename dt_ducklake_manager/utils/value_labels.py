@@ -2,7 +2,8 @@
 from collections.abc import Iterable, Mapping
 from typing import TYPE_CHECKING
 
-from .sql import qualify_table, quote_ident, resolve_catalog
+# Utilitaires SQL
+from .sql import fetch_one, qualify_table, quote_ident, resolve_catalog
 
 if TYPE_CHECKING:
     import duckdb
@@ -186,10 +187,12 @@ def check_value_label_dependency(
         if restrict_to is not None
         else ""
     )
-    null_code_row = conn.execute(f"""
+    null_code_row = fetch_one(
+        conn.execute(f"""
         SELECT COUNT(*) FROM {fact_table_qualified}
         WHERE {quoted_code} IS NULL AND {quoted_label} IS NOT NULL{null_code_clause}
-    """).fetchone()
+    """)
+    )
     null_code_count = null_code_row[0] if null_code_row is not None else 0
 
     if null_code_count > 0:

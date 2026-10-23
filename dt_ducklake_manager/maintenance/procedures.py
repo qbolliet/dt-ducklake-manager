@@ -54,7 +54,7 @@ from ..reporting import OperationReport
 
 # Module d'initialisation du logger
 from ..utils.logger import _init_logger
-from ..utils.sql import qualify_table, quote_ident, quote_literal
+from ..utils.sql import fetch_one, qualify_table, quote_ident, quote_literal
 
 # Taille cible (octets) d'un fichier de données, alignée sur l'option recommandée
 # ``target_file_size = '100MB'`` (RECOMMENDED_DUCKLAKE_OPTIONS du connecteur,
@@ -777,11 +777,13 @@ class DuckLakeProcedures:
             catalog or cannot be read.
         """
         try:
-            row = self.conn.execute(
-                "SELECT value FROM ducklake_options(?)"
-                " WHERE option_name = 'target_file_size'",
-                [self.catalog_alias],
-            ).fetchone()
+            row = fetch_one(
+                self.conn.execute(
+                    "SELECT value FROM ducklake_options(?)"
+                    " WHERE option_name = 'target_file_size'",
+                    [self.catalog_alias],
+                )
+            )
         except Exception as e:
             self.logger.debug(f"target_file_size unreadable: {e}")
             return DEFAULT_TARGET_FILE_SIZE_BYTES
@@ -800,9 +802,10 @@ class DuckLakeProcedures:
         Returns:
             int: Row count, or ``0`` if the table cannot be read.
         """
+        # Qualification de la table
         qualified = qualify_table(table, schema, self.catalog_alias)
         try:
-            row = self.conn.execute(f"SELECT COUNT(*) FROM {qualified}").fetchone()
+            row = fetch_one(self.conn.execute(f"SELECT COUNT(*) FROM {qualified}"))
         except Exception:
             return 0
         return int(row[0]) if row is not None else 0

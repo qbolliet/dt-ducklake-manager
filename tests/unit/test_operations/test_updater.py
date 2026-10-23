@@ -965,14 +965,12 @@ def _snapshot_state(conn: Any) -> dict[str, Any]:
         ``dataset_metadata`` timestamp.
     """
     return {
-        "count": conn.execute("SELECT COUNT(*) FROM fact_table").fetchone()[0],
-        "facts": conn.execute("SELECT * FROM fact_table ORDER BY id").pl().to_dicts(),
-        "metadata": conn.execute("SELECT * FROM metadata ORDER BY name")
-        .pl()
-        .to_dicts(),
+        "count": conn.execute("SELECT COUNT(*) FROM fact_table").fetchall()[0][0],
+        "facts": conn.sql("SELECT * FROM fact_table ORDER BY id").pl().to_dicts(),
+        "metadata": conn.sql("SELECT * FROM metadata ORDER BY name").pl().to_dicts(),
         "updated_at": conn.execute(
             "SELECT updated_at FROM dataset_metadata"
-        ).fetchone(),
+        ).fetchall(),
     }
 
 
@@ -1543,3 +1541,56 @@ def test_compact_after_update_defaults_to_false(method: str) -> None:
     """
     signature = inspect.signature(getattr(DatabaseUpdater, method))
     assert signature.parameters["compact_after_update"].default is False
+
+
+# ---------------------------------------------------------------------------
+# Tests des résultats execute() laissés ouverts (DuckDB 2.0)
+# ---------------------------------------------------------------------------
+
+
+# Test qu'une mise à jour ne laisse aucun résultat ouvert à l'appelant
+def test_update_leaves_no_open_result(
+    updater: DatabaseUpdater, update_df: pl.DataFrame
+) -> None:
+    """Test that the caller can use sql()/register() right after an update.
+
+    Since DuckDB 2.0 an unfinished ``execute()`` result makes the next ``sql()``
+    or ``register()`` on the connection raise ``ResourceInUseException``.
+
+    Args:
+        updater: DatabaseUpdater fixture.
+        update_df: DataFrame with new rows.
+    """
+    assert updater.update_database(update_df) is True
+    assert updater.conn.sql("SELECT count(*) FROM fact_table").fetchall() == [(7,)]
+    updater.conn.register("caller_view", update_df)
+    updater.conn.unregister("caller_view")
+
+
+# Test qu'une mise à jour tolère un résultat laissé ouvert par l'appelant
+def test_update_after_caller_open_result(
+    updater: DatabaseUpdater, update_df: pl.DataFrame
+) -> None:
+    """Test that an update succeeds after a caller's partially read result.
+
+    Args:
+        updater: DatabaseUpdater fixture.
+        update_df: DataFrame with new rows.
+    """
+    # Résultat partiellement lu par l'appelant (fetchone sur plusieurs lignes)
+    updater.conn.execute("SELECT * FROM fact_table").fetchone()
+    assert updater.update_database(update_df) is True
+    assert updater.conn.execute("SELECT count(*) FROM fact_table").fetchall() == [(7,)]
+
+
+# Test que les métadonnées sont relues malgré un résultat laissé ouvert
+def test_load_metadata_after_caller_open_result(updater: DatabaseUpdater) -> None:
+    """Test that an open caller result is not mistaken for a missing table.
+
+    Args:
+        updater: DatabaseUpdater fixture.
+    """
+    updater.conn.execute("SELECT * FROM metadata").fetchone()
+    updater._invalidate_metadata_cache()
+    metadata = updater._load_current_metadata()
+    assert len(metadata) == 6
