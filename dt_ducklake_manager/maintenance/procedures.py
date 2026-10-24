@@ -59,6 +59,7 @@ from ..utils.sql import (
     qualify_table,
     quote_ident,
     quote_literal,
+    resolve_ducklake_schema_id,
     sorted_by_clause,
 )
 
@@ -1003,7 +1004,7 @@ class DuckLakeProcedures:
 
         Args:
             table: Bare table name.
-            schema: DuckLake schema name.
+            schema: DuckLake schema path (``'sales.europe'`` when nested).
 
         Returns:
             int | None: The ``table_id``, or None when not found.
@@ -1012,17 +1013,20 @@ class DuckLakeProcedures:
             duckdb.Error: When the internal metadata catalog cannot be read (no
                 DuckLake catalog attached).
         """
+        # Schéma résolu par son chemin complet : ducklake_schema ne stocke que le
+        # dernier niveau d'un schéma imbriqué
+        schema_id = resolve_ducklake_schema_id(self.conn, self.catalog_alias, schema)
+        if schema_id is None:
+            return None
         meta = self._metadata_catalog()
         row = fetch_one(
             self.conn.execute(
                 f"""
-            SELECT t.table_id
-            FROM {meta}.ducklake_table t
-            JOIN {meta}.ducklake_schema s ON s.schema_id = t.schema_id
-            WHERE t.table_name = ? AND s.schema_name = ?
-              AND t.end_snapshot IS NULL AND s.end_snapshot IS NULL
+            SELECT table_id
+            FROM {meta}.ducklake_table
+            WHERE table_name = ? AND schema_id = ? AND end_snapshot IS NULL
             """,
-                [table, schema],
+                [table, schema_id],
             )
         )
         return int(row[0]) if row is not None else None

@@ -41,7 +41,7 @@ from typing import Any
 import duckdb
 
 # Utilitaires
-from .utils.sql import fetch_one, is_ducklake_catalog
+from .utils.sql import fetch_one, is_ducklake_catalog, resolve_ducklake_schema_id
 
 __all__ = ["OperationReport"]
 
@@ -265,17 +265,20 @@ def _table_info(
         return None
     # Exécution de la requête de collecte des informations
     try:
+        # Schéma résolu par son chemin complet : ducklake_schema ne stocke que le
+        # dernier niveau d'un schéma imbriqué
+        schema_id = resolve_ducklake_schema_id(conn, catalog_alias, schema)
+        if schema_id is None:
+            return None
         row = fetch_one(
             conn.execute(
                 f"""
-            SELECT ti.file_count, ti.file_size_bytes, ti.delete_file_count,
-                   ti.delete_file_size_bytes
-            FROM ducklake_table_info('{catalog_alias}') ti
-            JOIN __ducklake_metadata_{catalog_alias}.ducklake_schema s
-                ON s.schema_id = ti.schema_id
-            WHERE ti.table_name = ? AND s.schema_name = ?
+            SELECT file_count, file_size_bytes, delete_file_count,
+                   delete_file_size_bytes
+            FROM ducklake_table_info('{catalog_alias}')
+            WHERE table_name = ? AND schema_id = ?
             """,
-                [table, schema],
+                [table, schema_id],
             )
         )
         if row is None:

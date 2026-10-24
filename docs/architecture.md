@@ -146,6 +146,30 @@ tables by its `schema`, and `DuckLakeConnector` creates the schema on first use.
   all schemas (process-level lock).
 - **Requires schema routing** in the connection and management layer.
 
+#### Nested schemas (DuckDB 2.0 / DuckLake 1.1)
+
+Since DuckLake 1.1, a schema can live inside another (`CREATE SCHEMA
+db.sales.europe`). A nested schema is passed to the `schema` argument as its
+levels joined with a dot — `schema="sales.europe"`, the convention shared with the
+GraphQL API — and its tables are qualified level by level
+(`"db"."sales"."europe"."fact_table"`). Consequences:
+
+- the dot is reserved as the level separator: a flat schema whose own name
+  contains a dot cannot be targeted, and a path with an empty level
+  (`"a..b"`) is rejected;
+- a nested schema needs an attached catalog: without it, the first level would be
+  read as a catalog name;
+- `DuckLakeConnector` and `DuckLakeTablesBuilder` create the missing parent levels,
+  but the connector does **not** `USE` a nested schema (DuckDB's `USE` only
+  accepts `catalog.schema`); the package qualifies every reference, so only
+  unqualified user queries are affected;
+- `information_schema`, `duckdb_schemas()` and the internal `ducklake_schema`
+  table report only the **last** level of a nested schema (`europe` for both
+  `sales.europe` and `hr.europe`), so schemas are resolved by walking their
+  parents (`parent_schema_oid` / `parent_schema_id`), never by leaf name;
+- a catalog still on the DuckLake 1.0 specification holds flat schemas only; it
+  must be migrated (`ATTACH ... (AUTOMATIC_MIGRATION true)`) before nesting.
+
 ### Summary
 
 | Option | Key advantage | Main complexity cost | Status |

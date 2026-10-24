@@ -14,7 +14,7 @@ import psycopg2
 
 # Module d'initialisation du logger
 from ..utils.logger import _init_logger
-from ..utils.sql import quote_literal
+from ..utils.sql import create_schema, qualify_schema, quote_literal, schema_parts
 
 # Nom du logger de ce module (fichier par défaut : <cwd>/logs/ducklake_connector.log)
 _LOGGER_NAME = "ducklake_connector"
@@ -160,7 +160,10 @@ class DuckLakeConnector:
             backend credentials, referenced via ``META_SECRET`` (PostgreSQL only).
         read_only (bool): Whether the connection is read-only.
         catalog_alias (str): Alias used in the ``ATTACH`` statement (default ``'db'``).
-        schema (str): DuckLake schema to activate with ``USE`` (default ``'main'``).
+        schema (str): DuckLake schema path to activate with ``USE`` (default
+            ``'main'``). A nested schema is named by its levels joined with a dot
+            (``'sales.europe'``); it is created but not activated, ``USE`` being
+            limited to ``catalog.schema``.
         logger (logging.Logger): Logger instance.
 
     Examples:
@@ -252,7 +255,8 @@ class DuckLakeConnector:
                 :meth:`at_clause` when a connection is already open.
             catalog_alias (str): Alias for the attached DuckLake catalog in SQL
                 (e.g. ``USE {alias}.{schema}``). Defaults to ``'db'``.
-            schema (str): DuckLake schema to activate. Defaults to ``'main'``.
+            schema (str): DuckLake schema path to activate. Defaults to ``'main'``.
+                A nested schema is written ``'sales.europe'``.
             catalog_type (CatalogType | str): Catalog backend to use. Defaults to
                 ``CatalogType.DUCKDB`` (local file). Drives which DuckDB extensions
                 are loaded by :meth:`connect`.
@@ -349,6 +353,8 @@ class DuckLakeConnector:
         self.snapshot_version = snapshot_version
         self.snapshot_time = snapshot_time
         self.catalog_alias = catalog_alias
+        # Validation précoce du chemin de schéma (niveaux non vides)
+        schema_parts(schema)
         self.schema = schema
 
         # Options DuckLake appliquées après ATTACH (set_option) et limite d'inlining
@@ -430,7 +436,8 @@ class DuckLakeConnector:
            backend extension when applicable, e.g. ``postgres``).
         3. Create the credential secret when one is configured (PostgreSQL).
         4. Build and execute the ``ATTACH`` statement with appropriate options.
-        5. Activate the target schema with ``USE``.
+        5. Create the target schema and activate it with ``USE`` (flat schemas
+           only, see :meth:`_activate_schema`).
 
         Returns:
             duckdb.DuckDBPyConnection: Configured DuckDB connection ready for use.
@@ -1170,19 +1177,34 @@ class DuckLakeConnector:
         EXISTS`` is idempotent and only issued on writable connections; read-only
         connections (dashboards, APIs) skip creation and simply activate the schema.
 
+        A nested schema (``'sales.europe'``) is created level by level but **not**
+        activated: DuckDB's ``USE`` only accepts ``catalog`` or ``catalog.schema``
+        (``SET schema`` / ``search_path`` share the limit). The package qualifies
+        every table reference with the catalog and the full schema path, so it does
+        not depend on the current schema; unqualified user queries, however, keep
+        resolving against the connection's current database.
+
         Args:
             conn (duckdb.DuckDBPyConnection): Connection with the catalog attached.
         """
-        # Création du schéma cible si la connexion est en écriture.
-        # Indispensable pour permettre de construire un nouveau schéma dans un
-        # catalogue existant ; sans cela, le USE échouerait sur un schéma absent.
+        # Création du schéma cible (et de ses parents) si la connexion est en
+        # écriture. Indispensable pour permettre de construire un nouveau schéma
+        # dans un catalogue existant ; sans cela, le USE échouerait sur un schéma
+        # absent.
         if not self.read_only:
-            conn.execute(
-                f"CREATE SCHEMA IF NOT EXISTS {self.catalog_alias}.{self.schema}"
+            create_schema(conn, self.schema, self.catalog_alias)
+
+        # Schéma imbriqué : USE limité à catalog.schema par le parseur DuckDB
+        if len(schema_parts(self.schema)) > 1:
+            self.logger.warning(
+                f"Nested schema {self.catalog_alias}.{self.schema} not activated"
+                " (USE accepts catalog.schema only): unqualified queries do not"
+                " resolve against it"
             )
+            return
 
         # Activation du schéma cible pour que les requêtes non qualifiées fonctionnent
-        conn.execute(f"USE {self.catalog_alias}.{self.schema}")
+        conn.execute(f"USE {qualify_schema(self.schema, self.catalog_alias)}")
         self.logger.info(f"Activated scheme : {self.catalog_alias}.{self.schema}")
 
     # Création des répertoires parents du catalogue et des données si absents

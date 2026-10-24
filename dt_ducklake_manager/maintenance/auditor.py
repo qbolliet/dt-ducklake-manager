@@ -19,6 +19,7 @@ from ..utils.sql import (
     fetch_one,
     quote_ident,
     resolve_catalog,
+    resolve_schema_oid,
 )
 from ..utils.types import METADATA_COLUMNS
 from ..utils.value_labels import check_value_label_dependency, validate_value_labels
@@ -409,17 +410,20 @@ class DatabaseAuditor(SchemaScoped):
         Raises:
             duckdb.Error: If the catalog cannot be queried.
         """
-        # Tables du schéma audité (filtrées sur le catalogue lorsqu'il est attaché)
-        catalog_filter = " AND table_catalog = ?" if self._catalog is not None else ""
-        params = [self.schema] + ([self._catalog] if self._catalog is not None else [])
-        tables = {
-            row[0]
-            for row in self.conn.execute(
-                "SELECT table_name FROM information_schema.tables"
-                f" WHERE table_schema = ?{catalog_filter}",
-                params,
-            ).fetchall()
-        }
+        # Tables du schéma audité, résolu par son chemin complet (information_schema
+        # ne donne que le dernier niveau d'un schéma imbriqué)
+        schema_oid = resolve_schema_oid(self.conn, self.schema, self._catalog)
+        tables = (
+            {
+                row[0]
+                for row in self.conn.execute(
+                    "SELECT table_name FROM duckdb_tables() WHERE schema_oid = ?",
+                    [schema_oid],
+                ).fetchall()
+            }
+            if schema_oid is not None
+            else set()
+        )
 
         # Lignes de metadata
         metadata: nw.DataFrame[Any] | None = None
