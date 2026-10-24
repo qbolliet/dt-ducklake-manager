@@ -4,7 +4,7 @@ default_install_hook_types: [pre-commit, commit-msg]
 
 repos:
  - repo: https://github.com/pre-commit/pre-commit-hooks
-   rev: v5.0.0
+   rev: v6.0.0
    hooks:
      - id: trailing-whitespace
      - id: end-of-file-fixer
@@ -15,27 +15,29 @@ repos:
      - id: debug-statements
 
  - repo: https://github.com/astral-sh/ruff-pre-commit
-   rev: v0.11.2
+   rev: v0.17.2
    hooks:
-     - id: ruff
+     - id: ruff-check
        args: [--fix]
      - id: ruff-format
 
  - repo: https://github.com/pre-commit/mirrors-mypy
-   rev: v1.15.0
+   rev: v2.4.0
    hooks:
      - id: mypy
+       # Même périmètre que `task typecheck` : les tests ne sont pas typés en strict
+       files: ^dt_ducklake_manager/
        additional_dependencies:
          - duckdb>=2.0.0,<3
-         - narwhals>=1.48.1
-         - polars>=1.39.3
-         - pyarrow>=23.0.1
+         - narwhals>=2.27.1,<3
+         - polars>=2.0.0,<3
+         - pyarrow>=26.0.0
 
  # Validation du format Conventional Commits sur le message de commit.
  # Indispensable au changelog : release-please n'incrémente la version et
  # ne génère les notes qu'à partir de commits conventionnels.
  - repo: https://github.com/compilerla/conventional-pre-commit
-   rev: v3.6.0
+   rev: v4.4.0
    hooks:
      - id: conventional-pre-commit
        stages: [commit-msg]
