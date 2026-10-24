@@ -4,6 +4,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.0](https://github.com/qbolliet/dt-ducklake-manager/compare/v0.5.0...v0.6.0) (2026-10-24)
+
+
+### Features
+
+* nested schemas ([a2b1963](https://github.com/qbolliet/dt-ducklake-manager/commit/a2b196377ce97d374687ea4f0edfb7fcdd389467))
+
+
+### Bug Fixes
+
+* package version in lock file ([265b7d3](https://github.com/qbolliet/dt-ducklake-manager/commit/265b7d3cd51342d9c063cf53d1cf342536b24151))
+
 ## [0.5.0](https://github.com/qbolliet/dt-ducklake-manager/compare/v0.4.1...v0.5.0) (2026-10-24)
 
 
