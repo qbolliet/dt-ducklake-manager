@@ -1,6 +1,7 @@
 # Importation des modules
 # Modules de base
 import os
+from datetime import timedelta
 from typing import Any
 
 # DuckDB
@@ -59,6 +60,7 @@ class DatabaseDeleter(BaseSchemaManager):
         auto_cleanup: bool = True,
         catalog_alias: str = "db",
         schema: str = "main",
+        compaction_window: timedelta | None = None,
     ):
         """
         Initialize the database deleter.
@@ -80,6 +82,10 @@ class DatabaseDeleter(BaseSchemaManager):
             schema: DuckLake schema to delete from. A single catalog can host several
                 schemas; all tables are qualified by this one, and compaction calls
                 target it. Defaults to ``'main'``.
+            compaction_window: Makes the post-write compaction
+                (``compact_after_update=True``) incremental: only the files of the
+                snapshots of the last ``compaction_window`` are merged. Defaults to
+                None (every small file of the table is a merge candidate).
 
         Example:
             >>> conn = DuckLakeConnector('catalog.ducklake', 'data/').connect()
@@ -92,6 +98,7 @@ class DatabaseDeleter(BaseSchemaManager):
             log_filename=log_filename,
             schema=schema,
             catalog_alias=catalog_alias,
+            compaction_window=compaction_window,
         )
 
         # Auditeur structurel et niveau de l'audit post-écriture
@@ -321,8 +328,9 @@ class DatabaseDeleter(BaseSchemaManager):
         Pass ``cascade=True`` to allow it anyway; every child's ``parent_name`` and
         every label column's ``label_for`` is then reset to ``NULL``, with a
         warning. A dropped column that is part of ``dataset_metadata.cluster_by``
-        is also removed from it (reset to ``NULL`` if it was the only sort column),
-        with a warning. Dropping a label column itself needs nothing special.
+        is first removed from it and from the table's ``SORTED BY`` key (reset if it
+        was the only sort column), with a warning: DuckLake refuses to drop a sort
+        column. Dropping a label column itself needs nothing special.
         ``ALTER TABLE ... DROP COLUMN`` is a DuckLake metadata-only operation: no
         data file is rewritten. Either every requested column is dropped, or none
         is.

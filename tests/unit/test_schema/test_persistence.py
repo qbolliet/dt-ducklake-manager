@@ -14,6 +14,8 @@ import polars as pl
 import pytest
 
 # Module à tester
+from dt_ducklake_manager.connection import DuckLakeConnector
+from dt_ducklake_manager.maintenance import DuckLakeMaintenance
 from dt_ducklake_manager.schema import DuckLakeTablesBuilder
 from tests.utils.ducklake import requires_ducklake
 
@@ -961,10 +963,57 @@ def test_build_schema_cluster_by_unknown_column_raises(
 
 
 # Test que la table des faits est effectivement triée selon cluster_by
+@requires_ducklake
+@pytest.mark.parametrize("primary_keys", [["id"], None])
 def test_build_schema_fact_table_sorted_by_cluster_by(
+    sample_df: pl.DataFrame, tmp_path: Path, primary_keys: list[str] | None
+) -> None:
+    """Test that both creation paths declare SORTED BY and write sorted rows.
+
+    ``primary_keys=['id']`` goes through the explicit DDL, ``None`` through the
+    CTAS; ``category`` is not the default (``id``) order.
+
+    Args:
+        sample_df: Sample polars DataFrame.
+        tmp_path: pytest temporary directory.
+        primary_keys: Primary keys of the build (selects the creation path).
+    """
+    data_dir = str(tmp_path / "data")
+    os.makedirs(data_dir)
+    conn = DuckLakeConnector(
+        str(tmp_path / "test.ducklake"), data_dir, data_inlining_row_limit=0
+    ).connect()
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        builder = DuckLakeTablesBuilder(
+            sample_df,
+            categorical_threshold=4,
+            primary_keys=primary_keys,
+            connection=conn,
+        )
+    builder.build_schema(cluster_by=["category"])
+
+    assert DuckLakeMaintenance(conn).sorted_by() == ["category"]
+    ((path,),) = conn.execute(
+        "SELECT data_file FROM ducklake_list_files('db', 'fact_table')"
+    ).fetchall()
+    categories = [
+        row[0]
+        for row in conn.execute(
+            f"SELECT category FROM read_parquet('{path}')"
+        ).fetchall()
+    ]
+    assert categories == sorted(categories)
+    conn.close()
+
+
+# Test que cluster_by est seulement enregistré sur une connexion DuckDB simple
+def test_build_schema_cluster_by_recorded_without_ducklake(
     sample_df: pl.DataFrame,
 ) -> None:
-    """Test that the fact table rows are physically written in cluster_by order.
+    """Test that a plain DuckDB build records cluster_by without SORTED BY.
+
+    DuckDB rejects ``SORTED BY``: the build would fail if it were emitted.
 
     Args:
         sample_df: Sample polars DataFrame.
@@ -974,14 +1023,12 @@ def test_build_schema_fact_table_sorted_by_cluster_by(
         builder = DuckLakeTablesBuilder(
             sample_df, categorical_threshold=4, primary_keys=["id"]
         )
-    # Tri décroissant improbable par défaut (id croissant) : category d'abord
     builder.build_schema(cluster_by=["category"])
 
-    categories = [
-        row[0]
-        for row in builder.conn.execute("SELECT category FROM fact_table").fetchall()
-    ]
-    assert categories == sorted(categories)
+    ((cluster_by,),) = builder.conn.execute(
+        "SELECT cluster_by FROM dataset_metadata"
+    ).fetchall()
+    assert json.loads(cluster_by) == ["category"]
 
 
 # Test que create_duckdb_dataset_metadata_table appelée directement avec cluster_by

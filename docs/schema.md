@@ -22,7 +22,7 @@ indirecting through an id.
 The table is:
 
 - deduplicated on the primary keys at build time;
-- written **sorted** by `dataset_metadata.cluster_by` (see [cluster_by](#cluster_by-and-physical-sort-order));
+- **sorted** by DuckLake on `dataset_metadata.cluster_by`, its `SORTED BY` key (see [cluster_by](#cluster_by-and-physical-sort-order));
 - optionally Hive-partitioned on very-low-cardinality columns that are
   systematically filtered on (year, country) — never to the point of
   producing files under ~100 MB.
@@ -383,13 +383,20 @@ DuckLake has no index: pruning relies entirely on per-file column statistics
 (`min`/`max`, exposed by `ducklake_file_column_stats`) and Parquet row-group
 statistics, both of which only help when the data is physically grouped.
 `cluster_by` (`dataset_metadata.cluster_by`, a JSON list) names the columns
-the fact table is sorted by at write time — default: the primary keys, in
-their declared order (most selective first). Build and update batches are
-written `ORDER BY cluster_by`.
+the fact table is sorted by — default: the primary keys, in their declared
+order (most selective first). It is declared to DuckLake as the table's sort
+key (`CREATE TABLE … SORTED BY`, then `ALTER TABLE … SET SORTED BY` through
+`update_cluster_by`), and DuckLake applies it itself to the build, to every
+later `INSERT`, and to every merge of the post-write compaction: the package
+writes no `ORDER BY`. `update_cluster_by` changes both in one transaction;
+dropping a sort column (`delete_columns`) first removes it from the key, since
+DuckLake refuses to drop a column of the sort key. On a plain DuckDB
+connection (in-memory tests), which has no `SORTED BY`, `cluster_by` is only
+recorded.
 
 Successive updates degrade this ordering: each batch is sorted *within
-itself* but not merged into the table's global order, so file ranges
-progressively overlap. `DuckLakeMaintenance.recluster()` restores it by
+itself* (and the rows rewritten by an `UPDATE` only at the next merge) but not
+into the table's global order, so file ranges progressively overlap. `DuckLakeMaintenance.recluster()` restores it by
 rewriting the whole table in sort order — see
 [Storage lifecycle and maintenance](maintenance.md) for when and how to run
 it, and for the `overlap_ratio` indicator that tells you it's needed.

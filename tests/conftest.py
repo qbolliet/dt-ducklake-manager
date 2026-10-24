@@ -1,8 +1,11 @@
 # Importation des modules
 # Modules de base
 import logging
+import os
 import warnings
+from collections.abc import Generator
 from datetime import datetime
+from pathlib import Path
 
 import duckdb
 import polars as pl
@@ -11,6 +14,7 @@ import polars as pl
 import pytest
 
 # Modules du package
+from dt_ducklake_manager.connection import DuckLakeConnector
 from dt_ducklake_manager.schema import DuckLakeTablesBuilder
 
 
@@ -153,3 +157,36 @@ def built_ducklake_schema(sample_df: pl.DataFrame) -> duckdb.DuckDBPyConnection:
         )
     builder.build_schema()
     return builder.conn
+
+
+# Fixture fournissant un vrai catalogue DuckLake avec un schéma déjà construit
+@pytest.fixture
+def built_lake_schema(
+    sample_df: pl.DataFrame, tmp_path: Path
+) -> Generator[duckdb.DuckDBPyConnection]:
+    """Provide a real DuckLake catalog holding the sample_df schema.
+
+    Same build as ``built_ducklake_schema`` (categorical_threshold=4,
+    primary_keys=['id'], hence cluster_by=['id']), but on a real DuckLake catalog
+    (alias ``db``, inlining disabled), where ``SORTED BY`` and the maintenance
+    procedures exist. Tests using it must be marked ``requires_ducklake``.
+
+    Args:
+        sample_df: Sample polars DataFrame.
+        tmp_path: pytest temporary directory.
+
+    Yields:
+        duckdb.DuckDBPyConnection: connection attached to the catalog.
+    """
+    data_dir = str(tmp_path / "data")
+    os.makedirs(data_dir)
+    conn = DuckLakeConnector(
+        str(tmp_path / "test.ducklake"), data_dir, data_inlining_row_limit=0
+    ).connect()
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        DuckLakeTablesBuilder(
+            sample_df, categorical_threshold=4, primary_keys=["id"], connection=conn
+        ).build_schema()
+    yield conn
+    conn.close()

@@ -1,6 +1,7 @@
 # Importation des modules
 # Modules de base
 import logging
+from pathlib import Path
 from typing import Any
 
 import duckdb
@@ -11,16 +12,22 @@ import pyarrow as pa
 # Module de tests
 import pytest
 
-# Modules du package à tester
+# Connecteur DuckLake
+from dt_ducklake_manager.connection import DuckLakeConnector
 from dt_ducklake_manager.utils.sql import (
     _build_sql_filter,
     _build_where_clause,
     fetch_arrow,
     fetch_one,
+    is_ducklake_catalog,
     quote_literal,
     register_view,
     remove_dataframe_duplicates,
+    sorted_by_clause,
 )
+
+# Modules du package à tester
+from tests.utils.ducklake import requires_ducklake
 
 # ===========================================================================
 # Tests de remove_dataframe_duplicates
@@ -463,3 +470,85 @@ def test_register_view_polars_dataframe() -> None:
     conn = duckdb.connect(":memory:")
     register_view(conn, "v", pl.DataFrame({"a": [1, 2]}))
     assert conn.execute("SELECT count(*) FROM v").fetchall() == [(2,)]
+
+
+# ---------------------------------------------------------------------------
+# Tests de is_ducklake_catalog()
+# ---------------------------------------------------------------------------
+
+
+# Test que l'absence d'alias, de connexion ou de base attachée renvoie False
+def test_is_ducklake_catalog_false_without_catalog() -> None:
+    """Test the negative cases that need no DuckLake extension."""
+    conn = duckdb.connect()
+    assert is_ducklake_catalog(conn, None) is False
+    assert is_ducklake_catalog(None, "db") is False
+    assert is_ducklake_catalog(conn, "db") is False
+    # Base DuckDB par défaut : attachée, mais pas DuckLake
+    assert is_ducklake_catalog(conn, "memory") is False
+
+
+# Test qu'une base DuckDB attachée sous l'alias n'est pas prise pour DuckLake
+def test_is_ducklake_catalog_false_on_attached_duckdb(tmp_path: Path) -> None:
+    """Test that a plain DuckDB file attached as ``db`` is not a DuckLake catalog.
+
+    Args:
+        tmp_path: pytest temporary directory.
+    """
+    conn = duckdb.connect()
+    conn.execute(f"ATTACH '{tmp_path / 'plain.duckdb'}' AS db")
+    assert is_ducklake_catalog(conn, "db") is False
+
+
+# Test qu'un catalogue DuckLake attaché est reconnu
+@requires_ducklake
+def test_is_ducklake_catalog_true_on_ducklake(tmp_path: Path) -> None:
+    """Test that an attached DuckLake catalog is detected.
+
+    Args:
+        tmp_path: pytest temporary directory.
+    """
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    conn = DuckLakeConnector(str(tmp_path / "test.ducklake"), str(data_dir)).connect()
+    assert is_ducklake_catalog(conn, "db") is True
+    conn.close()
+
+
+# Test qu'une erreur de lecture du catalogue renvoie False
+def test_is_ducklake_catalog_false_on_lookup_error() -> None:
+    """Test that a closed connection reports False instead of raising."""
+    conn = duckdb.connect()
+    conn.close()
+    assert is_ducklake_catalog(conn, "db") is False
+
+
+# ---------------------------------------------------------------------------
+# Tests de sorted_by_clause()
+# ---------------------------------------------------------------------------
+
+
+# Test de la clause SORTED BY, identifiants quotés dans l'ordre fourni
+@pytest.mark.parametrize(
+    ("columns", "expected"),
+    [
+        (["id"], 'SORTED BY ("id")'),
+        (["date", "region"], 'SORTED BY ("date", "region")'),
+        (['we"ird', "my col"], 'SORTED BY ("we""ird", "my col")'),
+    ],
+)
+def test_sorted_by_clause(columns: list[str], expected: str) -> None:
+    """Test that the clause quotes every column and keeps the given order.
+
+    Args:
+        columns: Sort columns.
+        expected: Expected clause.
+    """
+    assert sorted_by_clause(columns) == expected
+
+
+# Test qu'une clé vide est rejetée
+def test_sorted_by_clause_empty_raises() -> None:
+    """Test that an empty key raises ValueError (DuckLake rejects SORTED BY ())."""
+    with pytest.raises(ValueError, match="RESET SORTED BY"):
+        sorted_by_clause([])

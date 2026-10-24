@@ -1,5 +1,7 @@
 # Importation des modules
 # Modules de base
+from datetime import datetime, timedelta
+
 import duckdb
 import narwhals as nw
 import polars as pl
@@ -9,7 +11,9 @@ import pytest
 
 # Gestionnaire de base, instanciable directement
 from dt_ducklake_manager.operations._base import BaseSchemaManager
+from dt_ducklake_manager.reporting import OperationReport
 from dt_ducklake_manager.schema import DuckLakeTablesBuilder
+from tests.utils.ducklake import requires_ducklake
 
 # ---------------------------------------------------------------------------
 # Fixture locale
@@ -1203,48 +1207,166 @@ def test_transaction_nested_call_reuses_outer(manager: BaseSchemaManager) -> Non
 
 
 # ===========================================================================
-# Tests de _cluster_by_order_clause() (tri des lots d'écriture)
+# Tests de la clé de tri DuckLake (SORTED BY) et de la compaction incrémentale
 # ===========================================================================
 
 
-# Test que la clause reprend cluster_by dans son ordre déclaré
-def test_cluster_by_order_clause_keeps_declared_order() -> None:
-    """Test that the clause follows the cluster_by order, not the batch order."""
-    clause = BaseSchemaManager._cluster_by_order_clause(
-        ["value", "id", "category"], ["category", "id"]
-    )
-    assert clause == 'ORDER BY "category", "id"'
-
-
-# Test que la clause ne conserve que les colonnes présentes dans le lot
-def test_cluster_by_order_clause_filters_to_batch_columns() -> None:
-    """Test that sort columns absent from the batch are dropped from the clause."""
-    assert (
-        BaseSchemaManager._cluster_by_order_clause(["id", "value"], ["category", "id"])
-        == 'ORDER BY "id"'
-    )
-    # Lot sans aucune colonne de cluster_by : pas de tri
-    assert BaseSchemaManager._cluster_by_order_clause(["value"], ["id"]) == ""
-
-
-# Test que la clause est vide sans cluster_by
-@pytest.mark.parametrize("cluster_by", [None, []])
-def test_cluster_by_order_clause_empty_without_cluster_by(
-    cluster_by: list[str] | None,
-) -> None:
-    """Test that the clause is empty when no sort key is declared.
+# Gestionnaire sur un vrai catalogue DuckLake
+@pytest.fixture
+def lake_manager(built_lake_schema: duckdb.DuckDBPyConnection) -> BaseSchemaManager:
+    """Create a BaseSchemaManager on a real DuckLake catalog.
 
     Args:
-        cluster_by: Missing or empty sort key.
+        built_lake_schema: Real DuckLake catalog with the sample_df schema.
+
+    Returns:
+        BaseSchemaManager: initialized on the catalog.
     """
-    assert BaseSchemaManager._cluster_by_order_clause(["id"], cluster_by) == ""
+    return BaseSchemaManager(connection=built_lake_schema, categorical_threshold=4)
 
 
-# Test que la clause quote les identifiants
-def test_cluster_by_order_clause_quotes_identifiers() -> None:
-    """Test that a sort column with a double quote is safely quoted."""
-    clause = BaseSchemaManager._cluster_by_order_clause(['we"ird'], ['we"ird'])
-    assert clause == 'ORDER BY "we""ird"'
+# Test que la construction déclare cluster_by comme clé SORTED BY
+@requires_ducklake
+def test_build_declares_sorted_by(lake_manager: BaseSchemaManager) -> None:
+    """Test that the built fact table carries cluster_by as its DuckLake key.
+
+    Args:
+        lake_manager: Manager on a real DuckLake catalog.
+    """
+    assert lake_manager._get_cluster_by_columns() == ["id"]
+    assert lake_manager.maintenance.sorted_by() == ["id"]
+
+
+# Test que update_cluster_by met à jour la clé SORTED BY avec cluster_by
+@requires_ducklake
+def test_update_cluster_by_sets_sorted_by(lake_manager: BaseSchemaManager) -> None:
+    """Test that update_cluster_by changes the DuckLake sort key too.
+
+    Args:
+        lake_manager: Manager on a real DuckLake catalog.
+    """
+    lake_manager.update_cluster_by(["category", "id"])
+    assert lake_manager._get_cluster_by_columns() == ["category", "id"]
+    assert lake_manager.maintenance.sorted_by() == ["category", "id"]
+
+
+# Test que l'échec du SET SORTED BY annule aussi l'écriture de cluster_by
+@requires_ducklake
+def test_update_cluster_by_is_atomic(
+    lake_manager: BaseSchemaManager, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Test that cluster_by is rolled back when the DuckLake key cannot be set.
+
+    Args:
+        lake_manager: Manager on a real DuckLake catalog.
+        monkeypatch: pytest monkeypatch fixture.
+    """
+
+    def _boom(*args: object, **kwargs: object) -> None:
+        raise duckdb.IOException("simulated failure")
+
+    monkeypatch.setattr(lake_manager.maintenance, "set_sorted_by", _boom)
+    with pytest.raises(duckdb.IOException):
+        lake_manager.update_cluster_by(["category"])
+
+    assert lake_manager._get_cluster_by_columns() == ["id"]
+    assert lake_manager.maintenance.sorted_by() == ["id"]
+
+
+# Test que vider cluster_by réinitialise la clé SORTED BY
+@requires_ducklake
+def test_remove_from_cluster_by_resets_sorted_by(
+    lake_manager: BaseSchemaManager,
+) -> None:
+    """Test that removing the last sort column resets the DuckLake key.
+
+    Args:
+        lake_manager: Manager on a real DuckLake catalog.
+    """
+    lake_manager._remove_from_cluster_by("id")
+    assert lake_manager._get_cluster_by_columns() is None
+    assert lake_manager.maintenance.sorted_by() is None
+
+
+# Test que cluster_by est seulement enregistré hors DuckLake
+def test_set_cluster_by_plain_duckdb_only_records(manager: BaseSchemaManager) -> None:
+    """Test that a plain DuckDB connection records cluster_by without SORTED BY.
+
+    DuckDB rejects ``SET SORTED BY``: the call would raise if it were attempted.
+
+    Args:
+        manager: BaseSchemaManager fixture on an in-memory connection.
+    """
+    assert manager._is_ducklake() is False
+    manager.update_cluster_by(["category"])
+    assert manager._get_cluster_by_columns() == ["category"]
+    manager._remove_from_cluster_by("category")
+    assert manager._get_cluster_by_columns() is None
+
+
+# Test du rejet d'une fenêtre de compaction nulle ou négative
+@pytest.mark.parametrize("window", [timedelta(0), timedelta(seconds=-1)])
+def test_compaction_window_must_be_positive(window: timedelta) -> None:
+    """Test that a zero or negative compaction_window raises ValueError.
+
+    Args:
+        window: Invalid window.
+    """
+    with pytest.raises(ValueError, match="strictly positive"):
+        BaseSchemaManager(connection=duckdb.connect(), compaction_window=window)
+
+
+# Test que la fenêtre de compaction borne la fusion post-écriture
+@requires_ducklake
+@pytest.mark.parametrize("window", [None, timedelta(hours=6)])
+def test_compact_after_write_passes_window(
+    built_lake_schema: duckdb.DuckDBPyConnection,
+    monkeypatch: pytest.MonkeyPatch,
+    window: timedelta | None,
+) -> None:
+    """Test that the post-write merge starts at ``now - compaction_window``.
+
+    Args:
+        built_lake_schema: Real DuckLake catalog with the sample_df schema.
+        monkeypatch: pytest monkeypatch fixture.
+        window: Compaction window of the manager.
+    """
+    manager = BaseSchemaManager(connection=built_lake_schema, compaction_window=window)
+    captured: dict[str, object] = {}
+    monkeypatch.setattr(
+        manager.maintenance, "compact", lambda **kwargs: captured.update(kwargs)
+    )
+    before = datetime.now()
+
+    manager._compact_after_write(
+        OperationReport("update", "main", None, before, 0.0), delete_threshold=0.05
+    )
+
+    assert captured["delete_threshold"] == 0.05
+    newer_than = captured["newer_than"]
+    if window is None:
+        assert newer_than is None
+    else:
+        assert isinstance(newer_than, datetime)
+        assert before - window <= newer_than <= datetime.now() - window
+
+
+# Test que la compaction post-écriture est sautée hors DuckLake
+def test_compact_after_write_skipped_without_ducklake(
+    manager: BaseSchemaManager, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Test that no procedure is called on a plain DuckDB connection.
+
+    Args:
+        manager: BaseSchemaManager fixture on an in-memory connection.
+        monkeypatch: pytest monkeypatch fixture.
+    """
+    calls: list[object] = []
+    monkeypatch.setattr(manager.maintenance, "compact", lambda **kw: calls.append(kw))
+    manager._compact_after_write(
+        OperationReport("update", "main", None, datetime.now(), 0.0)
+    )
+    assert calls == []
 
 
 # ===========================================================================

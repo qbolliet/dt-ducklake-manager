@@ -190,6 +190,79 @@ def resolve_catalog(
     return catalog_alias if row is not None else None
 
 
+# Fonction de détection d'un catalogue DuckLake attaché
+def is_ducklake_catalog(
+    conn: "duckdb.DuckDBPyConnection | None", catalog_alias: str | None
+) -> bool:
+    """
+    Tell whether ``catalog_alias`` is an attached **DuckLake** catalog.
+
+    A plain DuckDB database attached under the same alias (or no attached database
+    at all, as on in-memory test connections) supports neither the ``ducklake_*``
+    procedures nor ``SORTED BY``: callers check this before using them, rather than
+    letting the statement fail, since a failed statement aborts the enclosing
+    DuckDB transaction.
+
+    Args:
+        conn (duckdb.DuckDBPyConnection | None): Connection to inspect.
+        catalog_alias (str | None): Candidate catalog alias.
+
+    Returns:
+        bool: True when a database of that name is attached and is of type
+        ``'ducklake'``, False otherwise (including when the lookup fails).
+
+    Examples:
+        >>> import duckdb
+        >>> is_ducklake_catalog(duckdb.connect(":memory:"), "memory")
+        False
+        >>> is_ducklake_catalog(duckdb.connect(":memory:"), None)
+        False
+    """
+    # Absence d'alias ou de connexion : aucun catalogue DuckLake possible
+    if catalog_alias is None or conn is None:
+        return False
+    try:
+        # Type de la base attachée sous cet alias ('ducklake', 'duckdb', ...)
+        row = fetch_one(
+            conn.execute(
+                "SELECT type FROM duckdb_databases() WHERE database_name = ?",
+                [catalog_alias],
+            )
+        )
+    except Exception:
+        return False
+    return row is not None and row[0] == "ducklake"
+
+
+# Fonction de construction de la clause SORTED BY d'une table DuckLake
+def sorted_by_clause(columns: list[str]) -> str:
+    """
+    Build the DuckLake ``SORTED BY (...)`` clause of a list of sort columns.
+
+    Used both in ``CREATE TABLE ... SORTED BY (...)`` and in ``ALTER TABLE ... SET
+    SORTED BY (...)``. Every column is quoted via :func:`quote_ident` and sorted
+    ascending (DuckLake's default, ``NULLS LAST``).
+
+    Args:
+        columns (list[str]): Non-empty list of column names, in sort order.
+
+    Returns:
+        str: The ``SORTED BY ("a", "b")`` clause.
+
+    Raises:
+        ValueError: If ``columns`` is empty (DuckLake rejects ``SORTED BY ()``;
+            removing the sort key is ``RESET SORTED BY``).
+
+    Examples:
+        >>> sorted_by_clause(["date", "region"])
+        'SORTED BY ("date", "region")'
+    """
+    # Clé de tri vide : rejetée par le parseur, la suppression passe par RESET
+    if not columns:
+        raise ValueError("columns must not be empty; use RESET SORTED BY instead")
+    return f"SORTED BY ({', '.join(quote_ident(c) for c in columns)})"
+
+
 # Fonction de qualification d'un nom de table par son schéma (et son catalogue)
 def qualify_table(table: str, schema: str = "main", catalog: str | None = None) -> str:
     """
@@ -276,6 +349,23 @@ class SchemaScoped:
             '"main"."fact_table"'
         """
         return qualify_table(table, self.schema, self._catalog)
+
+    # Méthode de détection d'un catalogue DuckLake sous l'alias effectif
+    def _is_ducklake(self) -> bool:
+        """Tell whether this instance's tables live in an attached DuckLake catalog.
+
+        Re-read at each call (one ``duckdb_databases()`` lookup) rather than cached:
+        the connection can be attached or detached after the instance is built.
+
+        Returns:
+            bool: True when ``_catalog`` is an attached DuckLake catalog, False on
+            a plain DuckDB database or an in-memory test connection.
+
+        Examples:
+            >>> manager._is_ducklake()
+            True
+        """
+        return is_ducklake_catalog(self.conn, self._catalog)
 
     # Méthode de vérification de l'existence d'une table dans le schéma
     def _table_exists(self, table_name: str) -> bool:

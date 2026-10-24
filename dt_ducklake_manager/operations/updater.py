@@ -2,6 +2,7 @@
 # Modules de base
 import os
 import warnings
+from datetime import timedelta
 from typing import Any, Literal
 
 # DuckDB
@@ -74,6 +75,7 @@ class DatabaseUpdater(BaseSchemaManager):
         batch_size: int | None = None,
         catalog_alias: str = "db",
         schema: str = "main",
+        compaction_window: timedelta | None = None,
     ):
         """
         Initialize the database updater.
@@ -100,6 +102,10 @@ class DatabaseUpdater(BaseSchemaManager):
             schema: DuckLake schema to update. A single catalog can host several
                 schemas; all tables are qualified by this one, and maintenance and
                 snapshot calls target it. Defaults to ``'main'``.
+            compaction_window: Makes the post-write compaction
+                (``compact_after_update=True``) incremental: only the files of the
+                snapshots of the last ``compaction_window`` are merged. Defaults to
+                None (every small file of the table is a merge candidate).
 
         Examples:
             >>> conn = DuckLakeConnector('catalog.ducklake', 'data/').connect()
@@ -113,6 +119,7 @@ class DatabaseUpdater(BaseSchemaManager):
             log_filename=log_filename,
             schema=schema,
             catalog_alias=catalog_alias,
+            compaction_window=compaction_window,
         )
 
         # Paramètre de découpage en lots conservé pour compatibilité uniquement
@@ -155,8 +162,9 @@ class DatabaseUpdater(BaseSchemaManager):
         Rows whose primary key combination is new are inserted; rows whose
         combination already exists are updated, but only when at least one of
         their values actually changes (an unchanged row is not rewritten). The
-        whole batch is written sorted by ``cluster_by``, in two SQL statements
-        (``UPDATE … FROM`` then ``INSERT … SELECT … WHERE NOT EXISTS … ORDER BY``),
+        batch is written in two SQL statements (``UPDATE … FROM`` then ``INSERT …
+        SELECT … WHERE NOT EXISTS``), the inserted rows being sorted by DuckLake on
+        the table's ``SORTED BY`` key (``cluster_by``),
         inside a single transaction together with the type widening of the
         metadata, the addition of new columns, the code/label dependency check,
         the primary key uniqueness check, the ``updated_at`` stamp and the
@@ -275,9 +283,6 @@ class DatabaseUpdater(BaseSchemaManager):
             self._early_report("update", run_id, "update_df is empty: nothing written")
             return True
 
-        # Clé de tri physique, lue une fois pour toute l'opération
-        cluster_by = self._get_cluster_by_columns()
-
         # Logging
         self.logger.debug(
             f"Starting database update with {len(update_df)} rows"
@@ -300,7 +305,7 @@ class DatabaseUpdater(BaseSchemaManager):
                     )
                     report.columns_added = list(new_columns)
                 self._run_update_steps(
-                    update_df, primary_keys, cluster_by, check_duplicates_db, report
+                    update_df, primary_keys, check_duplicates_db, report
                 )
         except ValueError:
             # Erreur de saisie : propagée après annulation
@@ -407,7 +412,6 @@ class DatabaseUpdater(BaseSchemaManager):
         self,
         update_df: nw.DataFrame[Any],
         primary_keys: list[str],
-        cluster_by: list[str] | None,
         check_duplicates_db: bool,
         report: OperationReport,
     ) -> None:
@@ -423,7 +427,6 @@ class DatabaseUpdater(BaseSchemaManager):
         Args:
             update_df: Deduplicated batch, unique on the primary keys.
             primary_keys: Primary key columns of the fact table.
-            cluster_by: Physical sort key of the fact table, or None.
             check_duplicates_db: Whether to check the primary key uniqueness of the
                 fact table after the upsert.
             report: In-progress report of the enclosing transaction.
@@ -439,7 +442,7 @@ class DatabaseUpdater(BaseSchemaManager):
         self._update_metadata_types(update_df, report)
 
         # Étape 2 : écriture du lot
-        self._upsert_fact_table(update_df, primary_keys, cluster_by, report)
+        self._upsert_fact_table(update_df, primary_keys, report)
 
         # Étape 3 : dépendance fonctionnelle des colonnes de libellés, sur l'état
         # post-écriture, restreinte aux codes du lot
@@ -490,7 +493,6 @@ class DatabaseUpdater(BaseSchemaManager):
         self,
         update_df: nw.DataFrame[Any],
         primary_keys: list[str],
-        cluster_by: list[str] | None,
         report: OperationReport,
     ) -> None:
         """Write a batch into the fact table in two statements.
@@ -500,8 +502,10 @@ class DatabaseUpdater(BaseSchemaManager):
            actually change are rewritten (copy-on-write), which saves both the
            write and the resulting delete files.
         2. ``INSERT INTO fact_table SELECT … FROM batch t WHERE NOT EXISTS (<same
-           keys in fact_table>) ORDER BY cluster_by``: the new rows, sorted as a
-           whole so that the files written keep narrow ranges.
+           keys in fact_table>)``: the new rows, sorted as a whole by DuckLake on
+           the table's ``SORTED BY`` key so that the files written keep narrow
+           ranges. The rows rewritten by the ``UPDATE`` are not sorted by DuckLake:
+           the post-write merge (``compact_after_update``) sorts them back.
 
         The counts returned by the two statements are stored on the report; on a
         real DuckLake catalog, ``_transaction`` replaces them with the counts of
@@ -510,7 +514,6 @@ class DatabaseUpdater(BaseSchemaManager):
         Args:
             update_df: Batch, unique on the primary keys.
             primary_keys: Primary key columns of the fact table.
-            cluster_by: Physical sort key of the fact table, or None.
             report: In-progress report of the enclosing transaction.
 
         Raises:
@@ -549,9 +552,9 @@ class DatabaseUpdater(BaseSchemaManager):
                 )
                 rows_updated = int(row[0]) if row is not None else 0
 
-            # Insertion des combinaisons de clés absentes, triées selon cluster_by
+            # Insertion des combinaisons de clés absentes, triées par DuckLake
+            # selon la clé SORTED BY de la table
             column_list = ", ".join(quote_ident(c) for c in columns)
-            order_clause = self._cluster_by_order_clause(columns, cluster_by)
             row = fetch_one(
                 self.conn.execute(f"""
                 INSERT INTO {fact_table} ({column_list})
@@ -559,7 +562,6 @@ class DatabaseUpdater(BaseSchemaManager):
                 WHERE NOT EXISTS (
                     SELECT 1 FROM {fact_table} f WHERE {join_condition}
                 )
-                {order_clause}
             """)
             )
             rows_inserted = int(row[0]) if row is not None else 0
@@ -725,7 +727,7 @@ class DatabaseUpdater(BaseSchemaManager):
         column, followed by a **single** ``UPDATE fact_table ... FROM <df> WHERE
         <primary keys match>`` covering all of them (restricted to the rows whose
         values actually change), then a single ``INSERT ... SELECT`` of the
-        unmatched combinations sorted by ``cluster_by``, inside one DuckDB
+        unmatched combinations (sorted by DuckLake on ``SORTED BY``), inside one DuckDB
         transaction: on any failure, neither the column(s), their ``metadata``
         row(s) nor the inserted rows survive. An ``UPDATE`` that touches every row
         of the fact table is a complete copy-on-write rewrite; ``rewrite_data_files``
@@ -817,9 +819,6 @@ class DatabaseUpdater(BaseSchemaManager):
         # Validation des métadonnées d'UI, restreintes aux colonnes concernées
         normalized_metadata = validate_column_metadata(column_metadata, new_columns)
 
-        # Clé de tri physique, lue une fois pour toute l'opération
-        cluster_by = self._get_cluster_by_columns()
-
         fact_table = self._qualified("fact_table")
         view_name = "_add_columns_src"
 
@@ -880,13 +879,10 @@ class DatabaseUpdater(BaseSchemaManager):
                 rows_updated = int(row[0]) if row is not None else 0
 
                 # Insertion des combinaisons absentes de la base (fusion externe) :
-                # les autres colonnes de valeur prennent NULL. Tri par cluster_by
-                # pour préserver l'élagage par fichier.
+                # les autres colonnes de valeur prennent NULL. Tri par DuckLake
+                # selon la clé SORTED BY, pour préserver l'élagage par fichier.
                 insert_columns = ", ".join(
                     quote_ident(c) for c in [*primary_keys, *new_columns]
-                )
-                order_clause = self._cluster_by_order_clause(
-                    list(df_nw.columns), cluster_by
                 )
                 row = fetch_one(
                     self.conn.execute(f"""
@@ -895,7 +891,6 @@ class DatabaseUpdater(BaseSchemaManager):
                     WHERE NOT EXISTS (
                         SELECT 1 FROM {fact_table} f WHERE {join_condition}
                     )
-                    {order_clause}
                 """)
                 )
                 rows_inserted = int(row[0]) if row is not None else 0

@@ -41,7 +41,7 @@ from typing import Any
 import duckdb
 
 # Utilitaires
-from .utils.sql import fetch_one
+from .utils.sql import fetch_one, is_ducklake_catalog
 
 __all__ = ["OperationReport"]
 
@@ -434,13 +434,7 @@ def _set_commit_message(
         return
     # Vérification préalable du type de catalogue : un appel voué à l'échec
     # avorterait la transaction, il n'est donc jamais tenté
-    row = fetch_one(
-        conn.execute(
-            "SELECT type FROM duckdb_databases() WHERE database_name = ?",
-            [catalog_alias],
-        )
-    )
-    if row is None or row[0] != "ducklake":
+    if not is_ducklake_catalog(conn, catalog_alias):
         logger.debug(
             f"_set_commit_message skipped: {catalog_alias!r} is not an attached"
             f" DuckLake catalog (run_id={run_id!r})"

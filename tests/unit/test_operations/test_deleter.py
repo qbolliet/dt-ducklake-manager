@@ -411,6 +411,35 @@ def test_delete_columns_removes_column_from_cluster_by(
     assert deleter._get_cluster_by_columns() == ["id"]
 
 
+# Test que DuckLake accepte la suppression d'une colonne de la clé SORTED BY
+@requires_ducklake
+@pytest.mark.parametrize(
+    ("cluster_by", "expected"), [(["category", "id"], ["id"]), (["category"], None)]
+)
+def test_delete_sort_column_on_ducklake(
+    built_lake_schema: Any, cluster_by: list[str], expected: list[str] | None
+) -> None:
+    """Test that a SORTED BY column can be dropped through delete_columns.
+
+    DuckLake refuses ``DROP COLUMN`` on a sort column: the key must be updated
+    first, in the same transaction.
+
+    Args:
+        built_lake_schema: Real DuckLake catalog with the sample_df schema.
+        cluster_by: Sort key before the deletion.
+        expected: Sort key expected after dropping ``category``.
+    """
+    deleter = DatabaseDeleter(connection=built_lake_schema)
+    deleter.update_cluster_by(cluster_by)
+
+    result = deleter.delete_columns(["category"])
+
+    assert result.columns_dropped == ["category"]
+    assert deleter._get_cluster_by_columns() == expected
+    assert deleter.maintenance.sorted_by() == expected
+    assert "category" not in deleter._get_fact_table_columns()
+
+
 # Test que vider entièrement cluster_by le remet à NULL (pas une liste vide)
 def test_delete_columns_cluster_by_falls_back_to_null_when_emptied(
     deleter: DatabaseDeleter,

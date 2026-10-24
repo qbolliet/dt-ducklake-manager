@@ -2,7 +2,7 @@
 # Modules de base
 import os
 from collections.abc import Generator
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 
 # DuckDB
@@ -14,6 +14,7 @@ import pytest
 # Modules à tester
 from dt_ducklake_manager.connection import DuckLakeConnector
 from dt_ducklake_manager.maintenance import DuckLakeMaintenance, MaintenancePolicy
+from dt_ducklake_manager.maintenance.procedures import _sort_expression_column
 from dt_ducklake_manager.reporting import OperationReport
 from tests.utils.ducklake import requires_ducklake
 
@@ -800,3 +801,305 @@ def test_catalog_wide_procedures_take_no_schema(maint: Any) -> None:
         maint.expire_snapshots("main")
     with pytest.raises(TypeError):
         maint.cleanup_files("main")
+
+
+# ---------------------------------------------------------------------------
+# Tests de la compaction incrémentale (newer_than / older_than)
+# ---------------------------------------------------------------------------
+
+
+# Test qu'une fenêtre postérieure à toutes les écritures ne fusionne rien
+@requires_ducklake
+def test_merge_files_newer_than_future_merges_nothing(
+    fragmented_conn: duckdb.DuckDBPyConnection,
+) -> None:
+    """Test that no file is a candidate when the window starts after every write.
+
+    Args:
+        fragmented_conn: Catalog whose table is split into six small files.
+    """
+    maint = DuckLakeMaintenance(fragmented_conn)
+    result = maint.merge_files(newer_than=datetime.now() + timedelta(days=1))
+    assert result == ("main", "fact_table", 0, 0)
+    assert _active_files(fragmented_conn) == 6
+
+
+# Test qu'une fenêtre couvrant toutes les écritures fusionne tout
+@requires_ducklake
+def test_merge_files_newer_than_past_merges_everything(
+    fragmented_conn: duckdb.DuckDBPyConnection,
+) -> None:
+    """Test that every file is merged when the window covers every write.
+
+    Args:
+        fragmented_conn: Catalog whose table is split into six small files.
+    """
+    maint = DuckLakeMaintenance(fragmented_conn)
+    result = maint.merge_files(newer_than=datetime.now() - timedelta(days=1))
+    assert result[2] == 6
+    assert _active_files(fragmented_conn) == 1
+
+
+# Test qu'une borne older_than antérieure à toutes les écritures ne fusionne rien
+@requires_ducklake
+def test_merge_files_older_than_past_merges_nothing(
+    fragmented_conn: duckdb.DuckDBPyConnection,
+) -> None:
+    """Test that ``older_than`` excludes every file written after it.
+
+    Args:
+        fragmented_conn: Catalog whose table is split into six small files.
+    """
+    maint = DuckLakeMaintenance(fragmented_conn)
+    result = maint.merge_files(older_than=datetime.now() - timedelta(days=1))
+    assert result[2] == 0
+    assert _active_files(fragmented_conn) == 6
+
+
+# Test que la fenêtre ne retient que les fichiers des snapshots récents
+@requires_ducklake
+def test_merge_files_window_keeps_older_files(
+    fragmented_conn: duckdb.DuckDBPyConnection,
+) -> None:
+    """Test that the files written before ``newer_than`` are left untouched.
+
+    The six existing files are older than the cutoff; the two files written after
+    it are the only candidates, merged into one.
+
+    Args:
+        fragmented_conn: Catalog whose table is split into six small files.
+    """
+    cutoff = datetime.now()
+    for i in range(6, 8):
+        fragmented_conn.execute(
+            f"INSERT INTO fact_table SELECT range, range::DOUBLE"
+            f" FROM range({i * 1000}, {(i + 1) * 1000})"
+        )
+
+    result = DuckLakeMaintenance(fragmented_conn).merge_files(newer_than=cutoff)
+
+    assert result[2:] == (2, 1)
+    assert _active_files(fragmented_conn) == 7
+
+
+# Test que compact transmet la fenêtre et le plafond de fichiers
+@requires_ducklake
+def test_compact_forwards_window_and_limit(
+    fragmented_conn: duckdb.DuckDBPyConnection,
+) -> None:
+    """Test that compact passes newer_than and max_compacted_files through.
+
+    Args:
+        fragmented_conn: Catalog whose table is split into six small files.
+    """
+    maint = DuckLakeMaintenance(fragmented_conn)
+    calls: dict[str, dict[str, Any]] = {}
+    merge, rewrite = maint.merge_files, maint.rewrite_data_files
+
+    def spy_merge(*args: Any, **kwargs: Any) -> Any:
+        calls["merge"] = kwargs
+        return merge(*args, **kwargs)
+
+    def spy_rewrite(*args: Any, **kwargs: Any) -> Any:
+        calls["rewrite"] = kwargs
+        return rewrite(*args, **kwargs)
+
+    maint.merge_files = spy_merge  # type: ignore[method-assign]
+    maint.rewrite_data_files = spy_rewrite  # type: ignore[method-assign]
+    future = datetime.now() + timedelta(days=1)
+
+    counters = maint.compact(newer_than=future, max_compacted_files=3)
+
+    assert calls["merge"]["newer_than"] == future
+    assert calls["merge"]["max_compacted_files"] == 3
+    assert calls["rewrite"]["max_compacted_files"] == 3
+    assert counters["merge_files_processed"] == 0
+    assert _active_files(fragmented_conn) == 6
+
+
+# Table de six fichiers d'environ 155 KB pour une taille cible de 300 KB
+def _six_files_table(conn: duckdb.DuckDBPyConnection, table: str) -> None:
+    """Create ``table`` as six ~155 KB files, the catalog targeting 300 KB files.
+
+    Two such files (or four once half of their rows are deleted) fill one output
+    file, so a merge or a rewrite of the table needs several operations.
+
+    Args:
+        conn: Connection attached to the ``db`` catalog.
+        table: Name of the table to create.
+    """
+    conn.execute("CALL db.set_option('target_file_size', '300KB')")
+    conn.execute(f"CREATE TABLE {table} (id INTEGER, value DOUBLE)")
+    for i in range(6):
+        conn.execute(
+            f"INSERT INTO {table} SELECT range, range::DOUBLE"
+            f" FROM range({i * 20000}, {(i + 1) * 20000})"
+        )
+
+
+# Test que max_compacted_files borne le nombre d'opérations de fusion
+@requires_ducklake
+def test_merge_files_max_compacted_files(
+    fragmented_conn: duckdb.DuckDBPyConnection,
+) -> None:
+    """Test that one operation runs per call with ``max_compacted_files=1``.
+
+    Args:
+        fragmented_conn: Connection attached to a real catalog.
+    """
+    _six_files_table(fragmented_conn, "big")
+    maint = DuckLakeMaintenance(fragmented_conn)
+
+    bounded = maint.merge_files("big", max_compacted_files=1)
+    remaining = maint.merge_files("big")
+
+    assert bounded[2:] == (2, 1)
+    assert remaining[2:] == (4, 2)
+
+
+# Test que max_compacted_files borne le nombre d'opérations de réécriture
+@requires_ducklake
+def test_rewrite_data_files_max_compacted_files(
+    fragmented_conn: duckdb.DuckDBPyConnection,
+) -> None:
+    """Test that the rewrite runs a single operation with ``max_compacted_files=1``.
+
+    Half of the rows of every file are deleted: one operation rewrites four of the
+    six files, the next unbounded call rewrites the last two.
+
+    Args:
+        fragmented_conn: Connection attached to a real catalog.
+    """
+    _six_files_table(fragmented_conn, "big")
+    fragmented_conn.execute("DELETE FROM big WHERE id % 2 = 0")
+    maint = DuckLakeMaintenance(fragmented_conn)
+
+    bounded = maint.rewrite_data_files("big", max_compacted_files=1)
+    remaining = maint.rewrite_data_files("big")
+
+    assert bounded[2:] == (4, 1)
+    assert remaining[2:] == (2, 1)
+
+
+# ---------------------------------------------------------------------------
+# Tests de la clé de tri (SORTED BY)
+# ---------------------------------------------------------------------------
+
+
+# Test que sorted_by renvoie None sans clé de tri
+@requires_ducklake
+def test_sorted_by_none_without_key(maint: Any) -> None:
+    """Test that a table without sort key reports None.
+
+    Args:
+        maint: DuckLakeMaintenance fixture.
+    """
+    assert maint.sorted_by() is None
+
+
+# Test que sorted_by renvoie None pour une table inconnue
+@requires_ducklake
+def test_sorted_by_unknown_table(maint: Any) -> None:
+    """Test that an unknown table reports None instead of raising.
+
+    Args:
+        maint: DuckLakeMaintenance fixture.
+    """
+    assert maint.sorted_by("missing") is None
+
+
+# Test d'un aller-retour set/reset de la clé de tri
+@requires_ducklake
+def test_set_and_reset_sorted_by(maint: Any) -> None:
+    """Test that set_sorted_by is read back in order and reset_sorted_by clears it.
+
+    Args:
+        maint: DuckLakeMaintenance fixture.
+    """
+    maint.set_sorted_by(sorted_by=["value", "id"])
+    assert maint.sorted_by() == ["value", "id"]
+    maint.set_sorted_by(sorted_by=["id"])
+    assert maint.sorted_by() == ["id"]
+    maint.reset_sorted_by()
+    assert maint.sorted_by() is None
+
+
+# Test que les noms de colonnes à quoter sont relus sans guillemets
+@requires_ducklake
+def test_sorted_by_reads_back_quoted_names(ducklake_conn: Any) -> None:
+    """Test that sort columns needing quotes are decoded back to their names.
+
+    Args:
+        ducklake_conn: Fixture providing (connection, table_name).
+    """
+    conn, _ = ducklake_conn
+    conn.execute('CREATE TABLE odd ("my col" INTEGER, "we""ird" INTEGER, Up INTEGER)')
+    maint = DuckLakeMaintenance(conn)
+    maint.set_sorted_by("odd", sorted_by=["my col", 'we"ird', "Up"])
+    assert maint.sorted_by("odd") == ["my col", 'we"ird', "Up"]
+
+
+# Test que set_sorted_by rejette une clé vide ou une colonne inconnue
+@requires_ducklake
+def test_set_sorted_by_validation(maint: Any) -> None:
+    """Test ValueError on an empty key and duckdb.Error on an unknown column.
+
+    Args:
+        maint: DuckLakeMaintenance fixture.
+    """
+    with pytest.raises(ValueError, match="must not be empty"):
+        maint.set_sorted_by(sorted_by=[])
+    with pytest.raises(duckdb.Error):
+        maint.set_sorted_by(sorted_by=["unknown"])
+
+
+# Test que la fusion trie sa sortie selon la clé de tri active
+@requires_ducklake
+def test_merge_files_sorts_by_active_sort_key(
+    fragmented_conn: duckdb.DuckDBPyConnection,
+) -> None:
+    """Test that DuckLake sorts the merged output by a key set after the writes.
+
+    Six files are written in ascending ``id``, i.e. descending ``rank``; once the
+    key is set on ``rank``, the merge must reorder the rows by it although the
+    files predate the key.
+
+    Args:
+        fragmented_conn: Connection attached to a real catalog.
+    """
+    fragmented_conn.execute("CREATE TABLE ranked (id INTEGER, rank INTEGER)")
+    for i in range(6):
+        fragmented_conn.execute(
+            f"INSERT INTO ranked SELECT range, -range"
+            f" FROM range({i * 1000}, {(i + 1) * 1000})"
+        )
+    maint = DuckLakeMaintenance(fragmented_conn)
+    maint.set_sorted_by("ranked", sorted_by=["rank"])
+
+    assert maint.merge_files("ranked")[2:] == (6, 1)
+
+    ((path,),) = fragmented_conn.execute(
+        "SELECT data_file FROM ducklake_list_files('db', 'ranked')"
+    ).fetchall()
+    ranks = [
+        row[0]
+        for row in fragmented_conn.execute(
+            f"SELECT rank FROM read_parquet('{path}')"
+        ).fetchall()
+    ]
+    assert ranks == sorted(ranks)
+
+
+# Test du décodage des expressions de tri stockées par DuckLake
+@pytest.mark.parametrize(
+    ("expression", "column"),
+    [("id", "id"), ('"my col"', "my col"), ('"we""ird"', 'we"ird'), ('"', '"')],
+)
+def test_sort_expression_column(expression: str, column: str) -> None:
+    """Test that stored sort expressions decode back to column names.
+
+    Args:
+        expression: Expression as stored in ``ducklake_sort_expression``.
+        column: Expected column name.
+    """
+    assert _sort_expression_column(expression) == column

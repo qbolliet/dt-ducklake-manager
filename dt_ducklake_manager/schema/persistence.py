@@ -29,6 +29,7 @@ from ..utils.sql import (
     register_view,
     remove_dataframe_duplicates,
     resolve_catalog,
+    sorted_by_clause,
 )
 
 # Modules ad hoc
@@ -271,10 +272,13 @@ class DuckLakeTablesBuilder(SchemaScoped):
             partition_by (Optional[List[str]]): Column names to partition the table by
                 using DuckLake's Hive-style partitioning. Defaults to None (no
                 partitioning).
-            cluster_by (Optional[List[str]]): Column names the fact table is
-                physically sorted by at write time (``ORDER BY`` on the initial
-                ``INSERT``/CTAS). Enables DuckLake's per-file min/max pruning
-                (``ducklake_file_column_stats``). Defaults to None (no sort).
+            cluster_by (Optional[List[str]]): Sort key of the fact table, declared
+                to DuckLake at creation (``CREATE TABLE … SORTED BY``): DuckLake then
+                sorts the initial write and every later ``INSERT`` and merge by it,
+                which enables its per-file min/max pruning
+                (``ducklake_file_column_stats``). Only recorded in
+                ``dataset_metadata`` on a plain DuckDB connection, which has no
+                ``SORTED BY``. Defaults to None (no sort).
 
         Examples:
             >>> builder.create_duckdb_fact_table()
@@ -304,13 +308,12 @@ class DuckLakeTablesBuilder(SchemaScoped):
         # partition_by).
         needs_explicit_ddl = (primary_keys and len(primary_keys) > 0) or partition_by
 
-        # Clause ORDER BY commune aux deux chemins d'écriture (CTAS et DDL explicite) :
-        # tri physique à l'écriture sur les colonnes de cluster_by, condition du
-        # pruning par fichier.
-        order_clause = (
-            f"ORDER BY {', '.join(quote_ident(c) for c in cluster_by)}"
-            if cluster_by
-            else ""
+        # Clause SORTED BY commune aux deux chemins de création (CTAS et DDL
+        # explicite) : clé de tri DuckLake, appliquée par DuckLake à l'écriture
+        # initiale comme aux INSERT et fusions ultérieurs, condition du pruning par
+        # fichier. Absente hors DuckLake (SORTED BY non supporté par DuckDB).
+        sorted_clause = (
+            sorted_by_clause(cluster_by) if cluster_by and self._is_ducklake() else ""
         )
 
         if needs_explicit_ddl:
@@ -329,7 +332,7 @@ class DuckLakeTablesBuilder(SchemaScoped):
             query = f"""
                 CREATE TABLE {qualified_name} (
                     {", ".join(column_definitions)}
-                )
+                ) {sorted_clause}
             """
             self.conn.execute(query)
 
@@ -355,7 +358,6 @@ class DuckLakeTablesBuilder(SchemaScoped):
                 INSERT INTO {qualified_name}
                 SELECT {fact_columns_sql}
                 FROM temp_fact
-                {order_clause}
             """)
 
             # Logging des clés logiques (non contraintes DDL)
@@ -387,10 +389,9 @@ class DuckLakeTablesBuilder(SchemaScoped):
                 for field in fact_arrow.schema
             )
             query = f"""
-                CREATE TABLE {qualified_name} AS
+                CREATE TABLE {qualified_name} {sorted_clause} AS
                 SELECT {fact_columns_sql}
                 FROM temp_fact
-                {order_clause}
             """
             self.conn.execute(query)
 

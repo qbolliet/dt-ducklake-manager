@@ -1,5 +1,6 @@
 # Importation des modules
 # Modules de base
+import json
 import logging
 import os
 import warnings
@@ -176,6 +177,25 @@ def plain_conn(tmp_path: Any) -> Generator[duckdb.DuckDBPyConnection]:
     )
     yield conn
     conn.close()
+
+
+# Déclaration de cluster_by dans dataset_metadata, hors du package
+def _declare_cluster_by(
+    conn: duckdb.DuckDBPyConnection, columns: list[str], create: bool = True
+) -> None:
+    """Write ``dataset_metadata.cluster_by`` directly, without touching SORTED BY.
+
+    Args:
+        conn: Connection to the catalog (alias ``db``).
+        columns: Sort columns to declare (JSON-encoded as is, even when empty).
+        create: Whether to create a minimal ``dataset_metadata`` table first.
+    """
+    if create:
+        conn.execute("CREATE TABLE db.main.dataset_metadata (cluster_by VARCHAR)")
+        conn.execute("INSERT INTO db.main.dataset_metadata VALUES (NULL)")
+    conn.execute(
+        "UPDATE db.main.dataset_metadata SET cluster_by = ?", [json.dumps(columns)]
+    )
 
 
 # Espions remplaçant les étapes de maintenance
@@ -471,17 +491,55 @@ def test_recluster_after_update_leaves_no_live_delete_file(
     assert skipped.maintenance["rewrite_data_files_skipped"] == 1
 
 
-# Test d'un order_by explicite
-def test_recluster_explicit_order_by(
+# Test que la table construite porte la clé SORTED BY de cluster_by
+def test_built_table_carries_sorted_by(
     clustered_conn: duckdb.DuckDBPyConnection,
 ) -> None:
-    """Test that an explicit order_by is used (overlap measured on its first column).
+    """Test that build_schema declares cluster_by as the DuckLake sort key.
 
     Args:
         clustered_conn: Degraded clustered catalog.
     """
-    report = DuckLakeMaintenance(clustered_conn).recluster(order_by=["id"])
+    assert DuckLakeMaintenance(clustered_conn).sorted_by() == ["k"]
+
+
+# Test que recluster réaligne une clé DuckLake divergente sur cluster_by
+def test_recluster_realigns_diverged_sort_key(
+    clustered_conn: duckdb.DuckDBPyConnection,
+) -> None:
+    """Test that recluster sorts by cluster_by even when SORTED BY diverged.
+
+    ``cluster_by`` is changed behind the package's back (direct UPDATE), so the
+    DuckLake key still says ``k``: recluster must realign it on ``id`` inside its
+    transaction, the overlap being then measured (and zero) on ``id``.
+
+    Args:
+        clustered_conn: Degraded clustered catalog.
+    """
+    _declare_cluster_by(clustered_conn, ["id"], create=False)
+    maint = DuckLakeMaintenance(clustered_conn)
+
+    report = maint.recluster()
+
+    assert maint.sorted_by() == ["id"]
     assert report.maintenance["overlap_ratio_after"] == 0.0
+
+
+# Test que recluster ne recrée pas une clé DuckLake déjà alignée
+def test_recluster_keeps_aligned_sort_key(
+    clustered_conn: duckdb.DuckDBPyConnection,
+) -> None:
+    """Test that an aligned sort key is not rewritten by recluster.
+
+    Args:
+        clustered_conn: Degraded clustered catalog.
+    """
+    sort_versions = "SELECT count(*) FROM __ducklake_metadata_db.ducklake_sort_info"
+    before = clustered_conn.execute(sort_versions).fetchone()
+
+    DuckLakeMaintenance(clustered_conn).recluster()
+
+    assert clustered_conn.execute(sort_versions).fetchone() == before
 
 
 # Test des erreurs de validation de recluster
@@ -495,14 +553,17 @@ def test_recluster_validation_errors(
         clustered_conn: Degraded clustered catalog.
         plain_conn: Plain catalog without cluster_by.
     """
-    with pytest.raises(ValueError, match="do not exist"):
-        DuckLakeMaintenance(clustered_conn).recluster(order_by=["unknown"])
     with pytest.raises(ValueError, match="No sort key"):
         DuckLakeMaintenance(plain_conn).recluster()
-    with pytest.raises(ValueError, match="No sort key"):
-        DuckLakeMaintenance(plain_conn).recluster(order_by=[])
     with pytest.raises(ValueError, match="does not exist"):
-        DuckLakeMaintenance(plain_conn).recluster("missing", order_by=["id"])
+        DuckLakeMaintenance(plain_conn).recluster("missing")
+    # Clé déclarée vide ou référençant une colonne inconnue
+    _declare_cluster_by(plain_conn, [])
+    with pytest.raises(ValueError, match="No sort key"):
+        DuckLakeMaintenance(plain_conn).recluster()
+    _declare_cluster_by(clustered_conn, ["unknown"], create=False)
+    with pytest.raises(ValueError, match="do not exist"):
+        DuckLakeMaintenance(clustered_conn).recluster()
 
 
 # Test que threads est restauré après un succès
@@ -528,18 +589,22 @@ def test_recluster_restores_threads_and_rolls_back_on_failure(
     Args:
         plain_conn: Plain catalog.
     """
+    _declare_cluster_by(plain_conn, ["id"])
     plain_conn.execute("SET threads = 3")
     failing = DuckLakeMaintenance(_FailingInsertConnection(plain_conn))  # type: ignore[arg-type]
 
     with pytest.raises(RuntimeError, match="simulated insert failure"):
-        failing.recluster(order_by=["id"])
+        failing.recluster()
 
     assert _threads(plain_conn) == 3
     count = plain_conn.execute("SELECT count(*) FROM db.main.fact_table").fetchone()
     assert count == (20000,)
+    # Le réalignement de la clé de tri est annulé avec le reste
+    assert DuckLakeMaintenance(plain_conn).sorted_by() is None
     # La table temporaire n'a pas survécu et un nouvel essai fonctionne
-    report = DuckLakeMaintenance(plain_conn).recluster(order_by=["id"])
+    report = DuckLakeMaintenance(plain_conn).recluster()
     assert report.rows_after == 20000
+    assert DuckLakeMaintenance(plain_conn).sorted_by() == ["id"]
 
 
 # ---------------------------------------------------------------------------
@@ -568,6 +633,7 @@ def test_policy_defaults_are_safe() -> None:
         {"max_overlap_ratio": 2.0},
         {"min_file_size_bytes": -1},
         {"max_small_files": -1},
+        {"max_compacted_files": 0},
         {"retention_days": -1},
     ],
 )
@@ -589,6 +655,7 @@ def test_policy_boundary_values_accepted() -> None:
         max_overlap_ratio=1.0,
         min_file_size_bytes=0,
         max_small_files=0,
+        max_compacted_files=1,
         retention_days=0,
     )
 
@@ -684,6 +751,36 @@ def test_maintain_runs_steps_in_order(plain_conn: duckdb.DuckDBPyConnection) -> 
         "delete_orphaned_files",
     ]
     assert not any(key.endswith("_skipped") for key in report.maintenance)
+
+
+# Test que max_compacted_files est transmis à la réécriture et à la fusion
+@pytest.mark.parametrize("limit", [None, 4])
+def test_maintain_forwards_max_compacted_files(
+    plain_conn: duckdb.DuckDBPyConnection, limit: int | None
+) -> None:
+    """Test that the policy bound reaches both the rewrite and the merge steps.
+
+    Args:
+        plain_conn: Plain catalog.
+        limit: ``max_compacted_files`` of the policy.
+    """
+    maint = DuckLakeMaintenance(plain_conn)
+    received: dict[str, Any] = {}
+
+    def recorder(step: str) -> Callable[..., tuple[str, str, int, int]]:
+        def _record(*args: Any, **kwargs: Any) -> tuple[str, str, int, int]:
+            received[step] = kwargs.get("max_compacted_files")
+            return ("main", "fact_table", 0, 0)
+
+        return _record
+
+    maint.rewrite_data_files = recorder("rewrite")  # type: ignore[method-assign]
+    maint.merge_files = recorder("merge")  # type: ignore[method-assign]
+    maint.storage_report = lambda *a, **k: _dirty_storage()  # type: ignore[method-assign]
+
+    maint.maintain(MaintenancePolicy(max_compacted_files=limit, flush_inlined=False))
+
+    assert received == {"rewrite": limit, "merge": limit}
 
 
 # Test que recluster reste opt-in malgré un recouvrement élevé
