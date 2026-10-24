@@ -1,11 +1,13 @@
 # Importation des modules
 # Modules de base
+import logging
 import os
 import warnings
 from datetime import datetime
 from typing import Any
 
 # DuckDB
+import duckdb
 import polars as pl
 
 # Module de tests
@@ -15,7 +17,7 @@ import pytest
 from dt_ducklake_manager.connection import DuckLakeConnector
 from dt_ducklake_manager.maintenance import DatabaseRecoveryManager
 from dt_ducklake_manager.operations import DatabaseDeleter, DatabaseUpdater
-from dt_ducklake_manager.reporting import OperationReport
+from dt_ducklake_manager.reporting import OperationReport, _set_commit_message
 from dt_ducklake_manager.schema import DuckLakeTablesBuilder
 from tests.utils.ducklake import requires_ducklake
 
@@ -302,3 +304,92 @@ def test_delete_columns_report_has_no_row_changes(real_catalog_conn: Any) -> Non
     assert report.rows_updated == 0
     assert report.rows_deleted == 0
     assert report.files_before == report.files_after
+
+
+# ---------------------------------------------------------------------------
+# Tests de _set_commit_message (transaction avortée sur échec, DuckDB 2.0)
+# ---------------------------------------------------------------------------
+
+_LOGGER = logging.getLogger("test_reporting")
+
+
+# Proxy de connexion faisant échouer l'appel ducklake_set_commit_message
+class _FailingCommitMessageConn:
+    """Delegate to a real connection, failing ``ducklake_set_commit_message``."""
+
+    def __init__(self, conn: duckdb.DuckDBPyConnection) -> None:
+        self._conn = conn
+
+    def execute(self, query: str, *args: Any) -> Any:
+        if "ducklake_set_commit_message" in query:
+            raise duckdb.InvalidInputException("simulated failure")
+        return self._conn.execute(query, *args)
+
+
+# Test qu'un alias attaché mais non DuckLake est ignoré sans avorter l'écriture
+def test_set_commit_message_skips_non_ducklake_catalog() -> None:
+    """Test that a non-DuckLake attached alias is skipped and the write survives.
+
+    Under DuckDB 2.0 a failed ``CALL`` would abort the transaction and the next
+    ``COMMIT`` would silently roll it back: the call must never be attempted.
+    """
+    conn = duckdb.connect(":memory:")
+    conn.execute("ATTACH ':memory:' AS db")
+    conn.begin()
+    conn.execute("CREATE TABLE db.t AS SELECT 1 AS a")
+    _set_commit_message(conn, "db", "run-1", "msg", {"operation": "x"}, _LOGGER)
+    conn.commit()
+    assert conn.execute("SELECT a FROM db.t").fetchall() == [(1,)]
+
+
+# Test qu'un alias inconnu est ignoré
+def test_set_commit_message_skips_unknown_alias() -> None:
+    """Test that an alias attached to no database is skipped silently."""
+    conn = duckdb.connect(":memory:")
+    conn.begin()
+    conn.execute("CREATE TABLE t AS SELECT 1 AS a")
+    _set_commit_message(conn, "nope", None, None, {"operation": "x"}, _LOGGER)
+    conn.commit()
+    assert conn.execute("SELECT count(*) FROM t").fetchall() == [(1,)]
+
+
+# Test qu'un échec de l'appel est propagé (et non avalé)
+@requires_ducklake
+def test_set_commit_message_reraises_call_failure(real_catalog_conn: Any) -> None:
+    """Test that a failing ducklake_set_commit_message call is re-raised.
+
+    Args:
+        real_catalog_conn: Fixture providing a real, on-disk DuckLake catalog.
+    """
+    failing = _FailingCommitMessageConn(real_catalog_conn)
+    with pytest.raises(duckdb.InvalidInputException, match="simulated failure"):
+        _set_commit_message(
+            failing,  # type: ignore[arg-type]
+            "db",
+            "run-1",
+            "msg",
+            {"operation": "x"},
+            _LOGGER,
+        )
+
+
+# Test qu'une charge utile non sérialisable lève avant toute instruction SQL
+@requires_ducklake
+def test_set_commit_message_non_json_payload_keeps_transaction(
+    real_catalog_conn: Any,
+) -> None:
+    """Test that a non-JSON extra_info raises TypeError and keeps the transaction.
+
+    Args:
+        real_catalog_conn: Fixture providing a real, on-disk DuckLake catalog.
+    """
+    conn = real_catalog_conn
+    conn.begin()
+    conn.execute("INSERT INTO db.main.fact_table VALUES (10, 'B', 10.0)")
+    with pytest.raises(TypeError):
+        _set_commit_message(conn, "db", "run-1", "msg", {"bad": object()}, _LOGGER)
+    # Transaction intacte : l'insertion est validée
+    conn.commit()
+    assert conn.execute(
+        "SELECT count(*) FROM db.main.fact_table WHERE id = 10"
+    ).fetchall() == [(1,)]

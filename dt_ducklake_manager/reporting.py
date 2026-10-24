@@ -40,6 +40,9 @@ from typing import Any
 # DuckDB
 import duckdb
 
+# Utilitaires
+from .utils.sql import fetch_one, is_ducklake_catalog
+
 __all__ = ["OperationReport"]
 
 
@@ -262,8 +265,9 @@ def _table_info(
         return None
     # Exécution de la requête de collecte des informations
     try:
-        row = conn.execute(
-            f"""
+        row = fetch_one(
+            conn.execute(
+                f"""
             SELECT ti.file_count, ti.file_size_bytes, ti.delete_file_count,
                    ti.delete_file_size_bytes
             FROM ducklake_table_info('{catalog_alias}') ti
@@ -271,8 +275,9 @@ def _table_info(
                 ON s.schema_id = ti.schema_id
             WHERE ti.table_name = ? AND s.schema_name = ?
             """,
-            [table, schema],
-        ).fetchone()
+                [table, schema],
+            )
+        )
         if row is None:
             return None
         return (int(row[0]), int(row[1]), int(row[2]), int(row[3]))
@@ -307,9 +312,11 @@ def _current_snapshot_id(
         return None
     # Exécution de la requête d'extraction de l'identifiant du snapshot actuel
     try:
-        row = conn.execute(
-            f"SELECT max(snapshot_id) FROM ducklake_snapshots('{catalog_alias}')"
-        ).fetchone()
+        row = fetch_one(
+            conn.execute(
+                f"SELECT max(snapshot_id) FROM ducklake_snapshots('{catalog_alias}')"
+            )
+        )
         return int(row[0]) if row is not None and row[0] is not None else None
     except Exception as e:
         # Logging
@@ -389,13 +396,17 @@ def _set_commit_message(
 
     Must be called **inside** the open transaction, before ``COMMIT`` — DuckLake
     then exposes ``author``, ``commit_message`` and ``commit_extra_info`` on the
-    resulting row of ``ducklake_snapshots()``. Never raises: on a connection with no
-    DuckLake catalog attached the call is skipped with a DEBUG line (the common case
-    in unit tests, which mostly run against a plain in-memory DuckDB connection);
-    any other failure is logged as a WARNING and swallowed, since a traceability
-    side-channel must never fail the write it annotates. ``run_id``/``commit_message``
-    are passed through even when ``None`` (measured: ``ducklake_set_commit_message``
-    accepts ``NULL`` for both positional arguments).
+    resulting row of ``ducklake_snapshots()``. When ``catalog_alias`` is ``None`` or
+    names an attached database that is not a DuckLake catalog, the call is skipped
+    with a DEBUG line (the common case in unit tests, which mostly run against a
+    plain in-memory DuckDB connection), so a traceability side-channel never fails
+    the write it annotates. ``run_id``/``commit_message`` are passed through even
+    when ``None`` (measured: ``ducklake_set_commit_message`` accepts ``NULL`` for
+    both positional arguments).
+
+    Any failure of the call itself is re-raised: since DuckDB 2.0 a failed
+    statement aborts the open transaction and the following ``COMMIT`` silently
+    rolls it back, so swallowing the error would silently drop the annotated write.
 
     Args:
         conn: DuckDB connection with the catalog attached, inside an open
@@ -406,7 +417,13 @@ def _set_commit_message(
         commit_message: Caller-supplied commit message.
         extra_info: JSON-serializable payload, always carrying at least
             ``operation`` and ``schema`` (set by the caller).
-        logger: Logger for the DEBUG skip line / WARNING on failure.
+        logger: Logger for the DEBUG skip line / ERROR on failure.
+
+    Raises:
+        duckdb.Error: If ``ducklake_set_commit_message`` fails; the open
+            transaction is then aborted and must be rolled back by the caller.
+        TypeError: If ``extra_info`` is not JSON-serializable (raised before any
+            statement runs, so the transaction stays usable).
     """
     # Vérification qu'un catalogue est spécifié
     if catalog_alias is None:
@@ -415,13 +432,25 @@ def _set_commit_message(
             f" (run_id={run_id!r})"
         )
         return
+    # Vérification préalable du type de catalogue : un appel voué à l'échec
+    # avorterait la transaction, il n'est donc jamais tenté
+    if not is_ducklake_catalog(conn, catalog_alias):
+        logger.debug(
+            f"_set_commit_message skipped: {catalog_alias!r} is not an attached"
+            f" DuckLake catalog (run_id={run_id!r})"
+        )
+        return
+    # Sérialisation avant toute instruction : une erreur ici laisse la
+    # transaction intacte
+    payload = json.dumps(extra_info)
     # Commit message
     try:
         conn.execute(
             f"CALL ducklake_set_commit_message('{catalog_alias}', ?, ?,"
             " extra_info := ?)",
-            [run_id, commit_message, json.dumps(extra_info)],
+            [run_id, commit_message, payload],
         )
     except Exception as e:
-        # Logging
-        logger.warning(f"_set_commit_message failed (run_id={run_id!r}): {e}")
+        # Logging puis propagation : la transaction est déjà avortée
+        logger.error(f"_set_commit_message failed (run_id={run_id!r}): {e}")
+        raise

@@ -3,7 +3,7 @@
 import logging
 import os
 import warnings
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 
 import duckdb
@@ -61,7 +61,7 @@ def _facts(conn: Any) -> list[dict[str, Any]]:
         list[dict]: One dict per row, sorted by ``id``.
     """
     rows: list[dict[str, Any]] = (
-        conn.execute("SELECT * FROM fact_table ORDER BY id").pl().to_dicts()
+        conn.sql("SELECT * FROM fact_table ORDER BY id").pl().to_dicts()
     )
     return rows
 
@@ -141,39 +141,6 @@ def test_update_identical_batch_writes_nothing(
     assert report is not None
     assert (report.rows_inserted, report.rows_updated) == (0, 0)
     assert _facts(updater.conn) == before
-
-
-# Test que les lignes nouvelles sont écrites triées selon cluster_by
-def test_update_sorts_new_rows_by_cluster_by(
-    updater: DatabaseUpdater, built_ducklake_schema: Any
-) -> None:
-    """Test that a batch sent out of order lands sorted by cluster_by.
-
-    Args:
-        updater: DatabaseUpdater fixture.
-        built_ducklake_schema: DuckDB connection.
-    """
-    updater.update_cluster_by(["value"])
-    out_of_order = pl.DataFrame(
-        {
-            "id": [90, 91, 92],
-            "category": ["A", "B", "A"],
-            "value": [9.0, 5.0, 7.0],
-            "date": pl.date_range(
-                datetime(2024, 7, 1), datetime(2024, 7, 3), "1d", eager=True
-            ),
-            "status": ["active", "active", "active"],
-            "high_cardinality": ["val_900", "val_901", "val_902"],
-        }
-    )
-    assert updater.update_database(out_of_order) is True
-
-    # Ordre physique d'insertion, lu sans tri explicite : croissant sur value
-    rows = built_ducklake_schema.execute(
-        "SELECT value FROM fact_table WHERE id IN (90, 91, 92)"
-    ).fetchall()
-    values = [r[0] for r in rows]
-    assert values == sorted(values)
 
 
 # Test qu'un lot ne portant qu'une partie des colonnes laisse les autres intactes
@@ -564,3 +531,117 @@ def test_update_compaction_merges_small_files(real_catalog: Any) -> None:
     assert report is not None
     assert report.maintenance["merge_files_processed"] > 0
     assert report.files_after < files_before + 1
+
+
+# Fichiers de données actifs de la table des faits
+def _fact_files(conn: Any) -> list[str]:
+    """List the active data files of ``fact_table``.
+
+    Args:
+        conn: Connection attached to the ``db`` catalog.
+
+    Returns:
+        list[str]: Paths of the data files of the current snapshot.
+    """
+    return [
+        row[0]
+        for row in conn.execute(
+            "SELECT data_file FROM ducklake_list_files('db', 'fact_table')"
+        ).fetchall()
+    ]
+
+
+# Test que les lignes nouvelles sont écrites triées selon cluster_by
+@requires_ducklake
+def test_update_sorts_new_rows_by_cluster_by(real_catalog: Any) -> None:
+    """Test that a batch sent out of order lands sorted by the SORTED BY key.
+
+    The package writes no ORDER BY: the sort is DuckLake's, on the key set by
+    ``update_cluster_by``. Read from the Parquet file the insert produced.
+
+    Args:
+        real_catalog: Connection attached to a real DuckLake catalog.
+    """
+    updater = DatabaseUpdater(connection=real_catalog, categorical_threshold=4)
+    updater.update_cluster_by(["value"])
+    files_before = set(_fact_files(real_catalog))
+    out_of_order = pl.DataFrame(
+        {"id": [90, 91, 92], "category": ["A", "B", "A"], "value": [9.0, 5.0, 7.0]}
+    )
+
+    assert updater.update_database(out_of_order, compact_after_update=False)
+
+    (new_file,) = set(_fact_files(real_catalog)) - files_before
+    values = [
+        row[0]
+        for row in real_catalog.execute(
+            f"SELECT value FROM read_parquet('{new_file}')"
+        ).fetchall()
+    ]
+    assert values == [5.0, 7.0, 9.0]
+
+
+# Test que la compaction post-écriture re-trie les lignes réécrites par l'UPDATE
+@requires_ducklake
+def test_update_compaction_sorts_updated_rows(real_catalog: Any) -> None:
+    """Test that the post-write merge sorts back the rows rewritten by UPDATE.
+
+    DuckLake does not sort ``UPDATE`` output; once the delete files are rewritten
+    and the files merged, the table is a single file sorted by ``value``.
+
+    Args:
+        real_catalog: Connection attached to a real DuckLake catalog.
+    """
+    updater = DatabaseUpdater(connection=real_catalog, categorical_threshold=4)
+    updater.update_cluster_by(["value"])
+    # Inversion de l'ordre des valeurs existantes (lignes réécrites par l'UPDATE)
+    batch = pl.DataFrame(
+        {
+            "id": [1, 2, 3, 4, 5],
+            "category": ["A", "B", "A", "C", "B"],
+            "value": [0.5, 0.4, 0.3, 0.2, 0.1],
+        }
+    )
+
+    assert updater.update_database(batch, compact_after_update=True)
+
+    files = _fact_files(real_catalog)
+    assert len(files) == 1
+    values = [
+        row[0]
+        for row in real_catalog.execute(
+            f"SELECT value FROM read_parquet('{files[0]}')"
+        ).fetchall()
+    ]
+    assert values == sorted(values)
+
+
+# Test que la compaction incrémentale fusionne les fichiers de la fenêtre
+@requires_ducklake
+def test_update_incremental_compaction_merges_recent_files(real_catalog: Any) -> None:
+    """Test that a compaction_window covering every write merges every small file.
+
+    The window boundary itself (older files left out) is measured on the
+    procedure (``test_merge_files_window_keeps_older_files``); this test checks
+    that the window reaches the post-write merge of a real update.
+
+    Args:
+        real_catalog: Connection attached to a real DuckLake catalog.
+    """
+    updater = DatabaseUpdater(
+        connection=real_catalog,
+        categorical_threshold=4,
+        compaction_window=timedelta(days=1),
+    )
+    for i in range(3):
+        batch = pl.DataFrame({"id": [100 + i], "category": ["A"], "value": [1.0]})
+        assert updater.update_database(batch, compact_after_update=False)
+    assert len(_fact_files(real_catalog)) == 4
+
+    batch = pl.DataFrame({"id": [200], "category": ["B"], "value": [2.0]})
+    assert updater.update_database(batch, compact_after_update=True)
+
+    report = updater.last_report
+    assert report is not None
+    assert report.maintenance["merge_files_processed"] == 5
+    assert len(_fact_files(real_catalog)) == 1

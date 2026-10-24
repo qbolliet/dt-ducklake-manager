@@ -7,7 +7,7 @@ import time
 import warnings
 from collections.abc import Iterator
 from contextlib import contextmanager
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 
 # DuckDB
@@ -29,7 +29,13 @@ from ..reporting import (
 )
 from ..utils.hierarchy import validate_hierarchy_forest
 from ..utils.logger import _init_logger
-from ..utils.sql import SchemaScoped, quote_ident, resolve_catalog
+from ..utils.sql import (
+    SchemaScoped,
+    fetch_arrow,
+    fetch_one,
+    quote_ident,
+    resolve_catalog,
+)
 from ..utils.types import (
     COLUMN_METADATA_KEYS,
     check_supported_dtype,
@@ -85,6 +91,7 @@ class BaseSchemaManager(SchemaScoped):
         log_filename: str | os.PathLike[str] | None = None,
         schema: str = "main",
         catalog_alias: str = "db",
+        compaction_window: timedelta | None = None,
     ):
         """
         Initialize the base schema manager.
@@ -105,13 +112,31 @@ class BaseSchemaManager(SchemaScoped):
                 Carried alongside ``schema`` so that table references can be
                 qualified by the catalog rather than resolved against the
                 connection's current catalog. Defaults to ``'db'``.
+            compaction_window: Makes the post-write compaction
+                (``compact_after_update=True``) **incremental**: only the files
+                written by the snapshots of the last ``compaction_window`` are
+                merged, older files being left to planned maintenance
+                (``DuckLakeMaintenance.maintain``). Bounds the cost of each
+                compaction on a large table. Defaults to None (every small file of
+                the table is a merge candidate).
+
+        Raises:
+            ValueError: If ``compaction_window`` is not strictly positive.
 
         Example:
             >>> conn = DuckLakeConnector('catalog.ducklake', 'data/').connect()
             >>> manager = BaseSchemaManager(conn, categorical_threshold=30)
             >>> # Cibler un schéma dédié dans le même catalogue
             >>> manager = BaseSchemaManager(conn, schema='predictions')
+            >>> # Compaction post-écriture limitée aux fichiers des 7 derniers jours
+            >>> manager = BaseSchemaManager(conn, compaction_window=timedelta(days=7))
         """
+        # Validation de la fenêtre de compaction : une fenêtre nulle ou négative
+        # ne retiendrait aucun fichier
+        if compaction_window is not None and compaction_window <= timedelta(0):
+            raise ValueError(
+                f"compaction_window must be strictly positive, got {compaction_window}"
+            )
         # Initialisation de la connexion DuckLake.
         # Le fallback :memory: est réservé aux tests unitaires ; en production la
         # connexion doit toujours être fournie via DuckLakeConnector.connect().
@@ -145,6 +170,9 @@ class BaseSchemaManager(SchemaScoped):
         self.maintenance = DuckLakeMaintenance(
             self.conn, catalog_alias=self.catalog_alias, schema=self.schema
         )
+
+        # Fenêtre de la compaction post-écriture incrémentale (None : table entière)
+        self.compaction_window = compaction_window
 
         # Cache thread-safe des métadonnées. Vidé à l'ouverture de chaque transaction
         # et après chaque écriture de metadata : un autre gestionnaire partageant
@@ -459,10 +487,12 @@ class BaseSchemaManager(SchemaScoped):
     ) -> None:
         """Run the post-write compaction of the fact table, after the commit.
 
-        Merges the small files and rewrites the files carrying deletions
-        (``DuckLakeMaintenance.compact``), and records the counters in
-        ``report.maintenance``. Skipped with a DEBUG line on a connection with no
-        DuckLake catalog attached, where the DuckLake procedures do not exist.
+        Merges the small files (sorted back by the table's ``SORTED BY`` key) and
+        rewrites the files carrying deletions (``DuckLakeMaintenance.compact``),
+        and records the counters in ``report.maintenance``. With a
+        ``compaction_window``, only the files of the snapshots of that window are
+        merged. Skipped with a DEBUG line on a connection with no DuckLake catalog
+        attached, where the DuckLake procedures do not exist.
 
         Args:
             report: Report of the committed operation, updated in place.
@@ -473,15 +503,26 @@ class BaseSchemaManager(SchemaScoped):
             >>> manager._compact_after_write(manager.last_report)
         """
         # Aucun catalogue DuckLake attaché : pas de procédure de maintenance
-        if self._catalog is None:
+        if not self._is_ducklake():
             self.logger.debug("Post-write compaction skipped: no DuckLake catalog")
             return
+        # Borne basse de la fusion incrémentale : snapshots de la fenêtre glissante
+        newer_than = (
+            datetime.now() - self.compaction_window
+            if self.compaction_window is not None
+            else None
+        )
         # Compaction du schéma du gestionnaire
         if delete_threshold is None:
-            self.maintenance.compact(schema=self.schema, report=report)
+            self.maintenance.compact(
+                schema=self.schema, newer_than=newer_than, report=report
+            )
         else:
             self.maintenance.compact(
-                schema=self.schema, delete_threshold=delete_threshold, report=report
+                schema=self.schema,
+                delete_threshold=delete_threshold,
+                newer_than=newer_than,
+                report=report,
             )
 
     # Méthode d'audit structurel de la base à l'intérieur d'une écriture
@@ -542,13 +583,15 @@ class BaseSchemaManager(SchemaScoped):
                 try:
                     # Chargement Arrow (backend interne) puis encapsulation narwhals
                     self._metadata_cache = nw.from_native(
-                        self.conn.execute(
-                            f"SELECT * FROM {self._qualified('metadata')}"
-                        ).to_arrow_table(),
+                        fetch_arrow(
+                            self.conn,
+                            f"SELECT * FROM {self._qualified('metadata')}",
+                        ),
                         eager_only=True,
                     )
-                except Exception:
-                    # Table absente : DataFrame vide typé sur le schéma cible
+                except duckdb.CatalogException:
+                    # Table absente (seule erreur attendue, les autres sont propagées
+                    # au lieu de passer pour une table vide) : DataFrame vide typé
                     self._metadata_cache = empty_metadata_frame()
 
             return self._metadata_cache.clone()
@@ -632,10 +675,13 @@ class BaseSchemaManager(SchemaScoped):
             True
         """
         # Recherche du statut catégoriel
-        result = self.conn.execute(
-            f"SELECT is_categorical FROM {self._qualified('metadata')} WHERE name = ?",
-            [column],
-        ).fetchone()
+        result = fetch_one(
+            self.conn.execute(
+                f"SELECT is_categorical FROM {self._qualified('metadata')}"
+                " WHERE name = ?",
+                [column],
+            )
+        )
         return result[0] if result else False
 
     # Méthode de vérification si une colonne est marquée comme clé primaire
@@ -654,10 +700,13 @@ class BaseSchemaManager(SchemaScoped):
             True
         """
         # Recherche du statut de clé primaire dans les méta-données
-        result = self.conn.execute(
-            f"SELECT is_primary_key FROM {self._qualified('metadata')} WHERE name = ?",
-            [column],
-        ).fetchone()
+        result = fetch_one(
+            self.conn.execute(
+                f"SELECT is_primary_key FROM {self._qualified('metadata')}"
+                " WHERE name = ?",
+                [column],
+            )
+        )
         return result[0] if result else False
 
     # Méthode d'extraction de toutes les colonnes marquées comme clés primaires
@@ -697,64 +746,26 @@ class BaseSchemaManager(SchemaScoped):
         if not self._table_exists("dataset_metadata"):
             return None
         # Lecture de l'unique ligne de dataset_metadata
-        result = self.conn.execute(
-            f"SELECT cluster_by FROM {self._qualified('dataset_metadata')}"
-        ).fetchone()
+        result = fetch_one(
+            self.conn.execute(
+                f"SELECT cluster_by FROM {self._qualified('dataset_metadata')}"
+            )
+        )
         if result is None or result[0] is None:
             return None
         # Décodage de la liste JSON persistée
         decoded: list[str] = json.loads(result[0])
         return decoded
 
-    # Méthode de construction de la clause ORDER BY d'un lot d'écriture
-    @staticmethod
-    def _cluster_by_order_clause(
-        batch_columns: list[str], cluster_by: list[str] | None
-    ) -> str:
-        """
-        Build the ``ORDER BY`` clause sorting a write batch by ``cluster_by``.
-
-        Keeps only the ``cluster_by`` columns actually present in the batch (a
-        partial-column batch, e.g. from ``add_columns``, may not carry every sort
-        column), in the declared ``cluster_by`` order. Sorting the whole batch
-        before writing it is what lets DuckLake prune files and row groups on
-        these columns.
-
-        Args:
-            batch_columns: Columns present in the DataFrame being written.
-            cluster_by: Physical sort key read from ``dataset_metadata``, or None
-                when none is defined.
-
-        Returns:
-            str: The ``ORDER BY ...`` SQL clause, or ``""`` when no ``cluster_by``
-            column is present in the batch.
-
-        Examples:
-            >>> BaseSchemaManager._cluster_by_order_clause(
-            ...     ['id', 'value'], ['date', 'id'])
-            'ORDER BY "id"'
-            >>> BaseSchemaManager._cluster_by_order_clause(['value'], None)
-            ''
-        """
-        # Aucun tri déclaré
-        if not cluster_by:
-            return ""
-        # Restriction aux colonnes présentes dans le lot, dans l'ordre de cluster_by
-        batch_columns_set = set(batch_columns)
-        applicable = [c for c in cluster_by if c in batch_columns_set]
-        if not applicable:
-            return ""
-        return f"ORDER BY {', '.join(quote_ident(c) for c in applicable)}"
-
     # Méthode de mise à jour du tri physique (cluster_by) sur une base existante
     def update_cluster_by(self, columns: list[str]) -> None:
         """
-        Correct the physical sort key (``cluster_by``) recorded for the fact table.
+        Change the physical sort key (``cluster_by``) of the fact table.
 
-        Only updates ``dataset_metadata.cluster_by``: existing data files are left
-        untouched, so file pruning does not improve until the fact table is
-        physically reordered (``DuckLakeMaintenance.recluster``). Future writes
-        (inserts, upserts) sort themselves by the new value.
+        Updates ``dataset_metadata.cluster_by`` and, on a DuckLake catalog, the
+        table's ``SORTED BY`` key, in a single transaction. Existing data files are
+        left untouched: DuckLake sorts the future inserts and merges by the new key,
+        and the whole table is reordered by ``DuckLakeMaintenance.recluster``.
 
         Args:
             columns: Non-empty list of column names, in the desired sort order. Every
@@ -780,28 +791,64 @@ class BaseSchemaManager(SchemaScoped):
                 f"cluster_by columns {unknown} do not exist in the fact table"
             )
 
-        # Écriture de la nouvelle valeur, sans réécriture des données
-        self.conn.execute(
-            f"UPDATE {self._qualified('dataset_metadata')} SET cluster_by = ?",
-            [json.dumps(columns)],
-        )
+        # Écriture de la nouvelle clé (dataset_metadata et SORTED BY ensemble),
+        # sans réécriture des données
+        with self._transaction("update_cluster_by"):
+            self._set_cluster_by(columns)
 
         # Logging
         self.logger.info(f"Updated cluster_by to {columns}")
+
+    # Méthode d'écriture de la clé de tri (dataset_metadata et SORTED BY DuckLake)
+    def _set_cluster_by(self, columns: list[str] | None) -> None:
+        """
+        Write the sort key to ``dataset_metadata.cluster_by`` and to DuckLake.
+
+        ``dataset_metadata.cluster_by`` is the declared key, read by the UI and by
+        maintenance; the DuckLake ``SORTED BY`` key is the one actually applied to
+        the inserts and merges. Both are written here, and only here, so that they
+        never diverge. On a plain DuckDB connection (no ``SORTED BY``), only
+        ``dataset_metadata`` is written. No transaction is opened: the caller owns
+        it.
+
+        Args:
+            columns: New sort key, or None to remove it (``cluster_by`` NULL and
+                ``RESET SORTED BY``).
+
+        Raises:
+            duckdb.Error: If a statement fails; the caller's transaction must then
+                be rolled back.
+
+        Example:
+            >>> manager._set_cluster_by(['date', 'region'])
+        """
+        # Clé déclarée, lue par l'UI et la maintenance
+        self.conn.execute(
+            f"UPDATE {self._qualified('dataset_metadata')} SET cluster_by = ?",
+            [json.dumps(columns) if columns else None],
+        )
+        # Clé appliquée par DuckLake (absente hors DuckLake)
+        if not self._is_ducklake():
+            return
+        if columns:
+            self.maintenance.set_sorted_by(sorted_by=columns, schema=self.schema)
+        else:
+            self.maintenance.reset_sorted_by(schema=self.schema)
 
     # Méthode de retrait d'une colonne supprimée du tri physique (cluster_by)
     def _remove_from_cluster_by(self, column: str) -> None:
         """
         Remove ``column`` from ``dataset_metadata.cluster_by`` if it is part of it.
 
-        Called after a column has been dropped from the fact table
-        (``DatabaseDeleter.delete_columns``): a ``cluster_by`` referencing a column
-        that no longer exists would break every future sorted write. When the
-        removal empties the list, ``cluster_by`` is reset to ``NULL`` (no known
-        sort key) rather than an empty JSON array.
+        Called right **before** a column is dropped from the fact table
+        (``DatabaseDeleter.delete_columns``): DuckLake refuses to drop a column
+        that is part of the table's ``SORTED BY`` key. The DuckLake key is updated
+        together with ``cluster_by``. When the removal empties the list,
+        ``cluster_by`` is reset to ``NULL`` (no known sort key) rather than an
+        empty JSON array, and the DuckLake key is reset.
 
         Args:
-            column: Name of the column that was just dropped.
+            column: Name of the column about to be dropped.
 
         Example:
             >>> manager._remove_from_cluster_by('region')
@@ -811,15 +858,10 @@ class BaseSchemaManager(SchemaScoped):
         if not cluster_by or column not in cluster_by:
             return
 
-        # Retrait de la colonne, écriture directe (la colonne n'existe déjà plus
-        # dans la table des faits : update_cluster_by refuserait la validation
-        # d'existence)
+        # Retrait de la colonne, écriture directe sans transaction propre : appel
+        # depuis la transaction de la suppression de colonne
         remaining = [c for c in cluster_by if c != column]
-        new_value = json.dumps(remaining) if remaining else None
-        self.conn.execute(
-            f"UPDATE {self._qualified('dataset_metadata')} SET cluster_by = ?",
-            [new_value],
-        )
+        self._set_cluster_by(remaining or None)
 
         # Logging
         self.logger.warning(
@@ -886,9 +928,11 @@ class BaseSchemaManager(SchemaScoped):
 
         # Upsert manuel
         # Vérification de l'existence de la colonne avant d'insérer ou de mettre à jour.
-        _row = self.conn.execute(
-            f"SELECT COUNT(*) FROM {metadata_table} WHERE name = ?", [column]
-        ).fetchone()
+        _row = fetch_one(
+            self.conn.execute(
+                f"SELECT COUNT(*) FROM {metadata_table} WHERE name = ?", [column]
+            )
+        )
         existing_count = _row[0] if _row is not None else 0
 
         if existing_count == 0:
@@ -1025,9 +1069,11 @@ class BaseSchemaManager(SchemaScoped):
         metadata_table = self._qualified("metadata")
         exists = False
         if self._table_exists("metadata"):
-            _row = self.conn.execute(
-                f"SELECT COUNT(*) FROM {metadata_table} WHERE name = ?", [column]
-            ).fetchone()
+            _row = fetch_one(
+                self.conn.execute(
+                    f"SELECT COUNT(*) FROM {metadata_table} WHERE name = ?", [column]
+                )
+            )
             exists = _row is not None and _row[0] > 0
         if not exists:
             raise ValueError(
@@ -1045,9 +1091,12 @@ class BaseSchemaManager(SchemaScoped):
         if "parent_name" in fields and new_parent is not None:
             # Vérification que la colonne parent existe dans la table des
             # métadonnées (et est donc une colonne valide de la table des faits)
-            _prow = self.conn.execute(
-                f"SELECT COUNT(*) FROM {metadata_table} WHERE name = ?", [new_parent]
-            ).fetchone()
+            _prow = fetch_one(
+                self.conn.execute(
+                    f"SELECT COUNT(*) FROM {metadata_table} WHERE name = ?",
+                    [new_parent],
+                )
+            )
             # Cas d'erreur si la colonne n'est pas trouvée
             if _prow is None or _prow[0] == 0:
                 raise ValueError(
@@ -1066,9 +1115,12 @@ class BaseSchemaManager(SchemaScoped):
             if "label_for" in fields:
                 has_label_for = new_label_for is not None
             else:
-                _lfrow = self.conn.execute(
-                    f"SELECT label_for FROM {metadata_table} WHERE name = ?", [column]
-                ).fetchone()
+                _lfrow = fetch_one(
+                    self.conn.execute(
+                        f"SELECT label_for FROM {metadata_table} WHERE name = ?",
+                        [column],
+                    )
+                )
                 has_label_for = _lfrow is not None and _lfrow[0] is not None
             if has_label_for:
                 raise ValueError(
@@ -1086,10 +1138,12 @@ class BaseSchemaManager(SchemaScoped):
             if "parent_name" in fields:
                 has_parent = new_parent is not None
             else:
-                _prow4 = self.conn.execute(
-                    f"SELECT parent_name FROM {metadata_table} WHERE name = ?",
-                    [column],
-                ).fetchone()
+                _prow4 = fetch_one(
+                    self.conn.execute(
+                        f"SELECT parent_name FROM {metadata_table} WHERE name = ?",
+                        [column],
+                    )
+                )
                 has_parent = _prow4 is not None and _prow4[0] is not None
             if hierarchy_children or has_parent:
                 raise ValueError(
@@ -1130,20 +1184,24 @@ class BaseSchemaManager(SchemaScoped):
         # Une colonne de hiérarchie reste catégorielle : refus de is_categorical=False
         if fields.get("is_categorical") is False:
             # Colonne parente d'une autre colonne
-            _crow = self.conn.execute(
-                f"SELECT COUNT(*) FROM {metadata_table} WHERE parent_name = ?",
-                [column],
-            ).fetchone()
+            _crow = fetch_one(
+                self.conn.execute(
+                    f"SELECT COUNT(*) FROM {metadata_table} WHERE parent_name = ?",
+                    [column],
+                )
+            )
             is_parent = _crow is not None and _crow[0] > 0
             # Colonne enfant : le parent déclaré dans ce même appel prime sur l'état
             # stocké
             if "parent_name" in fields:
                 has_parent = new_parent is not None
             else:
-                _prow2 = self.conn.execute(
-                    f"SELECT parent_name FROM {metadata_table} WHERE name = ?",
-                    [column],
-                ).fetchone()
+                _prow2 = fetch_one(
+                    self.conn.execute(
+                        f"SELECT parent_name FROM {metadata_table} WHERE name = ?",
+                        [column],
+                    )
+                )
                 has_parent = _prow2 is not None and _prow2[0] is not None
             if is_parent or has_parent:
                 raise ValueError(
@@ -1162,10 +1220,12 @@ class BaseSchemaManager(SchemaScoped):
         # déclaré.
         if "parent_name" in fields and new_parent is not None:
             for hierarchy_col in (column, new_parent):
-                _crow = self.conn.execute(
-                    f"SELECT is_categorical FROM {metadata_table} WHERE name = ?",
-                    [hierarchy_col],
-                ).fetchone()
+                _crow = fetch_one(
+                    self.conn.execute(
+                        f"SELECT is_categorical FROM {metadata_table} WHERE name = ?",
+                        [hierarchy_col],
+                    )
+                )
                 if _crow is not None and not _crow[0]:
                     # Forçage du statut catégoriel
                     self.conn.execute(
@@ -1360,8 +1420,9 @@ class BaseSchemaManager(SchemaScoped):
 
         Ordered steps: references detachment (hierarchy children's ``parent_name``
         and label columns' ``label_for`` set to ``NULL``, only when ``cascade``),
-        ``ALTER TABLE ... DROP COLUMN``, ``metadata`` row removal and ``cluster_by``
-        update. Shared by ``DatabaseDeleter.delete_columns`` and
+        ``cluster_by``/``SORTED BY`` update (DuckLake refuses to drop a sort
+        column), ``ALTER TABLE ... DROP COLUMN`` and ``metadata`` row removal.
+        Shared by ``DatabaseDeleter.delete_columns`` and
         ``_cleanup_null_only_columns`` so that a dropped column never leaves a
         dangling reference behind. No transaction is opened here: the caller owns
         it.
@@ -1383,14 +1444,15 @@ class BaseSchemaManager(SchemaScoped):
         if cascade:
             self._clear_references_to(column)
 
+        # Retrait de la colonne de cluster_by si elle en faisait partie, avant le
+        # drop : DuckLake refuse de supprimer une colonne de la clé SORTED BY
+        self._remove_from_cluster_by(column)
+
         # Suppression physique de la colonne
         self._drop_fact_table_column(column)
 
         # Suppression de la ligne de méta-données correspondante
         self.delete_column_metadata(column)
-
-        # Retrait de la colonne de cluster_by si elle en faisait partie
-        self._remove_from_cluster_by(column)
 
     # Méthode de nettoyage des colonnes ne contenant que des valeurs nulles
     def _cleanup_null_only_columns(self, use_transaction: bool = True) -> list[str]:
@@ -1654,9 +1716,11 @@ class BaseSchemaManager(SchemaScoped):
         # Comptage de toutes les colonnes en une lecture
         columns = self._get_fact_table_columns()
         counts = ", ".join(f"COUNT({quote_ident(c)})" for c in columns)
-        row = self.conn.execute(
-            f"SELECT COUNT(*), {counts} FROM {self._qualified('fact_table')}"
-        ).fetchone()
+        row = fetch_one(
+            self.conn.execute(
+                f"SELECT COUNT(*), {counts} FROM {self._qualified('fact_table')}"
+            )
+        )
         # Table vide : aucune décision possible
         if row is None or row[0] == 0:
             return None

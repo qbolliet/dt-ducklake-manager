@@ -1,21 +1,33 @@
 # Importation des modules
 # Modules de base
 import logging
+from pathlib import Path
 from typing import Any
 
+import duckdb
 import narwhals as nw
 import polars as pl
+import pyarrow as pa
 
 # Module de tests
 import pytest
 
-# Modules du package à tester
+# Connecteur DuckLake
+from dt_ducklake_manager.connection import DuckLakeConnector
 from dt_ducklake_manager.utils.sql import (
     _build_sql_filter,
     _build_where_clause,
+    fetch_arrow,
+    fetch_one,
+    is_ducklake_catalog,
     quote_literal,
+    register_view,
     remove_dataframe_duplicates,
+    sorted_by_clause,
 )
+
+# Modules du package à tester
+from tests.utils.ducklake import requires_ducklake
 
 # ===========================================================================
 # Tests de remove_dataframe_duplicates
@@ -372,3 +384,171 @@ def test_build_where_clause_invalid_type_raises_type_error() -> None:
     """
     with pytest.raises(TypeError):
         _build_where_clause(42)  # type: ignore[arg-type]
+
+
+# ===========================================================================
+# Tests de fetch_one / fetch_arrow / register_view (résultats ouverts, DuckDB 2.0)
+# ===========================================================================
+
+
+# Test que fetch_one renvoie la première ligne et libère le résultat
+def test_fetch_one_returns_first_row_and_releases_result() -> None:
+    """Test that fetch_one returns the first row and leaves no open result.
+
+    A bare ``fetchone()`` on a multi-row result keeps it open under DuckDB 2.0,
+    which makes the next ``sql()`` raise ``ResourceInUseException``.
+    """
+    conn = duckdb.connect(":memory:")
+    row = fetch_one(conn.execute("SELECT * FROM range(5)"))
+    assert row == (0,)
+    # La connexion est de nouveau utilisable par une relation
+    assert conn.sql("SELECT 42").fetchall() == [(42,)]
+
+
+# Test que fetch_one renvoie None sur un résultat vide
+def test_fetch_one_empty_result_returns_none() -> None:
+    """Test that fetch_one returns None for an empty result."""
+    conn = duckdb.connect(":memory:")
+    assert fetch_one(conn.execute("SELECT 1 WHERE false")) is None
+    assert conn.sql("SELECT 1").fetchall() == [(1,)]
+
+
+# Test que fetch_one n'interrompt pas la transaction ouverte
+def test_fetch_one_keeps_open_transaction() -> None:
+    """Test that fetch_one inside a transaction leaves it usable and committable."""
+    conn = duckdb.connect(":memory:")
+    conn.execute("CREATE TABLE t (a INTEGER)")
+    conn.begin()
+    conn.execute("INSERT INTO t VALUES (1), (2)")
+    assert fetch_one(conn.execute("SELECT count(*) FROM t")) == (2,)
+    conn.execute("INSERT INTO t VALUES (3)")
+    conn.commit()
+    assert conn.execute("SELECT count(*) FROM t").fetchall() == [(3,)]
+
+
+# Test que fetch_arrow fonctionne malgré un résultat execute() laissé ouvert
+def test_fetch_arrow_after_pending_execute_result() -> None:
+    """Test that fetch_arrow completes a caller's open execute() result first."""
+    conn = duckdb.connect(":memory:")
+    conn.execute("CREATE TABLE t AS SELECT range AS a FROM range(3)")
+    # Résultat partiellement lu par l'appelant : bloquerait un sql() nu
+    conn.execute("SELECT * FROM t").fetchone()
+    table = fetch_arrow(conn, "SELECT a FROM t ORDER BY a")
+    assert isinstance(table, pa.Table)
+    assert table.column("a").to_pylist() == [0, 1, 2]
+
+
+# Test que fetch_arrow conserve le schéma d'un résultat vide
+def test_fetch_arrow_empty_result_keeps_schema() -> None:
+    """Test that an empty result still carries its column names."""
+    conn = duckdb.connect(":memory:")
+    table = fetch_arrow(conn, "SELECT 1 AS a, 'x' AS b WHERE false")
+    assert table.num_rows == 0
+    assert table.column_names == ["a", "b"]
+
+
+# Test que fetch_arrow propage l'erreur de catalogue d'une table absente
+def test_fetch_arrow_missing_table_raises_catalog_exception() -> None:
+    """Test that a missing table raises duckdb.CatalogException (not swallowed)."""
+    conn = duckdb.connect(":memory:")
+    with pytest.raises(duckdb.CatalogException):
+        fetch_arrow(conn, "SELECT * FROM missing_table")
+
+
+# Test que register_view fonctionne malgré un résultat execute() laissé ouvert
+def test_register_view_after_pending_execute_result() -> None:
+    """Test that register_view completes a caller's open execute() result first."""
+    conn = duckdb.connect(":memory:")
+    conn.execute("SELECT * FROM range(10)").fetchone()
+    register_view(conn, "v", pa.table({"a": [1, 2, 3]}))
+    assert conn.execute("SELECT sum(a) FROM v").fetchall() == [(6,)]
+
+
+# Test que register_view accepte un DataFrame Polars
+def test_register_view_polars_dataframe() -> None:
+    """Test that register_view accepts any object DuckDB can register."""
+    conn = duckdb.connect(":memory:")
+    register_view(conn, "v", pl.DataFrame({"a": [1, 2]}))
+    assert conn.execute("SELECT count(*) FROM v").fetchall() == [(2,)]
+
+
+# ---------------------------------------------------------------------------
+# Tests de is_ducklake_catalog()
+# ---------------------------------------------------------------------------
+
+
+# Test que l'absence d'alias, de connexion ou de base attachée renvoie False
+def test_is_ducklake_catalog_false_without_catalog() -> None:
+    """Test the negative cases that need no DuckLake extension."""
+    conn = duckdb.connect()
+    assert is_ducklake_catalog(conn, None) is False
+    assert is_ducklake_catalog(None, "db") is False
+    assert is_ducklake_catalog(conn, "db") is False
+    # Base DuckDB par défaut : attachée, mais pas DuckLake
+    assert is_ducklake_catalog(conn, "memory") is False
+
+
+# Test qu'une base DuckDB attachée sous l'alias n'est pas prise pour DuckLake
+def test_is_ducklake_catalog_false_on_attached_duckdb(tmp_path: Path) -> None:
+    """Test that a plain DuckDB file attached as ``db`` is not a DuckLake catalog.
+
+    Args:
+        tmp_path: pytest temporary directory.
+    """
+    conn = duckdb.connect()
+    conn.execute(f"ATTACH '{tmp_path / 'plain.duckdb'}' AS db")
+    assert is_ducklake_catalog(conn, "db") is False
+
+
+# Test qu'un catalogue DuckLake attaché est reconnu
+@requires_ducklake
+def test_is_ducklake_catalog_true_on_ducklake(tmp_path: Path) -> None:
+    """Test that an attached DuckLake catalog is detected.
+
+    Args:
+        tmp_path: pytest temporary directory.
+    """
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    conn = DuckLakeConnector(str(tmp_path / "test.ducklake"), str(data_dir)).connect()
+    assert is_ducklake_catalog(conn, "db") is True
+    conn.close()
+
+
+# Test qu'une erreur de lecture du catalogue renvoie False
+def test_is_ducklake_catalog_false_on_lookup_error() -> None:
+    """Test that a closed connection reports False instead of raising."""
+    conn = duckdb.connect()
+    conn.close()
+    assert is_ducklake_catalog(conn, "db") is False
+
+
+# ---------------------------------------------------------------------------
+# Tests de sorted_by_clause()
+# ---------------------------------------------------------------------------
+
+
+# Test de la clause SORTED BY, identifiants quotés dans l'ordre fourni
+@pytest.mark.parametrize(
+    ("columns", "expected"),
+    [
+        (["id"], 'SORTED BY ("id")'),
+        (["date", "region"], 'SORTED BY ("date", "region")'),
+        (['we"ird', "my col"], 'SORTED BY ("we""ird", "my col")'),
+    ],
+)
+def test_sorted_by_clause(columns: list[str], expected: str) -> None:
+    """Test that the clause quotes every column and keeps the given order.
+
+    Args:
+        columns: Sort columns.
+        expected: Expected clause.
+    """
+    assert sorted_by_clause(columns) == expected
+
+
+# Test qu'une clé vide est rejetée
+def test_sorted_by_clause_empty_raises() -> None:
+    """Test that an empty key raises ValueError (DuckLake rejects SORTED BY ())."""
+    with pytest.raises(ValueError, match="RESET SORTED BY"):
+        sorted_by_clause([])

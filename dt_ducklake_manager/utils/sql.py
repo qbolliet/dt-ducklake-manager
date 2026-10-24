@@ -7,6 +7,7 @@ from narwhals.typing import IntoDataFrame
 
 if TYPE_CHECKING:
     import duckdb
+    import pyarrow as pa
 
 
 # Fonction de mise entre guillemets d'un identifiant SQL
@@ -60,6 +61,94 @@ def quote_literal(value: str) -> str:
     return "'" + str(value).replace("'", "''") + "'"
 
 
+# Fonction de lecture de la première ligne d'un résultat execute()
+def fetch_one(cursor: "duckdb.DuckDBPyConnection") -> tuple[Any, ...] | None:
+    """
+    Fetch the first row of the pending ``execute()`` result, then close it.
+
+    Since DuckDB 2.0, a result is only released once a fetch returns no rows: a
+    bare ``fetchone()`` leaves it open, and the next ``register()`` or ``sql()``
+    on the connection — ours or the caller's — raises ``ResourceInUseException``.
+    ``complete()`` runs the rest of the result to its end (a no-op once it is
+    exhausted) without failing an open transaction, unlike ``abort()``.
+
+    Args:
+        cursor (duckdb.DuckDBPyConnection): Connection (or cursor) returned by
+            ``execute()``, holding the result to read.
+
+    Returns:
+        tuple[Any, ...] | None: The first row, or ``None`` for an empty result.
+
+    Examples:
+        >>> import duckdb
+        >>> conn = duckdb.connect(":memory:")
+        >>> fetch_one(conn.execute("SELECT 42"))
+        (42,)
+        >>> fetch_one(conn.execute("SELECT 1 WHERE false")) is None
+        True
+    """
+    # Fetch
+    row = cursor.fetchone()
+    # Libération du résultat : la connexion redevient utilisable par sql()/register()
+    cursor.complete()
+    return row
+
+
+# Fonction de lecture d'une requête en table Arrow
+def fetch_arrow(conn: "duckdb.DuckDBPyConnection", query: str) -> "pa.Table":
+    """
+    Run ``query`` and return its whole result as a PyArrow table.
+
+    Goes through a relation (``conn.sql(query).to_arrow_table()``): since DuckDB
+    2.0, Arrow output on an ``execute()`` result copies the rows and warns. A
+    relation, unlike ``execute()``, refuses to run while an earlier ``execute()``
+    result is still open — e.g. a caller's ``fetchone()`` — so any such result is
+    first completed, as the next ``execute()`` would have replaced it anyway.
+
+    Args:
+        conn (duckdb.DuckDBPyConnection): Connection to query.
+        query (str): SQL query without bound parameters (relations take none
+            here).
+
+    Returns:
+        pa.Table: The full result.
+
+    Examples:
+        >>> import duckdb
+        >>> fetch_arrow(duckdb.connect(":memory:"), "SELECT 1 AS a").num_rows
+        1
+    """
+    # Libération d'un éventuel résultat execute() encore ouvert
+    conn.complete()
+    return conn.sql(query).to_arrow_table()
+
+
+# Fonction d'enregistrement d'une vue temporaire sur des données Python
+def register_view(conn: "duckdb.DuckDBPyConnection", name: str, data: Any) -> None:
+    """
+    Register ``data`` (Arrow table, pandas or Polars DataFrame) as view ``name``.
+
+    Same as ``conn.register(name, data)``, except that an ``execute()`` result
+    still open on the connection is completed first: since DuckDB 2.0,
+    ``register()`` raises ``ResourceInUseException`` otherwise.
+
+    Args:
+        conn (duckdb.DuckDBPyConnection): Connection to register the view on.
+        name (str): View name.
+        data (Any): Object accepted by ``DuckDBPyConnection.register``.
+
+    Examples:
+        >>> import duckdb, pyarrow as pa
+        >>> conn = duckdb.connect(":memory:")
+        >>> register_view(conn, "v", pa.table({"a": [1, 2]}))
+        >>> conn.execute("SELECT count(*) FROM v").fetchall()
+        [(2,)]
+    """
+    # Libération d'un éventuel résultat execute() encore ouvert
+    conn.complete()
+    conn.register(name, data)
+
+
 # Fonction de résolution de l'alias de catalogue effectif d'une connexion
 def resolve_catalog(
     conn: "duckdb.DuckDBPyConnection | None", catalog_alias: str | None
@@ -90,13 +179,88 @@ def resolve_catalog(
         return None
     try:
         # Recherche de l'alias parmi les bases attachées à la connexion
-        row = conn.execute(
-            "SELECT 1 FROM duckdb_databases() WHERE database_name = ?",
-            [catalog_alias],
-        ).fetchone()
+        row = fetch_one(
+            conn.execute(
+                "SELECT 1 FROM duckdb_databases() WHERE database_name = ?",
+                [catalog_alias],
+            )
+        )
     except Exception:
         return None
     return catalog_alias if row is not None else None
+
+
+# Fonction de détection d'un catalogue DuckLake attaché
+def is_ducklake_catalog(
+    conn: "duckdb.DuckDBPyConnection | None", catalog_alias: str | None
+) -> bool:
+    """
+    Tell whether ``catalog_alias`` is an attached **DuckLake** catalog.
+
+    A plain DuckDB database attached under the same alias (or no attached database
+    at all, as on in-memory test connections) supports neither the ``ducklake_*``
+    procedures nor ``SORTED BY``: callers check this before using them, rather than
+    letting the statement fail, since a failed statement aborts the enclosing
+    DuckDB transaction.
+
+    Args:
+        conn (duckdb.DuckDBPyConnection | None): Connection to inspect.
+        catalog_alias (str | None): Candidate catalog alias.
+
+    Returns:
+        bool: True when a database of that name is attached and is of type
+        ``'ducklake'``, False otherwise (including when the lookup fails).
+
+    Examples:
+        >>> import duckdb
+        >>> is_ducklake_catalog(duckdb.connect(":memory:"), "memory")
+        False
+        >>> is_ducklake_catalog(duckdb.connect(":memory:"), None)
+        False
+    """
+    # Absence d'alias ou de connexion : aucun catalogue DuckLake possible
+    if catalog_alias is None or conn is None:
+        return False
+    try:
+        # Type de la base attachée sous cet alias ('ducklake', 'duckdb', ...)
+        row = fetch_one(
+            conn.execute(
+                "SELECT type FROM duckdb_databases() WHERE database_name = ?",
+                [catalog_alias],
+            )
+        )
+    except Exception:
+        return False
+    return row is not None and row[0] == "ducklake"
+
+
+# Fonction de construction de la clause SORTED BY d'une table DuckLake
+def sorted_by_clause(columns: list[str]) -> str:
+    """
+    Build the DuckLake ``SORTED BY (...)`` clause of a list of sort columns.
+
+    Used both in ``CREATE TABLE ... SORTED BY (...)`` and in ``ALTER TABLE ... SET
+    SORTED BY (...)``. Every column is quoted via :func:`quote_ident` and sorted
+    ascending (DuckLake's default, ``NULLS LAST``).
+
+    Args:
+        columns (list[str]): Non-empty list of column names, in sort order.
+
+    Returns:
+        str: The ``SORTED BY ("a", "b")`` clause.
+
+    Raises:
+        ValueError: If ``columns`` is empty (DuckLake rejects ``SORTED BY ()``;
+            removing the sort key is ``RESET SORTED BY``).
+
+    Examples:
+        >>> sorted_by_clause(["date", "region"])
+        'SORTED BY ("date", "region")'
+    """
+    # Clé de tri vide : rejetée par le parseur, la suppression passe par RESET
+    if not columns:
+        raise ValueError("columns must not be empty; use RESET SORTED BY instead")
+    return f"SORTED BY ({', '.join(quote_ident(c) for c in columns)})"
 
 
 # Fonction de qualification d'un nom de table par son schéma (et son catalogue)
@@ -186,6 +350,23 @@ class SchemaScoped:
         """
         return qualify_table(table, self.schema, self._catalog)
 
+    # Méthode de détection d'un catalogue DuckLake sous l'alias effectif
+    def _is_ducklake(self) -> bool:
+        """Tell whether this instance's tables live in an attached DuckLake catalog.
+
+        Re-read at each call (one ``duckdb_databases()`` lookup) rather than cached:
+        the connection can be attached or detached after the instance is built.
+
+        Returns:
+            bool: True when ``_catalog`` is an attached DuckLake catalog, False on
+            a plain DuckDB database or an in-memory test connection.
+
+        Examples:
+            >>> manager._is_ducklake()
+            True
+        """
+        return is_ducklake_catalog(self.conn, self._catalog)
+
     # Méthode de vérification de l'existence d'une table dans le schéma
     def _table_exists(self, table_name: str) -> bool:
         """Check whether a bare-named table exists in this instance's schema.
@@ -211,11 +392,13 @@ class SchemaScoped:
         if self._catalog is not None:
             params.append(self._catalog)
         try:
-            row = self.conn.execute(
-                "SELECT COUNT(*) FROM information_schema.tables"
-                f" WHERE table_name = ? AND table_schema = ?{catalog_filter}",
-                params,
-            ).fetchone()
+            row = fetch_one(
+                self.conn.execute(
+                    "SELECT COUNT(*) FROM information_schema.tables"
+                    f" WHERE table_name = ? AND table_schema = ?{catalog_filter}",
+                    params,
+                )
+            )
         except Exception:
             return False
         return row is not None and row[0] > 0
@@ -236,9 +419,9 @@ class SchemaScoped:
             3
         """
         try:
-            row = self.conn.execute(
-                f"SELECT COUNT(*) FROM {self._qualified(table)}"
-            ).fetchone()
+            row = fetch_one(
+                self.conn.execute(f"SELECT COUNT(*) FROM {self._qualified(table)}")
+            )
         except Exception:
             return 0
         return int(row[0]) if row is not None else 0

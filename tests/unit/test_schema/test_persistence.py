@@ -14,6 +14,8 @@ import polars as pl
 import pytest
 
 # Module à tester
+from dt_ducklake_manager.connection import DuckLakeConnector
+from dt_ducklake_manager.maintenance import DuckLakeMaintenance
 from dt_ducklake_manager.schema import DuckLakeTablesBuilder
 from tests.utils.ducklake import requires_ducklake
 
@@ -90,7 +92,7 @@ def test_create_duckdb_metadata_table(ducklake_builder: DuckLakeTablesBuilder) -
     ducklake_builder.create_duckdb_metadata_table(table_name="test_metadata")
 
     # Vérification que la table existe et a la structure attendue
-    result = ducklake_builder.conn.execute("SELECT * FROM test_metadata").pl()
+    result = ducklake_builder.conn.sql("SELECT * FROM test_metadata").pl()
     assert "name" in result.columns
     assert "label" in result.columns
     assert "is_categorical_forced" not in result.columns
@@ -115,7 +117,7 @@ def test_create_duckdb_dataset_metadata_table(
     # Création de la table descriptive du jeu de résultats
     ducklake_builder.create_duckdb_dataset_metadata_table()
 
-    result = ducklake_builder.conn.execute("SELECT * FROM dataset_metadata").pl()
+    result = ducklake_builder.conn.sql("SELECT * FROM dataset_metadata").pl()
 
     # Une seule ligne par schéma
     assert result.shape[0] == 1
@@ -149,7 +151,7 @@ def test_dataset_metadata_carries_builder_arguments(
         )
     builder.create_duckdb_dataset_metadata_table()
 
-    result = builder.conn.execute("SELECT * FROM dataset_metadata").pl()
+    result = builder.conn.sql("SELECT * FROM dataset_metadata").pl()
     assert result["label"][0] == "Prédictions"
     assert result["description"][0] == "Sorties du modèle"
     assert result["source"][0] == "pipeline-ml"
@@ -177,7 +179,7 @@ def test_create_duckdb_fact_table(
     ducklake_builder.create_duckdb_fact_table(table_name="test_fact")
 
     # Vérification que la table des faits existe et a la bonne forme
-    result = ducklake_builder.conn.execute("SELECT * FROM test_fact").pl()
+    result = ducklake_builder.conn.sql("SELECT * FROM test_fact").pl()
     assert result.shape[0] == len(sample_df)
     assert "category" in result.columns
     assert "status" in result.columns
@@ -185,6 +187,50 @@ def test_create_duckdb_fact_table(
     # Vérification que les colonnes catégorielles portent les libellés d'origine
     assert result["category"].to_list() == sample_df["category"].to_list()
     assert result["status"].to_list() == sample_df["status"].to_list()
+
+
+# Test qu'une colonne entièrement nulle est typée par son type inféré (chemin CTAS)
+@pytest.mark.parametrize("primary_keys", [None, ["id"]])
+def test_all_null_column_gets_inferred_type(primary_keys: list[str] | None) -> None:
+    """Test that an all-null column is stored as VARCHAR, not the "NULL" type.
+
+    Without an explicit cast, DuckDB 2.0 gives a CTAS column built from an Arrow
+    ``null`` array the ``"NULL"`` type (``INTEGER`` in 1.x), which rejects every
+    non-null value and would leak into ``metadata.sql_type``. The CTAS path
+    (no primary key) and the explicit DDL path must agree.
+
+    Args:
+        primary_keys: None for the CTAS path, ``['id']`` for the DDL path.
+    """
+    conn = duckdb.connect(":memory:")
+    df = pl.DataFrame({"id": [1, 2], "value": [1.0, 2.0], "empty": [None, None]})
+    assert df["empty"].dtype == pl.Null
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        DuckLakeTablesBuilder(
+            df, primary_keys=primary_keys, connection=conn
+        ).build_schema()
+
+    physical = conn.execute(
+        "SELECT data_type FROM information_schema.columns"
+        " WHERE table_name = 'fact_table' AND column_name = 'empty'"
+    ).fetchall()
+    declared = conn.execute(
+        "SELECT sql_type FROM metadata WHERE name = 'empty'"
+    ).fetchall()
+    assert physical == [("VARCHAR",)]
+    assert declared == [("VARCHAR",)]
+    # La colonne accepte des valeurs non nulles
+    conn.execute("INSERT INTO fact_table (id, value, empty) VALUES (3, 3.0, 'x')")
+    # Les autres colonnes gardent leur type
+    types = dict(
+        conn.execute(
+            "SELECT column_name, data_type FROM information_schema.columns"
+            " WHERE table_name = 'fact_table'"
+        ).fetchall()
+    )
+    assert types["id"] == "BIGINT"
+    assert types["value"] == "DOUBLE"
 
 
 # ---------------------------------------------------------------------------
@@ -917,10 +963,57 @@ def test_build_schema_cluster_by_unknown_column_raises(
 
 
 # Test que la table des faits est effectivement triée selon cluster_by
+@requires_ducklake
+@pytest.mark.parametrize("primary_keys", [["id"], None])
 def test_build_schema_fact_table_sorted_by_cluster_by(
+    sample_df: pl.DataFrame, tmp_path: Path, primary_keys: list[str] | None
+) -> None:
+    """Test that both creation paths declare SORTED BY and write sorted rows.
+
+    ``primary_keys=['id']`` goes through the explicit DDL, ``None`` through the
+    CTAS; ``category`` is not the default (``id``) order.
+
+    Args:
+        sample_df: Sample polars DataFrame.
+        tmp_path: pytest temporary directory.
+        primary_keys: Primary keys of the build (selects the creation path).
+    """
+    data_dir = str(tmp_path / "data")
+    os.makedirs(data_dir)
+    conn = DuckLakeConnector(
+        str(tmp_path / "test.ducklake"), data_dir, data_inlining_row_limit=0
+    ).connect()
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        builder = DuckLakeTablesBuilder(
+            sample_df,
+            categorical_threshold=4,
+            primary_keys=primary_keys,
+            connection=conn,
+        )
+    builder.build_schema(cluster_by=["category"])
+
+    assert DuckLakeMaintenance(conn).sorted_by() == ["category"]
+    ((path,),) = conn.execute(
+        "SELECT data_file FROM ducklake_list_files('db', 'fact_table')"
+    ).fetchall()
+    categories = [
+        row[0]
+        for row in conn.execute(
+            f"SELECT category FROM read_parquet('{path}')"
+        ).fetchall()
+    ]
+    assert categories == sorted(categories)
+    conn.close()
+
+
+# Test que cluster_by est seulement enregistré sur une connexion DuckDB simple
+def test_build_schema_cluster_by_recorded_without_ducklake(
     sample_df: pl.DataFrame,
 ) -> None:
-    """Test that the fact table rows are physically written in cluster_by order.
+    """Test that a plain DuckDB build records cluster_by without SORTED BY.
+
+    DuckDB rejects ``SORTED BY``: the build would fail if it were emitted.
 
     Args:
         sample_df: Sample polars DataFrame.
@@ -930,14 +1023,12 @@ def test_build_schema_fact_table_sorted_by_cluster_by(
         builder = DuckLakeTablesBuilder(
             sample_df, categorical_threshold=4, primary_keys=["id"]
         )
-    # Tri décroissant improbable par défaut (id croissant) : category d'abord
     builder.build_schema(cluster_by=["category"])
 
-    categories = [
-        row[0]
-        for row in builder.conn.execute("SELECT category FROM fact_table").fetchall()
-    ]
-    assert categories == sorted(categories)
+    ((cluster_by,),) = builder.conn.execute(
+        "SELECT cluster_by FROM dataset_metadata"
+    ).fetchall()
+    assert json.loads(cluster_by) == ["category"]
 
 
 # Test que create_duckdb_dataset_metadata_table appelée directement avec cluster_by

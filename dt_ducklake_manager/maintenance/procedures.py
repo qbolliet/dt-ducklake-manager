@@ -30,7 +30,7 @@ risk:
   ``dry_run`` first. Risk: irreversible.
 
 The write operations (``DatabaseUpdater``/``DatabaseDeleter``) only run the safe
-post-write steps through :meth:`DuckLakeProcedures.compact` (merge + rewrite) and
+post-write steps through :meth:`DuckLakeProcedures.compact` (rewrite + merge) and
 never call ``expire_snapshots``/``cleanup_files``/``delete_orphaned_files``. The
 diagnostic of the storage state and the policy deciding which step is worth running
 live in :mod:`dt_ducklake_manager.maintenance.policy`.
@@ -54,7 +54,13 @@ from ..reporting import OperationReport
 
 # Module d'initialisation du logger
 from ..utils.logger import _init_logger
-from ..utils.sql import qualify_table, quote_ident, quote_literal
+from ..utils.sql import (
+    fetch_one,
+    qualify_table,
+    quote_ident,
+    quote_literal,
+    sorted_by_clause,
+)
 
 # Taille cible (octets) d'un fichier de données, alignée sur l'option recommandée
 # ``target_file_size = '100MB'`` (RECOMMENDED_DUCKLAKE_OPTIONS du connecteur,
@@ -93,6 +99,32 @@ def _sum_file_counters(rows: list[tuple[Any, ...]]) -> tuple[int, int]:
         sum(int(row[2] or 0) for row in rows),
         sum(int(row[3] or 0) for row in rows),
     )
+
+
+# Fonction de décodage d'une expression de tri DuckLake en nom de colonne
+def _sort_expression_column(expression: str) -> str:
+    """Decode a ``ducklake_sort_expression.expression`` into a column name.
+
+    DuckLake stores each sort key as SQL text: a bare name when no quoting is
+    needed (``'id'``), a double-quoted identifier otherwise (``'"my col"'``, with
+    embedded quotes doubled).
+
+    Args:
+        expression: Stored sort expression.
+
+    Returns:
+        str: The column name, unquoted.
+
+    Examples:
+        >>> _sort_expression_column('id')
+        'id'
+        >>> _sort_expression_column('"we""ird"')
+        'we"ird'
+    """
+    # Identifiant entre guillemets : retrait des guillemets et dédoublement
+    if len(expression) >= 2 and expression[0] == expression[-1] == '"':
+        return expression[1:-1].replace('""', '"')
+    return expression
 
 
 # Classe des procédures de maintenance d'un catalogue DuckLake
@@ -170,6 +202,8 @@ class DuckLakeProcedures:
         max_file_size: int | None = None,
         min_file_size: int | None = None,
         max_compacted_files: int | None = None,
+        newer_than: datetime | None = None,
+        older_than: datetime | None = None,
     ) -> tuple[str, str, int, int]:
         """
         Merge adjacent Parquet files into files of at most ``max_file_size`` bytes.
@@ -178,7 +212,17 @@ class DuckLakeProcedures:
         updated many times ends up made of many small files, which forces DuckDB to
         open many file handles during a scan. ``ducklake_merge_adjacent_files``
         combines adjacent files as long as the merged file stays under
-        ``max_file_size``.
+        ``max_file_size``. On a table with a sort key (``SORTED BY``), the merged
+        output is sorted by the key active when the merge runs, so merging also
+        restores the physical order of the rows written by ``UPDATE`` statements
+        (which DuckLake does not sort). Files carrying deletions are skipped: they
+        are the job of :meth:`rewrite_data_files`.
+
+        ``newer_than``/``older_than`` make the merge **incremental**: only the files
+        whose ``begin_snapshot`` falls in the window are candidates (for a merged
+        file, the first snapshot of its sources). A post-write compaction can thus
+        be bounded to the recent files, older ones being left to planned
+        maintenance.
 
         ``min_file_size`` is a **lower** bound (measured): files *smaller* than it
         are excluded from the merge. It is therefore left unset by default, so that
@@ -193,8 +237,15 @@ class DuckLakeProcedures:
                 Defaults to None: the catalog's ``target_file_size``.
             min_file_size (int | None): Files smaller than this many bytes are left
                 out of the merge. Defaults to None (no lower bound).
-            max_compacted_files (int | None): Maximum number of files combined into
-                one output file. Defaults to None (DuckLake's default).
+            max_compacted_files (int | None): Maximum number of merge operations
+                run by one call — each combines a group of adjacent files into one
+                output file —, bounding its memory use; the remaining groups are
+                merged by the next calls (measured). Defaults to None (no bound).
+            newer_than (datetime | None): Only merge files from snapshots at or
+                after this time. A naive datetime is read in the session time
+                zone. Defaults to None (no lower bound).
+            older_than (datetime | None): Only merge files from snapshots before
+                this time. Defaults to None (no upper bound).
 
         Returns:
             tuple[str, str, int, int]: ``(schema_name, table_name, files_processed,
@@ -206,6 +257,7 @@ class DuckLakeProcedures:
             >>> procedures.merge_files()
             ('main', 'fact_table', 6, 1)
             >>> procedures.merge_files('fact_table', max_file_size=50_000_000)
+            >>> procedures.merge_files(newer_than=datetime.now() - timedelta(days=1))
         """
         # Résolution du schéma et de la borne haute
         schema = schema or self.schema
@@ -219,6 +271,15 @@ class DuckLakeProcedures:
             named.append(f"min_file_size := {int(min_file_size)}")
         if max_compacted_files is not None:
             named.append(f"max_compacted_files := {int(max_compacted_files)}")
+        # Fenêtre temporelle passée en paramètres liés (conversion TIMESTAMPTZ par
+        # DuckDB, sans formatage manuel de la date)
+        params: list[datetime] = []
+        if newer_than is not None:
+            named.append("newer_than := ?::TIMESTAMPTZ")
+            params.append(newer_than)
+        if older_than is not None:
+            named.append("older_than := ?::TIMESTAMPTZ")
+            params.append(older_than)
         named.append(f"schema := {quote_literal(schema)}")
 
         try:
@@ -229,7 +290,8 @@ class DuckLakeProcedures:
             rows = self.conn.execute(
                 "SELECT * FROM ducklake_merge_adjacent_files("
                 f"{quote_literal(self.catalog_alias)}, {quote_literal(table)},"
-                f" {', '.join(named)})"
+                f" {', '.join(named)})",
+                params,
             ).fetchall()
         except Exception as e:
             # Logging
@@ -239,15 +301,21 @@ class DuckLakeProcedures:
         # Agrégation des compteurs (résultat vide : aucun fichier à fusionner)
         files_processed, files_created = _sum_file_counters(rows)
         # Logging : un zéro est toujours explicité
+        window = (
+            f", newer_than={newer_than}, older_than={older_than}"
+            if newer_than is not None or older_than is not None
+            else ""
+        )
         if not files_processed:
             self.logger.debug(
                 f"merge_files {schema}.{table}: 0 file merged (no adjacent files"
-                f" to combine under max_file_size={max_file_size})"
+                f" to combine under max_file_size={max_file_size}{window})"
             )
         else:
             self.logger.debug(
                 f"merge_files {schema}.{table}: {files_processed} file(s) processed,"
-                f" {files_created} file(s) created (max_file_size={max_file_size})"
+                f" {files_created} file(s) created (max_file_size={max_file_size}"
+                f"{window})"
             )
         return schema, table, files_processed, files_created
 
@@ -258,6 +326,7 @@ class DuckLakeProcedures:
         *,
         schema: str | None = None,
         delete_threshold: float = DEFAULT_DELETE_THRESHOLD,
+        max_compacted_files: int | None = None,
     ) -> tuple[str, str, int, int]:
         """
         Rewrite data files to physically remove their deleted rows.
@@ -276,6 +345,11 @@ class DuckLakeProcedures:
                 ``schema``).
             delete_threshold (float): Rewrite files whose deleted-row share exceeds
                 this fraction (0-1). Defaults to 0.1.
+            max_compacted_files (int | None): Maximum number of rewrite operations
+                run by one call — each combines a group of files toward the
+                catalog's ``target_file_size`` into one output file —, bounding its
+                cost; the remaining files are rewritten by the next calls
+                (measured). Defaults to None (no bound).
 
         Returns:
             tuple[str, str, int, int]: ``(schema_name, table_name, files_processed,
@@ -288,15 +362,20 @@ class DuckLakeProcedures:
             ('main', 'fact_table', 0, 0)
             >>> procedures.rewrite_data_files('fact_table', delete_threshold=0.3)
         """
-        # Résolution du schéma cible
+        # Résolution du schéma cible et du plafond éventuel de fichiers réécrits
         schema = schema or self.schema
+        limit = (
+            f" max_compacted_files := {int(max_compacted_files)},"
+            if max_compacted_files is not None
+            else ""
+        )
         try:
             # Exécution de la réécriture des fichiers, résultat lu en entier pour
             # que la procédure soit validée
             rows = self.conn.execute(
                 "SELECT * FROM ducklake_rewrite_data_files("
                 f"{quote_literal(self.catalog_alias)}, {quote_literal(table)},"
-                f" delete_threshold := {float(delete_threshold)},"
+                f" delete_threshold := {float(delete_threshold)},{limit}"
                 f" schema := {quote_literal(schema)})"
             ).fetchall()
         except Exception as e:
@@ -537,6 +616,134 @@ class DuckLakeProcedures:
         return paths
 
     # ---------------------------------------------------------------------------
+    # Gestion de la clé de tri
+    # ---------------------------------------------------------------------------
+
+    # Lecture de la clé de tri DuckLake d'une table
+    def sorted_by(
+        self, table: str = "fact_table", *, schema: str | None = None
+    ) -> list[str] | None:
+        """
+        Read the sort key (``SORTED BY``) currently active on a DuckLake table.
+
+        Read from the catalog (``ducklake_sort_info`` / ``ducklake_sort_expression``),
+        so only committed sort keys are visible: a ``SET SORTED BY`` of the
+        transaction in progress is not.
+
+        Args:
+            table (str): Table to inspect. Defaults to ``'fact_table'``.
+            schema (str | None): DuckLake schema. Defaults to None (this instance's
+                ``schema``).
+
+        Returns:
+            list[str] | None: The sort columns in key order, or None when the table
+            has no sort key, does not exist, or the catalog cannot be read.
+
+        Examples:
+            >>> procedures.sorted_by()
+            ['date', 'region']
+        """
+        # Résolution du schéma et de l'identifiant de la table
+        schema = schema or self.schema
+        table_id = self._safe_table_id(table, schema)
+        if table_id is None:
+            return None
+        meta = self._metadata_catalog()
+        try:
+            # Clé de tri courante : version de tri sans snapshot de fin
+            rows = self.conn.execute(
+                f"""
+                SELECT e.expression
+                FROM {meta}.ducklake_sort_info i
+                JOIN {meta}.ducklake_sort_expression e
+                  ON e.sort_id = i.sort_id AND e.table_id = i.table_id
+                WHERE i.table_id = ? AND i.end_snapshot IS NULL
+                ORDER BY e.sort_key_index
+                """,
+                [table_id],
+            ).fetchall()
+        except Exception as e:
+            self.logger.debug(f"sort key of {schema}.{table} unreadable: {e}")
+            return None
+        return [_sort_expression_column(row[0]) for row in rows] or None
+
+    # Définition ou remplacement de la clé de tri d'une table
+    def set_sorted_by(
+        self,
+        table: str = "fact_table",
+        *,
+        sorted_by: list[str],
+        schema: str | None = None,
+    ) -> None:
+        """
+        Set or replace the sort key of an existing DuckLake table.
+
+        Executes ``ALTER TABLE … SET SORTED BY``. DuckLake then sorts every
+        ``INSERT`` by this key, as well as the output of
+        :meth:`merge_files` and :meth:`flush_inlined_data`; existing files are only
+        reordered by those rewrites (or by ``DuckLakeMaintenance.recluster``). A
+        sort column cannot be dropped from the table while it is part of the key.
+
+        Args:
+            table (str): Table to sort. Defaults to ``'fact_table'``.
+            sorted_by (list[str]): Non-empty list of column names, in sort order.
+            schema (str | None): DuckLake schema. Defaults to None (this instance's
+                ``schema``).
+
+        Raises:
+            ValueError: If ``sorted_by`` is empty.
+            duckdb.Error: If DuckLake rejects the key (e.g. an unknown column).
+
+        Examples:
+            >>> procedures.set_sorted_by(sorted_by=['date', 'region'])
+        """
+        # Validation et construction de la clause (clé vide refusée)
+        if not sorted_by:
+            raise ValueError(
+                "sorted_by must not be empty; use reset_sorted_by() to remove the"
+                " sort key"
+            )
+        schema = schema or self.schema
+        self.conn.execute(
+            f"ALTER TABLE {qualify_table(table, schema, self.catalog_alias)}"
+            f" SET {sorted_by_clause(sorted_by)}"
+        )
+
+        # Logging
+        self.logger.info(f"Sort key of {schema}.{table} set to {sorted_by}")
+
+    # Suppression de la clé de tri d'une table
+    def reset_sorted_by(
+        self, table: str = "fact_table", *, schema: str | None = None
+    ) -> None:
+        """
+        Remove the sort key of an existing DuckLake table.
+
+        Executes ``ALTER TABLE … RESET SORTED BY``: subsequent writes and merges are
+        no longer sorted; existing files are unaffected.
+
+        Args:
+            table (str): Table to unsort. Defaults to ``'fact_table'``.
+            schema (str | None): DuckLake schema. Defaults to None (this instance's
+                ``schema``).
+
+        Raises:
+            duckdb.Error: If the table does not exist.
+
+        Examples:
+            >>> procedures.reset_sorted_by()
+        """
+        # Suppression de la clé de tri
+        schema = schema or self.schema
+        self.conn.execute(
+            f"ALTER TABLE {qualify_table(table, schema, self.catalog_alias)}"
+            " RESET SORTED BY"
+        )
+
+        # Logging
+        self.logger.info(f"Sort key of {schema}.{table} removed")
+
+    # ---------------------------------------------------------------------------
     # Gestion du partitionnement
     # ---------------------------------------------------------------------------
 
@@ -644,7 +851,7 @@ class DuckLakeProcedures:
         1. :meth:`reset_partitioned_by` — clears the existing partition definition.
         2. :meth:`set_partitioned_by` — applies the new keys (skipped when
            ``partition_by`` is None).
-        3. :meth:`merge_files` + :meth:`rewrite_data_files` — rewrite the existing
+        3. :meth:`rewrite_data_files` + :meth:`merge_files` — rewrite the existing
            Parquet files (only when ``run_maintenance`` is True).
 
         Args:
@@ -682,8 +889,8 @@ class DuckLakeProcedures:
         # Étape 3 : réécriture des fichiers existants, afin que les données déjà
         # présentes adoptent elles aussi le nouveau découpage
         if run_maintenance:
-            self.merge_files(table, schema=schema)
             self.rewrite_data_files(table, schema=schema)
+            self.merge_files(table, schema=schema)
 
     # ---------------------------------------------------------------------------
     # Compaction post-écriture
@@ -696,15 +903,21 @@ class DuckLakeProcedures:
         *,
         schema: str | None = None,
         delete_threshold: float = DEFAULT_DELETE_THRESHOLD,
+        newer_than: datetime | None = None,
+        max_compacted_files: int | None = None,
         report: OperationReport | None = None,
     ) -> dict[str, int]:
         """
-        Run the lightweight post-write compaction: merge then rewrite.
+        Run the lightweight post-write compaction: rewrite then merge.
 
-        Merges adjacent small Parquet files up to the catalog's ``target_file_size``
-        and rewrites the files whose deleted-row share exceeds ``delete_threshold``.
+        Rewrites the files whose deleted-row share exceeds ``delete_threshold``,
+        then merges adjacent small Parquet files up to the catalog's
+        ``target_file_size`` (sorted by the table's sort key, if any). The rewrite
+        comes first because the merge skips files carrying deletions. With
+        ``newer_than`` the merge is incremental: only the files of the recent
+        snapshots are merged.
         Called by the write operations right after their commit. Never raises:
-        :meth:`merge_files` and :meth:`rewrite_data_files` log and swallow their own
+        :meth:`rewrite_data_files` and :meth:`merge_files` log and swallow their own
         failures.
 
         Never calls ``expire_snapshots``, ``cleanup_files`` or
@@ -718,6 +931,11 @@ class DuckLakeProcedures:
                 ``schema``).
             delete_threshold (float): Rewrite files whose deleted-row share exceeds
                 this fraction (0-1). Defaults to 0.1.
+            newer_than (datetime | None): Only merge files from snapshots at or
+                after this time. Defaults to None (every file is a candidate).
+            max_compacted_files (int | None): Maximum number of operations (one
+                output file each) run by each of the merge and the rewrite.
+                Defaults to None (no bound).
             report (OperationReport | None): When given, its ``maintenance`` dict
                 receives the four counters (zeros included).
 
@@ -729,13 +947,24 @@ class DuckLakeProcedures:
             >>> procedures.compact()
             >>> procedures.compact('fact_table', schema='predictions',
             ...     delete_threshold=0.05)
+            >>> procedures.compact(newer_than=datetime.now() - timedelta(days=7))
         """
         # Résolution du schéma cible
         schema = schema or self.schema
-        # Fusion des petits fichiers puis réécriture des fichiers trop supprimés
-        _, _, merge_processed, merge_created = self.merge_files(table, schema=schema)
+        # Réécriture des fichiers supprimés puis fusion des petits fichiers :
+        # la fusion ignore les fichiers portant des suppressions,
+        # qui n'y deviennent candidats (et n'y sont re-triés) qu'une fois réécrits
         _, _, rewrite_processed, rewrite_created = self.rewrite_data_files(
-            table, schema=schema, delete_threshold=delete_threshold
+            table,
+            schema=schema,
+            delete_threshold=delete_threshold,
+            max_compacted_files=max_compacted_files,
+        )
+        _, _, merge_processed, merge_created = self.merge_files(
+            table,
+            schema=schema,
+            max_compacted_files=max_compacted_files,
+            newer_than=newer_than,
         )
         counters = {
             "merge_files_processed": merge_processed,
@@ -745,9 +974,10 @@ class DuckLakeProcedures:
         }
         # Logging
         self.logger.debug(
-            f"compact {schema}.{table}: merge {merge_processed} -> {merge_created}"
-            f" file(s), rewrite {rewrite_processed} -> {rewrite_created} file(s)"
-            f" (delete_threshold={delete_threshold})"
+            f"compact {schema}.{table}: rewrite {rewrite_processed} ->"
+            f" {rewrite_created} file(s), merge {merge_processed} -> {merge_created}"
+            " file(s)"
+            f" (delete_threshold={delete_threshold}, newer_than={newer_than})"
         )
         # Ajout au rapport
         if report is not None:
@@ -767,6 +997,53 @@ class DuckLakeProcedures:
         """
         return quote_ident(f"__ducklake_metadata_{self.catalog_alias}")
 
+    # Identifiant DuckLake d'une table active
+    def _table_id(self, table: str, schema: str) -> int | None:
+        """Resolve the DuckLake ``table_id`` of an active table.
+
+        Args:
+            table: Bare table name.
+            schema: DuckLake schema name.
+
+        Returns:
+            int | None: The ``table_id``, or None when not found.
+
+        Raises:
+            duckdb.Error: When the internal metadata catalog cannot be read (no
+                DuckLake catalog attached).
+        """
+        meta = self._metadata_catalog()
+        row = fetch_one(
+            self.conn.execute(
+                f"""
+            SELECT t.table_id
+            FROM {meta}.ducklake_table t
+            JOIN {meta}.ducklake_schema s ON s.schema_id = t.schema_id
+            WHERE t.table_name = ? AND s.schema_name = ?
+              AND t.end_snapshot IS NULL AND s.end_snapshot IS NULL
+            """,
+                [table, schema],
+            )
+        )
+        return int(row[0]) if row is not None else None
+
+    # Résolution non fatale de l'identifiant DuckLake d'une table
+    def _safe_table_id(self, table: str, schema: str) -> int | None:
+        """Non-fatal wrapper of :meth:`_table_id` (DEBUG line on failure).
+
+        Args:
+            table: Bare table name.
+            schema: DuckLake schema name.
+
+        Returns:
+            int | None: The ``table_id``, or None when not found or unreadable.
+        """
+        try:
+            return self._table_id(table, schema)
+        except Exception as e:
+            self.logger.debug(f"table_id of {schema}.{table} unreadable: {e}")
+            return None
+
     # Taille cible des fichiers du catalogue
     def _target_file_size(self) -> int:
         """Read the catalog's ``target_file_size`` option, in bytes.
@@ -777,11 +1054,13 @@ class DuckLakeProcedures:
             catalog or cannot be read.
         """
         try:
-            row = self.conn.execute(
-                "SELECT value FROM ducklake_options(?)"
-                " WHERE option_name = 'target_file_size'",
-                [self.catalog_alias],
-            ).fetchone()
+            row = fetch_one(
+                self.conn.execute(
+                    "SELECT value FROM ducklake_options(?)"
+                    " WHERE option_name = 'target_file_size'",
+                    [self.catalog_alias],
+                )
+            )
         except Exception as e:
             self.logger.debug(f"target_file_size unreadable: {e}")
             return DEFAULT_TARGET_FILE_SIZE_BYTES
@@ -800,9 +1079,10 @@ class DuckLakeProcedures:
         Returns:
             int: Row count, or ``0`` if the table cannot be read.
         """
+        # Qualification de la table
         qualified = qualify_table(table, schema, self.catalog_alias)
         try:
-            row = self.conn.execute(f"SELECT COUNT(*) FROM {qualified}").fetchone()
+            row = fetch_one(self.conn.execute(f"SELECT COUNT(*) FROM {qualified}"))
         except Exception:
             return 0
         return int(row[0]) if row is not None else 0

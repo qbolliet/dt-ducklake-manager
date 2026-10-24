@@ -37,7 +37,14 @@ from ..reporting import (
     _table_changes_counts,
 )
 from ..utils.logger import _init_logger
-from ..utils.sql import SchemaScoped, quote_ident, quote_literal, resolve_catalog
+from ..utils.sql import (
+    SchemaScoped,
+    fetch_arrow,
+    fetch_one,
+    quote_ident,
+    quote_literal,
+    resolve_catalog,
+)
 
 # Tables d'un jeu de résultats restaurées par défaut
 RESTORABLE_TABLES: tuple[str, ...] = ("fact_table", "metadata", "dataset_metadata")
@@ -128,10 +135,11 @@ class DatabaseRecoveryManager(SchemaScoped):
         """
         try:
             # Inventaire des snapshots
-            snapshots = self.conn.execute(
+            snapshots = fetch_arrow(
+                self.conn,
                 "SELECT * FROM ducklake_snapshots("
-                f"{quote_literal(self.catalog_alias)}) ORDER BY snapshot_id DESC"
-            ).to_arrow_table()
+                f"{quote_literal(self.catalog_alias)}) ORDER BY snapshot_id DESC",
+            )
         except Exception as e:
             # Logging
             self.logger.error(f"Could not list the DuckLake snapshots: {e}")
@@ -203,11 +211,13 @@ class DatabaseRecoveryManager(SchemaScoped):
             )
 
         # Existence du snapshot visé
-        snapshots = self.conn.execute(
-            "SELECT snapshot_id FROM ducklake_snapshots("
-            f"{quote_literal(self.catalog_alias)}) WHERE snapshot_id = ?",
-            [int(snapshot_id)],
-        ).fetchone()
+        snapshots = fetch_one(
+            self.conn.execute(
+                "SELECT snapshot_id FROM ducklake_snapshots("
+                f"{quote_literal(self.catalog_alias)}) WHERE snapshot_id = ?",
+                [int(snapshot_id)],
+            )
+        )
         if snapshots is None:
             raise ValueError(
                 f"Snapshot {snapshot_id} does not exist in catalog"

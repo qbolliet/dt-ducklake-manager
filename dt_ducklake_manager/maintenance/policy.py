@@ -8,8 +8,8 @@ decide *whether* a procedure is worth running:
 - :meth:`DuckLakeMaintenance.storage_report` measures the physical state of a table
   (file/delete/small-file counts, inlined rows, snapshots, file-range overlap on
   the first ``cluster_by`` column);
-- :meth:`DuckLakeMaintenance.recluster` rewrites a table in its sort order to
-  restore file pruning;
+- :meth:`DuckLakeMaintenance.recluster` rewrites a whole table in its sort key
+  (``SORTED BY``) to restore file pruning;
 - :meth:`DuckLakeMaintenance.maintain` reads the storage report and only runs a
   step when its indicator justifies it under a :class:`MaintenancePolicy`, logging
   every skipped step and why.
@@ -17,7 +17,10 @@ decide *whether* a procedure is worth running:
 DuckLake has no index: pruning relies on per-file min/max statistics
 (``ducklake_file_column_stats``, used by the planner — ``Total Files Read`` in
 ``EXPLAIN ANALYZE``) and on Parquet row-group statistics. Both only help when the
-data is physically grouped, which successive updates degrade — hence ``recluster``.
+data is physically grouped. DuckLake keeps every ``INSERT`` and every merge
+sorted by the table's ``SORTED BY`` key, but each batch only covers its own rows
+(and ``UPDATE`` output is not sorted at all), so file ranges overlap more and more
+across batches — hence ``recluster``.
 File-level pruning only starts to matter once a table spans several files, i.e.
 beyond a few million rows with the recommended ``target_file_size`` of 100MB; below
 that, row-group statistics already do the job.
@@ -38,7 +41,9 @@ from ..reporting import (
     _set_commit_message,
     _table_info,
 )
-from ..utils.sql import qualify_table, quote_ident, quote_literal
+
+# Utilitaires
+from ..utils.sql import fetch_one, qualify_table, quote_ident, quote_literal
 
 # Procédures DuckLake enveloppées
 from .procedures import (
@@ -166,6 +171,10 @@ class MaintenancePolicy:
             ``target_file_size``).
         max_small_files (int): The merge step runs when more than this many small
             files exist. Defaults to ``10``.
+        max_compacted_files (int | None): Maximum number of operations (one output
+            file each) run by the merge and by the rewrite steps, capping their
+            memory use; the remaining files are handled by the next maintenance
+            runs. Defaults to ``None`` (no bound).
         flush_inlined (bool): Flush inlined rows when some exist. Defaults to
             ``True``.
         max_overlap_ratio (float): The recluster step runs when ``overlap_ratio``
@@ -194,6 +203,7 @@ class MaintenancePolicy:
     delete_threshold: float = DEFAULT_DELETE_THRESHOLD
     min_file_size_bytes: int = DEFAULT_TARGET_FILE_SIZE_BYTES
     max_small_files: int = 10
+    max_compacted_files: int | None = None
     flush_inlined: bool = True
     max_overlap_ratio: float = 0.5
     recluster: bool = False
@@ -217,6 +227,11 @@ class MaintenancePolicy:
         for name in ("min_file_size_bytes", "max_small_files"):
             if getattr(self, name) < 0:
                 raise ValueError(f"{name} must be >= 0, got {getattr(self, name)}")
+        if self.max_compacted_files is not None and self.max_compacted_files < 1:
+            raise ValueError(
+                "max_compacted_files must be >= 1 or None, got"
+                f" {self.max_compacted_files}"
+            )
         if self.retention_days is not None and self.retention_days < 0:
             raise ValueError(
                 f"retention_days must be >= 0 or None, got {self.retention_days}"
@@ -335,10 +350,12 @@ class DuckLakeMaintenance(DuckLakeProcedures):
         # Snapshots : nombre et âge du plus ancien. L'âge est calculé en SQL (epoch)
         # car la récupération d'un TIMESTAMPTZ en Python exige pytz (mesuré).
         try:
-            row = self.conn.execute(
-                "SELECT count(*), epoch(now()) - epoch(min(snapshot_time))"
-                f" FROM ducklake_snapshots({quote_literal(self.catalog_alias)})"
-            ).fetchone()
+            row = fetch_one(
+                self.conn.execute(
+                    "SELECT count(*), epoch(now()) - epoch(min(snapshot_time))"
+                    f" FROM ducklake_snapshots({quote_literal(self.catalog_alias)})"
+                )
+            )
             if row is not None:
                 report.snapshot_count = int(row[0])
                 if row[1] is not None:
@@ -367,25 +384,27 @@ class DuckLakeMaintenance(DuckLakeProcedures):
         self,
         table: str = "fact_table",
         *,
-        order_by: list[str] | None = None,
         schema: str | None = None,
         merge_max_file_size: int | None = None,
     ) -> OperationReport:
         """
-        Physically rewrite a table in sort order to restore file pruning.
+        Physically rewrite a table in its sort key to restore file pruning.
 
         DuckLake prunes files with per-file min/max statistics, which only works
-        when the data is physically grouped. Each update writes new files sorted
-        within the batch but not merged into the global order, so file ranges
-        progressively overlap. This method rewrites the whole table sorted by
-        ``order_by`` in a single transaction: ``CREATE TEMP TABLE _recluster AS
+        when the data is physically grouped. Each write is sorted by the table's
+        ``SORTED BY`` key within its own batch only, so file ranges progressively
+        overlap. This method rewrites the whole table in a single transaction:
+        ``SET SORTED BY`` realigned on ``dataset_metadata.cluster_by`` when the
+        DuckLake key differs (or is missing), ``CREATE TEMP TABLE _recluster AS
         SELECT * FROM <table>``, ``DELETE FROM <table>`` (a full delete creates no
-        delete file, measured), ``INSERT INTO <table> SELECT * FROM _recluster ORDER
-        BY …``, ``DROP TABLE _recluster``, ``COMMIT``. The table keeps its identity
-        (table id, partitioning, history/time travel).
+        delete file), ``INSERT INTO <table> SELECT * FROM _recluster`` —
+        sorted by DuckLake as a whole on insert —, ``DROP TABLE _recluster``,
+        ``COMMIT``. The table keeps its identity (table id, partitioning,
+        history/time travel). To change the order, call
+        ``BaseSchemaManager.update_cluster_by`` first.
 
         After commit, :meth:`merge_files` absorbs the small or empty residual files
-        (adjacent files keep the order). ``expire_snapshots``/``cleanup_files`` are
+        (sorted by the same key). ``expire_snapshots``/``cleanup_files`` are
         never run here: they belong to planned maintenance.
 
         **Cost**: a full rewrite of the table, single-threaded; storage doubles
@@ -398,8 +417,6 @@ class DuckLakeMaintenance(DuckLakeProcedures):
 
         Args:
             table (str): Table to rewrite. Defaults to ``'fact_table'``.
-            order_by (list[str] | None): Sort columns. Defaults to None
-                (``dataset_metadata.cluster_by`` of the schema).
             schema (str | None): DuckLake schema. Defaults to None (this instance's
                 ``schema``).
             merge_max_file_size (int | None): Upper bound (bytes) on the files
@@ -412,16 +429,15 @@ class DuckLakeMaintenance(DuckLakeProcedures):
             ``overlap_ratio_before``/``overlap_ratio_after``.
 
         Raises:
-            ValueError: If the table does not exist, no sort key is available
-                (no ``order_by`` and no ``cluster_by``), or a sort column is unknown.
+            ValueError: If the table does not exist, ``dataset_metadata.cluster_by``
+                is not set, or one of its columns is unknown.
             Exception: Any failure of the rewrite, re-raised after ``ROLLBACK``
                 (the table is left untouched).
 
         Examples:
-            >>> report = maint.recluster()  # ORDER BY dataset_metadata.cluster_by
+            >>> report = maint.recluster()  # dataset_metadata.cluster_by
             >>> report.maintenance['overlap_ratio_after']
             0.0
-            >>> maint.recluster('fact_table', order_by=['date', 'region'])
         """
         # Résolution du schéma et validation de la table
         schema = schema or self.schema
@@ -429,23 +445,23 @@ class DuckLakeMaintenance(DuckLakeProcedures):
         if not columns:
             raise ValueError(f"Table {schema}.{table} does not exist")
 
-        # Résolution et validation de la clé de tri
-        sort_columns = (
-            list(order_by) if order_by is not None else (self._cluster_by(schema) or [])
-        )
+        # Résolution et validation de la clé de tri déclarée
+        sort_columns = self._cluster_by(schema) or []
         if not sort_columns:
             raise ValueError(
-                f"No sort key for {schema}.{table}: pass order_by or set"
-                " dataset_metadata.cluster_by"
+                f"No sort key for {schema}.{table}: set dataset_metadata.cluster_by"
+                " (BaseSchemaManager.update_cluster_by)"
             )
         # Colonnes absentes de la table
         unknown = [c for c in sort_columns if c not in columns]
         if unknown:
             raise ValueError(
-                f"order_by columns {unknown} do not exist in {schema}.{table}"
+                f"cluster_by columns {unknown} do not exist in {schema}.{table}"
             )
         qualified = qualify_table(table, schema, self.catalog_alias)
-        order_clause = ", ".join(quote_ident(c) for c in sort_columns)
+        # Clé DuckLake à réaligner : divergente ou absente (table créée hors du
+        # package, ALTER TABLE manuel)
+        realign_sort_key = self.sorted_by(table, schema=schema) != sort_columns
 
         # État avant réordonnancement
         start_time = time.time()
@@ -473,12 +489,12 @@ class DuckLakeMaintenance(DuckLakeProcedures):
             report.maintenance["overlap_ratio_before"] = overlap_before
         # Logging
         self.logger.debug(
-            f"recluster {schema}.{table}: ORDER BY {sort_columns}"
-            f" (overlap before: {overlap_before})"
+            f"recluster {schema}.{table}: SORTED BY {sort_columns}"
+            f" (overlap before: {overlap_before}, realign: {realign_sort_key})"
         )
 
         # Valeur courante de threads, restaurée en finally (SET non transactionnel)
-        row = self.conn.execute("SELECT current_setting('threads')").fetchone()
+        row = fetch_one(self.conn.execute("SELECT current_setting('threads')"))
         previous_threads = int(row[0]) if row is not None else None
 
         # Nettoyage d'une éventuelle table temporaire laissée par un échec antérieur
@@ -486,7 +502,12 @@ class DuckLakeMaintenance(DuckLakeProcedures):
         try:
             self.conn.execute("BEGIN")
             try:
-                # Matérialisation, vidage puis réinsertion triée
+                # Réalignement de la clé DuckLake sur cluster_by, avant la
+                # réinsertion qu'elle trie (pris en compte dans la transaction)
+                if realign_sort_key:
+                    self.set_sorted_by(table, sorted_by=sort_columns, schema=schema)
+                # Matérialisation, vidage puis réinsertion, triée par DuckLake
+                # selon la clé de la table
                 self.conn.execute(
                     f"CREATE TEMP TABLE _recluster AS SELECT * FROM {qualified}"
                 )
@@ -495,7 +516,6 @@ class DuckLakeMaintenance(DuckLakeProcedures):
                 self.conn.execute("SET threads = 1")
                 self.conn.execute(
                     f"INSERT INTO {qualified} SELECT * FROM temp.main._recluster"
-                    f" ORDER BY {order_clause}"
                 )
                 self.conn.execute("DROP TABLE temp.main._recluster")
                 _set_commit_message(
@@ -507,7 +527,7 @@ class DuckLakeMaintenance(DuckLakeProcedures):
                         "operation": "recluster",
                         "schema": schema,
                         "table": table,
-                        "order_by": sort_columns,
+                        "sorted_by": sort_columns,
                     },
                     self.logger,
                 )
@@ -696,7 +716,10 @@ class DuckLakeMaintenance(DuckLakeProcedures):
         # Étape 2 : réécriture des fichiers portant des suppressions
         def rewrite() -> None:
             _, _, processed, created = self.rewrite_data_files(
-                table, schema=schema, delete_threshold=policy.delete_threshold
+                table,
+                schema=schema,
+                delete_threshold=policy.delete_threshold,
+                max_compacted_files=policy.max_compacted_files,
             )
             report.maintenance["rewrite_files_processed"] = processed
             report.maintenance["rewrite_files_created"] = created
@@ -713,7 +736,9 @@ class DuckLakeMaintenance(DuckLakeProcedures):
 
         # Étape 3 : fusion des petits fichiers, jusqu'à la taille cible du catalogue
         def merge() -> None:
-            _, _, processed, created = self.merge_files(table, schema=schema)
+            _, _, processed, created = self.merge_files(
+                table, schema=schema, max_compacted_files=policy.max_compacted_files
+            )
             report.maintenance["merge_files_processed"] = processed
             report.maintenance["merge_files_created"] = created
 
@@ -838,10 +863,12 @@ class DuckLakeMaintenance(DuckLakeProcedures):
             is absent or ``cluster_by`` is NULL/empty.
         """
         try:
-            row = self.conn.execute(
-                "SELECT cluster_by FROM"
-                f" {qualify_table('dataset_metadata', schema, self.catalog_alias)}"
-            ).fetchone()
+            row = fetch_one(
+                self.conn.execute(
+                    "SELECT cluster_by FROM"
+                    f" {qualify_table('dataset_metadata', schema, self.catalog_alias)}"
+                )
+            )
         except Exception:
             return None
         if row is None or row[0] is None:
@@ -869,51 +896,6 @@ class DuckLakeMaintenance(DuckLakeProcedures):
         ).fetchall()
         return {name: data_type for name, data_type in rows}
 
-    # Identifiant DuckLake d'une table active
-    def _table_id(self, table: str, schema: str) -> int | None:
-        """Resolve the DuckLake ``table_id`` of an active table.
-
-        Args:
-            table: Bare table name.
-            schema: DuckLake schema name.
-
-        Returns:
-            int | None: The ``table_id``, or None when not found.
-
-        Raises:
-            duckdb.Error: When the internal metadata catalog cannot be read (no
-                DuckLake catalog attached).
-        """
-        meta = self._metadata_catalog()
-        row = self.conn.execute(
-            f"""
-            SELECT t.table_id
-            FROM {meta}.ducklake_table t
-            JOIN {meta}.ducklake_schema s ON s.schema_id = t.schema_id
-            WHERE t.table_name = ? AND s.schema_name = ?
-              AND t.end_snapshot IS NULL AND s.end_snapshot IS NULL
-            """,
-            [table, schema],
-        ).fetchone()
-        return int(row[0]) if row is not None else None
-
-    # Résolution non fatale de l'identifiant DuckLake d'une table
-    def _safe_table_id(self, table: str, schema: str) -> int | None:
-        """Non-fatal wrapper of :meth:`_table_id` (DEBUG line on failure).
-
-        Args:
-            table: Bare table name.
-            schema: DuckLake schema name.
-
-        Returns:
-            int | None: The ``table_id``, or None when not found or unreadable.
-        """
-        try:
-            return self._table_id(table, schema)
-        except Exception as e:
-            self.logger.debug(f"table_id of {schema}.{table} unreadable: {e}")
-            return None
-
     # Fichiers de suppression vivants et petits fichiers d'une table
     def _measure_files(self, report: StorageReport, table_id: int) -> None:
         """Fill the live delete files and the small-file count of ``report``.
@@ -930,8 +912,9 @@ class DuckLakeMaintenance(DuckLakeProcedures):
         meta = self._metadata_catalog()
         try:
             # Fichiers de suppression visant un fichier de données actif
-            row = self.conn.execute(
-                f"""
+            row = fetch_one(
+                self.conn.execute(
+                    f"""
                 SELECT count(*), coalesce(sum(d.file_size_bytes), 0)
                 FROM {meta}.ducklake_delete_file d
                 JOIN {meta}.ducklake_data_file f
@@ -939,8 +922,9 @@ class DuckLakeMaintenance(DuckLakeProcedures):
                 WHERE d.table_id = ? AND d.end_snapshot IS NULL
                   AND f.end_snapshot IS NULL
                 """,
-                [table_id],
-            ).fetchone()
+                    [table_id],
+                )
+            )
             if row is not None:
                 report.delete_file_count = int(row[0])
                 report.delete_bytes = int(row[1])
@@ -950,12 +934,14 @@ class DuckLakeMaintenance(DuckLakeProcedures):
                     else 0.0
                 )
             # Fichiers de données actifs sous le seuil de taille
-            row = self.conn.execute(
-                f"SELECT count(*) FROM {meta}.ducklake_data_file"
-                " WHERE table_id = ? AND end_snapshot IS NULL"
-                " AND file_size_bytes < ?",
-                [table_id, report.min_file_size_bytes],
-            ).fetchone()
+            row = fetch_one(
+                self.conn.execute(
+                    f"SELECT count(*) FROM {meta}.ducklake_data_file"
+                    " WHERE table_id = ? AND end_snapshot IS NULL"
+                    " AND file_size_bytes < ?",
+                    [table_id, report.min_file_size_bytes],
+                )
+            )
             report.small_file_count = int(row[0]) if row is not None else 0
         except Exception as e:
             # Logging
@@ -1017,11 +1003,13 @@ class DuckLakeMaintenance(DuckLakeProcedures):
             int | None: The ``column_id``, or None when not found.
         """
         # Extraction de l'identifiant de la colonne
-        row = self.conn.execute(
-            f"SELECT column_id FROM {self._metadata_catalog()}.ducklake_column"
-            " WHERE table_id = ? AND column_name = ? AND end_snapshot IS NULL",
-            [table_id, column],
-        ).fetchone()
+        row = fetch_one(
+            self.conn.execute(
+                f"SELECT column_id FROM {self._metadata_catalog()}.ducklake_column"
+                " WHERE table_id = ? AND column_name = ? AND end_snapshot IS NULL",
+                [table_id, column],
+            )
+        )
         return int(row[0]) if row is not None else None
 
     # Part des fichiers dont la plage chevauche celle d'un autre fichier
@@ -1051,8 +1039,9 @@ class DuckLakeMaintenance(DuckLakeProcedures):
         if query is None:
             return None
         # Exécution de la requête
-        row = self.conn.execute(
-            f"""
+        row = fetch_one(
+            self.conn.execute(
+                f"""
             WITH r AS (
                 SELECT * FROM ({query})
                 WHERE record_count > 0 AND lo IS NOT NULL AND hi IS NOT NULL
@@ -1064,7 +1053,8 @@ class DuckLakeMaintenance(DuckLakeProcedures):
                     AND ((b.lo < a.hi AND a.lo < b.hi)
                          OR (a.lo = b.lo AND a.hi = b.hi)))
             """
-        ).fetchone()
+            )
+        )
         if row is None or row[0] <= 1:
             return 0.0
         return float(row[1]) / float(row[0])
@@ -1098,9 +1088,10 @@ class DuckLakeMaintenance(DuckLakeProcedures):
     ) -> tuple[int | None, bool]:
         """Measure the unflushed inlined rows of a table.
 
-        Counts the live rows (``end_snapshot IS NULL``) of every inlined-data table
-        registered for the table in ``ducklake_inlined_data_tables`` (measured:
-        emptied by ``flush_inlined_data``). Falls back to a catalog-wide boolean
+        Counts the live rows (``_ducklake_end_snapshot IS NULL``) of every
+        inlined-data table registered for the table in
+        ``ducklake_inlined_data_tables`` (measured: emptied by
+        ``flush_inlined_data``). Falls back to a catalog-wide boolean
         read from ``ducklake_snapshots.changes`` (an ``inlined_insert`` more recent
         than the last ``flushed_inlined``) when the internal tables are unreadable.
 
@@ -1128,11 +1119,14 @@ class DuckLakeMaintenance(DuckLakeProcedures):
                 total = 0
                 # Parcours des noms de table
                 for (name,) in names:
+                    inlined = f"{meta}.{quote_ident(name)}"
                     # Comptable des snapshots actifs associés
-                    row = self.conn.execute(
-                        f"SELECT count(*) FROM {meta}.{quote_ident(name)}"
-                        " WHERE end_snapshot IS NULL"
-                    ).fetchone()
+                    row = fetch_one(
+                        self.conn.execute(
+                            f"SELECT count(*) FROM {inlined} "
+                            "WHERE _ducklake_end_snapshot IS NULL"
+                        )
+                    )
                     total += int(row[0]) if row is not None else 0
                 return total, total > 0
             except Exception as e:
@@ -1140,12 +1134,14 @@ class DuckLakeMaintenance(DuckLakeProcedures):
                 self.logger.debug(f"inlined rows of {schema}.{table} unreadable: {e}")
         # Repli : indicateur booléen depuis l'historique des snapshots
         try:
-            row = self.conn.execute(
-                "SELECT max(snapshot_id) FILTER (WHERE changes::VARCHAR LIKE"
-                " '%inlined_insert%'), max(snapshot_id) FILTER (WHERE"
-                " changes::VARCHAR LIKE '%flushed_inlined%')"
-                f" FROM ducklake_snapshots({quote_literal(self.catalog_alias)})"
-            ).fetchone()
+            row = fetch_one(
+                self.conn.execute(
+                    "SELECT max(snapshot_id) FILTER (WHERE changes::VARCHAR LIKE"
+                    " '%inlined_insert%'), max(snapshot_id) FILTER (WHERE"
+                    " changes::VARCHAR LIKE '%flushed_inlined%')"
+                    f" FROM ducklake_snapshots({quote_literal(self.catalog_alias)})"
+                )
+            )
         except Exception as e:
             # Logging
             self.logger.warning(f"inlined state of {schema}.{table} unreadable: {e}")
