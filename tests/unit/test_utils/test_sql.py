@@ -17,12 +17,18 @@ from dt_ducklake_manager.connection import DuckLakeConnector
 from dt_ducklake_manager.utils.sql import (
     _build_sql_filter,
     _build_where_clause,
+    create_schema,
     fetch_arrow,
     fetch_one,
     is_ducklake_catalog,
+    qualify_schema,
+    qualify_table,
     quote_literal,
     register_view,
     remove_dataframe_duplicates,
+    resolve_ducklake_schema_id,
+    resolve_schema_oid,
+    schema_parts,
     sorted_by_clause,
 )
 
@@ -552,3 +558,224 @@ def test_sorted_by_clause_empty_raises() -> None:
     """Test that an empty key raises ValueError (DuckLake rejects SORTED BY ())."""
     with pytest.raises(ValueError, match="RESET SORTED BY"):
         sorted_by_clause([])
+
+
+# ===========================================================================
+# Tests des chemins de schémas imbriqués (DuckDB 2.0 / DuckLake 1.1)
+# ===========================================================================
+
+
+# Test du découpage d'un chemin de schéma en niveaux
+@pytest.mark.parametrize(
+    ("schema", "expected"),
+    [
+        ("main", ("main",)),
+        ("sales.europe", ("sales", "europe")),
+        ("a.b.c", ("a", "b", "c")),
+        ('we"ird.my level', ('we"ird', "my level")),
+    ],
+)
+def test_schema_parts(schema: str, expected: tuple[str, ...]) -> None:
+    """Test that a schema path is split on dots, from the root to the leaf.
+
+    Args:
+        schema: Schema path.
+        expected: Expected levels.
+    """
+    assert schema_parts(schema) == expected
+
+
+# Test du rejet d'un chemin de schéma mal formé
+@pytest.mark.parametrize("schema", ["", ".", "a..b", ".a", "a."])
+def test_schema_parts_empty_level_raises(schema: str) -> None:
+    """Test that a path with an empty level is rejected rather than guessed.
+
+    Args:
+        schema: Malformed schema path.
+    """
+    with pytest.raises(ValueError, match="Invalid schema path"):
+        schema_parts(schema)
+
+
+# Test de la qualification d'un schéma plat ou imbriqué
+@pytest.mark.parametrize(
+    ("schema", "catalog", "expected"),
+    [
+        ("main", None, '"main"'),
+        ("predictions", "db", '"db"."predictions"'),
+        ("sales.europe", "db", '"db"."sales"."europe"'),
+        ('we"ird.x', 'c"at', '"c""at"."we""ird"."x"'),
+    ],
+)
+def test_qualify_schema(schema: str, catalog: str | None, expected: str) -> None:
+    """Test that every level of the path is quoted on its own.
+
+    Args:
+        schema: Schema path.
+        catalog: Catalog alias.
+        expected: Expected identifier.
+    """
+    assert qualify_schema(schema, catalog) == expected
+
+
+# Test du rejet d'un schéma imbriqué sans catalogue
+def test_qualify_schema_nested_without_catalog_raises() -> None:
+    """Test that a nested schema cannot be qualified without a catalog.
+
+    Without it, DuckDB would read the first level as a catalog name.
+    """
+    with pytest.raises(ValueError, match="requires an attached catalog"):
+        qualify_schema("sales.europe")
+
+
+# Test de la qualification d'une table d'un schéma imbriqué
+def test_qualify_table_nested() -> None:
+    """Test that a nested schema path is quoted level by level, not as one name."""
+    assert (
+        qualify_table("fact_table", "sales.europe", "db")
+        == '"db"."sales"."europe"."fact_table"'
+    )
+    # Rétrocompatibilité des schémas plats
+    assert qualify_table("fact_table", "predictions") == '"predictions"."fact_table"'
+    with pytest.raises(ValueError, match="requires an attached catalog"):
+        qualify_table("fact_table", "sales.europe")
+
+
+# Test de la création d'un schéma imbriqué et de ses parents
+def test_create_schema_nested_creates_parents() -> None:
+    """Test that every missing level is created, and the call is idempotent."""
+    conn = duckdb.connect(":memory:")
+    create_schema(conn, "a.b.c", "memory")
+    create_schema(conn, "a.b.c", "memory")
+    conn.execute("CREATE TABLE memory.a.b.c.t (i INTEGER)")
+    assert fetch_one(conn.execute("SELECT COUNT(*) FROM memory.a.b.c.t")) == (0,)
+    # Aucun schéma plat dont le nom contient un point
+    names = {
+        row[0]
+        for row in conn.execute(
+            "SELECT schema_name FROM duckdb_schemas() WHERE database_name = 'memory'"
+        ).fetchall()
+    }
+    assert "a.b.c" not in names
+    assert {"a", "b", "c"} <= names
+
+
+# Test de la création d'un schéma plat sans catalogue
+def test_create_schema_flat_without_catalog() -> None:
+    """Test that a flat schema is created in the current database."""
+    conn = duckdb.connect(":memory:")
+    create_schema(conn, "predictions")
+    assert resolve_schema_oid(conn, "predictions") is not None
+
+
+# Test du rejet de la création d'un schéma imbriqué sans catalogue
+def test_create_schema_nested_without_catalog_raises() -> None:
+    """Test that nothing is created when a nested schema has no catalog."""
+    conn = duckdb.connect(":memory:")
+    with pytest.raises(ValueError, match="requires an attached catalog"):
+        create_schema(conn, "sales.europe")
+    assert resolve_schema_oid(conn, "sales") is None
+
+
+# Test de la résolution d'oid de schémas partageant le même dernier niveau
+def test_resolve_schema_oid_distinguishes_same_leaf() -> None:
+    """Test that 'a.europe', 'b.europe' and a top-level 'europe' are told apart.
+
+    ``duckdb_schemas().schema_name`` holds the leaf only: a name-based lookup
+    would mix the three.
+    """
+    conn = duckdb.connect(":memory:")
+    for schema in ("a.europe", "b.europe", "europe"):
+        create_schema(conn, schema, "memory")
+    oids = {s: resolve_schema_oid(conn, s, "memory") for s in ("a.europe", "b.europe")}
+    oids["europe"] = resolve_schema_oid(conn, "europe", "memory")
+    assert None not in oids.values()
+    assert len(set(oids.values())) == 3
+    # Le parent du schéma imbriqué est bien le niveau précédent
+    row = fetch_one(
+        conn.execute(
+            "SELECT parent_schema_oid FROM duckdb_schemas() WHERE oid = ?",
+            [oids["a.europe"]],
+        )
+    )
+    assert row == (resolve_schema_oid(conn, "a", "memory"),)
+
+
+# Test de la résolution d'un schéma absent
+@pytest.mark.parametrize("schema", ["missing", "main.missing", "missing.main"])
+def test_resolve_schema_oid_missing_returns_none(schema: str) -> None:
+    """Test that a path with a missing level resolves to None.
+
+    Args:
+        schema: Schema path with at least one missing level.
+    """
+    conn = duckdb.connect(":memory:")
+    assert resolve_schema_oid(conn, schema, "memory") is None
+
+
+# Test de la résolution limitée à la base courante sans catalogue
+def test_resolve_schema_oid_without_catalog_uses_current_database(
+    tmp_path: Path,
+) -> None:
+    """Test that, without a catalog, only the current database is searched.
+
+    An unqualified identifier resolves against the current database: a schema of
+    the same name in another attached database must not be found.
+    """
+    conn = duckdb.connect(":memory:")
+    conn.execute(f"ATTACH '{tmp_path / 'other.duckdb'}' AS other")
+    conn.execute("CREATE SCHEMA other.elsewhere")
+    assert resolve_schema_oid(conn, "elsewhere") is None
+    assert resolve_schema_oid(conn, "elsewhere", "other") is not None
+    assert resolve_schema_oid(conn, "main") is not None
+
+
+# Test de la résolution d'un schema_id DuckLake imbriqué
+@requires_ducklake
+def test_resolve_ducklake_schema_id_nested(tmp_path: Path) -> None:
+    """Test that DuckLake schema ids follow the full path, not the leaf name."""
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    conn = DuckLakeConnector(str(tmp_path / "test.ducklake"), str(data_dir)).connect()
+    for schema in ("a.europe", "b.europe", "europe"):
+        create_schema(conn, schema, "db")
+    ids = {
+        s: resolve_ducklake_schema_id(conn, "db", s)
+        for s in ("main", "a.europe", "b.europe", "europe")
+    }
+    assert None not in ids.values()
+    assert len(set(ids.values())) == 4
+    assert resolve_ducklake_schema_id(conn, "db", "a.missing") is None
+    assert resolve_ducklake_schema_id(conn, "db", "europe.a") is None
+    conn.close()
+
+
+# Test de la résolution d'un schema_id sur un catalogue de spécification 1.0
+def test_resolve_ducklake_schema_id_without_parent_column(tmp_path: Path) -> None:
+    """Test the fallback on a 1.0 catalog, whose ducklake_schema has no parent.
+
+    The metadata catalog is simulated by a plain DuckDB database: flat schemas
+    still resolve by name, a nested path resolves to None.
+    """
+    conn = duckdb.connect(":memory:")
+    conn.execute(f"ATTACH '{tmp_path / 'meta.duckdb'}' AS __ducklake_metadata_old")
+    conn.execute(
+        "CREATE TABLE __ducklake_metadata_old.ducklake_schema"
+        " (schema_id BIGINT, schema_name VARCHAR, end_snapshot BIGINT)"
+    )
+    conn.execute(
+        "INSERT INTO __ducklake_metadata_old.ducklake_schema VALUES"
+        " (0, 'main', NULL), (1, 'predictions', 3), (2, 'predictions', NULL)"
+    )
+    # Seule la version active (sans snapshot de fin) est retenue
+    assert resolve_ducklake_schema_id(conn, "old", "predictions") == 2
+    assert resolve_ducklake_schema_id(conn, "old", "main.predictions") is None
+    assert resolve_ducklake_schema_id(conn, "old", "missing") is None
+
+
+# Test de l'échec de la résolution sans catalogue de métadonnées
+def test_resolve_ducklake_schema_id_without_catalog_raises() -> None:
+    """Test that a missing metadata catalog surfaces as a duckdb.Error."""
+    conn = duckdb.connect(":memory:")
+    with pytest.raises(duckdb.Error):
+        resolve_ducklake_schema_id(conn, "db", "main")

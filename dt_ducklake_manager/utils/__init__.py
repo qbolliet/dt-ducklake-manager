@@ -2,7 +2,10 @@
 from .hierarchy import get_column_hierarchies, validate_hierarchy_forest
 from .logger import _init_logger
 from .sql import (
+    SCHEMA_PATH_SEPARATOR,
     SchemaScoped,
+    create_schema,
+    qualify_schema,
     qualify_table,
     quote_ident,
     quote_literal,
@@ -29,6 +32,9 @@ __all__ = [
     "_init_logger",
     "remove_dataframe_duplicates",
     "qualify_table",
+    "qualify_schema",
+    "create_schema",
+    "SCHEMA_PATH_SEPARATOR",
     "SchemaScoped",
     "quote_ident",
     "quote_literal",

@@ -868,6 +868,97 @@ def test_read_only_does_not_create_schema(ducklake_paths: tuple[str, str]) -> No
 
 
 # ---------------------------------------------------------------------------
+# Tests des schémas imbriqués (DuckLake 1.1)
+# ---------------------------------------------------------------------------
+
+
+# Test que connect() crée un schéma imbriqué niveau par niveau sans l'activer
+def test_connect_creates_nested_schema_without_use(
+    ducklake_paths: tuple[str, str], caplog: pytest.LogCaptureFixture
+) -> None:
+    """Test that a nested schema is created level by level but not activated.
+
+    ``USE`` only accepts ``catalog.schema``: the connector must not fail, and must
+    not create a flat schema literally named ``sales.europe`` either.
+
+    Args:
+        ducklake_paths: Fixture providing (catalog_path, data_path).
+        caplog: pytest fixture capturing log records.
+    """
+    catalog, data_dir = ducklake_paths
+    with caplog.at_level(logging.WARNING):
+        conn = DuckLakeConnector(catalog, data_dir, schema="sales.europe").connect()
+
+    # Schéma imbriqué créé avec son parent, aucun schéma plat 'sales.europe'
+    conn.execute("CREATE TABLE db.sales.europe.t AS SELECT 1 AS x")
+    rows = conn.execute(
+        "SELECT schema_name, parent_schema FROM duckdb_schemas()"
+        " WHERE database_name = 'db' ORDER BY schema_name"
+    ).fetchall()
+    assert ("europe", "sales") in rows
+    assert ("sales", None) in rows
+    assert all(name != "sales.europe" for name, _ in rows)
+
+    # Schéma non activé : la base courante reste la connexion in-memory
+    current = conn.execute("SELECT current_database()").fetchone()
+    assert current is not None and current[0] == "memory"
+    assert "not activated" in caplog.text
+    conn.close()
+
+
+# Test qu'un schéma imbriqué en lecture seule n'est ni créé ni activé
+def test_read_only_nested_schema_skips_creation(
+    ducklake_paths: tuple[str, str],
+) -> None:
+    """Test that a read-only connection to a nested schema neither creates nor USEs.
+
+    Args:
+        ducklake_paths: Fixture providing (catalog_path, data_path).
+    """
+    catalog, data_dir = ducklake_paths
+    rw_conn = DuckLakeConnector(catalog, data_dir, schema="sales.europe").connect()
+    rw_conn.execute("CREATE TABLE db.sales.europe.t AS SELECT 1 AS x")
+    rw_conn.close()
+
+    ro_conn = DuckLakeConnector(
+        catalog, data_dir, read_only=True, schema="sales.europe"
+    ).connect()
+    row = ro_conn.execute("SELECT COUNT(*) FROM db.sales.europe.t").fetchone()
+    assert row == (1,)
+    ro_conn.close()
+
+
+# Test du rejet précoce d'un chemin de schéma mal formé
+@pytest.mark.parametrize("schema", ["", "sales..europe", ".sales", "sales."])
+def test_connector_rejects_malformed_schema_path(
+    ducklake_paths: tuple[str, str], schema: str
+) -> None:
+    """Test that a malformed schema path fails at construction, before ATTACH.
+
+    Args:
+        ducklake_paths: Fixture providing (catalog_path, data_path).
+        schema: Malformed schema path.
+    """
+    catalog, data_dir = ducklake_paths
+    with pytest.raises(ValueError, match="Invalid schema path"):
+        DuckLakeConnector(catalog, data_dir, schema=schema)
+
+
+# Test qu'un nom de schéma plat est quoté dans CREATE SCHEMA et USE
+def test_connect_quotes_flat_schema_name(ducklake_paths: tuple[str, str]) -> None:
+    """Test that a flat schema name needing quotes is created and activated.
+
+    Args:
+        ducklake_paths: Fixture providing (catalog_path, data_path).
+    """
+    catalog, data_dir = ducklake_paths
+    conn = DuckLakeConnector(catalog, data_dir, schema="my results").connect()
+    current = conn.execute("SELECT current_schema()").fetchone()
+    assert current == ("my results",)
+    conn.close()
+
+
+# ---------------------------------------------------------------------------
 # Test d'intégration de concurrence PostgreSQL (serveur réel requis)
 # ---------------------------------------------------------------------------
 

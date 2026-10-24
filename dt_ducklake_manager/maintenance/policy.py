@@ -43,7 +43,13 @@ from ..reporting import (
 )
 
 # Utilitaires
-from ..utils.sql import fetch_one, qualify_table, quote_ident, quote_literal
+from ..utils.sql import (
+    fetch_one,
+    qualify_table,
+    quote_ident,
+    quote_literal,
+    resolve_schema_oid,
+)
 
 # Procédures DuckLake enveloppées
 from .procedures import (
@@ -882,17 +888,22 @@ class DuckLakeMaintenance(DuckLakeProcedures):
 
         Args:
             table: Bare table name.
-            schema: DuckLake schema name.
+            schema: DuckLake schema path (``'sales.europe'`` when nested).
 
         Returns:
             dict[str, str]: ``column_name -> data_type`` in column order, empty when
             the table does not exist.
         """
+        # Schéma résolu par son chemin complet : duckdb_columns() ne donne que le
+        # dernier niveau d'un schéma imbriqué
+        schema_oid = resolve_schema_oid(self.conn, schema, self.catalog_alias)
+        if schema_oid is None:
+            return {}
         rows = self.conn.execute(
             "SELECT column_name, data_type FROM duckdb_columns()"
-            " WHERE database_name = ? AND schema_name = ? AND table_name = ?"
+            " WHERE schema_oid = ? AND table_name = ?"
             " ORDER BY column_index",
-            [self.catalog_alias, schema, table],
+            [schema_oid, table],
         ).fetchall()
         return {name: data_type for name, data_type in rows}
 

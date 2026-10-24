@@ -7,7 +7,14 @@
     ".": {
       "release-type": "python",
       "package-name": "dt-ducklake-manager",
-      "changelog-path": "CHANGELOG.md"
+      "changelog-path": "CHANGELOG.md",
+      "extra-files": [
+        {
+          "type": "toml",
+          "path": "uv.lock",
+          "jsonpath": "$.package[?(@.name=='dt-ducklake-manager')].version"
+        }
+      ]
     }
   }
 }

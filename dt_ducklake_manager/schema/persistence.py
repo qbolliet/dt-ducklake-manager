@@ -24,11 +24,13 @@ from ..reporting import (
 # Utilitaires de traitement des données
 from ..utils.sql import (
     SchemaScoped,
+    create_schema,
     fetch_one,
     quote_ident,
     register_view,
     remove_dataframe_duplicates,
     resolve_catalog,
+    resolve_schema_oid,
     sorted_by_clause,
 )
 
@@ -572,14 +574,12 @@ class DuckLakeTablesBuilder(SchemaScoped):
             >>> builder.build_schema(partition_by=['country'])
             >>> builder.build_schema(cluster_by=['date', 'region'])
         """
-        # Création du schéma cible s'il n'existe pas encore.
-        # Utile lorsque la connexion n'a pas été préparée par DuckLakeConnector
-        # (ex. connexion in-memory de test) ou pour ajouter un nouveau schéma à un
-        # catalogue existant. CREATE SCHEMA IF NOT EXISTS est idempotent.
-        schema_ref = quote_ident(self.schema)
-        if self._catalog is not None:
-            schema_ref = f"{quote_ident(self._catalog)}.{schema_ref}"
-        self.conn.execute(f"CREATE SCHEMA IF NOT EXISTS {schema_ref}")
+        # Création du schéma cible (et de ses parents s'il est imbriqué) s'il
+        # n'existe pas encore. Utile lorsque la connexion n'a pas été préparée par
+        # DuckLakeConnector (ex. connexion in-memory de test) ou pour ajouter un
+        # nouveau schéma à un catalogue existant. CREATE SCHEMA IF NOT EXISTS est
+        # idempotent.
+        create_schema(self.conn, self.schema, self._catalog)
 
         # Vérification et suppression des doublons sur le DataFrame du SchemaBuilder.
         # Les clés primaires sont transmises à la fonction de déduplication afin que
@@ -811,11 +811,14 @@ class DuckLakeTablesBuilder(SchemaScoped):
         # Extraction des tables du schéma cible.
         # Filtrage par schéma : SHOW TABLES ne liste que le schéma actif de la
         # connexion, qui n'est pas nécessairement le schéma de ce builder.
-        # On exlcut les tables internes de ducklake
+        # On exlcut les tables internes de ducklake. Le schéma est résolu par son
+        # chemin complet : information_schema ne donne que le dernier niveau d'un
+        # schéma imbriqué.
+        schema_oid = resolve_schema_oid(self.conn, self.schema, self._catalog)
         tables = self.conn.execute(
-            "SELECT table_name FROM information_schema.tables"
-            " WHERE table_schema = ? AND table_name NOT LIKE 'ducklake_%'",
-            [self.schema],
+            "SELECT table_name FROM duckdb_tables()"
+            " WHERE schema_oid = ? AND table_name NOT LIKE 'ducklake_%'",
+            [schema_oid],
         ).fetchall()
 
         print(tables)
