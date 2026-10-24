@@ -2118,9 +2118,10 @@ the physical model, the operations available, when to run each one, and how
 to read what an operation actually did.</p>
 <h2 id="copy-on-write-and-delete-files">Copy-on-write and delete files</h2>
 <p><em>(measured on DuckDB 1.5.2 / <code>ducklake</code> extension, see the specification's
-annex for the exact commands.)</em></p>
+annex for the exact commands; the internal row-id column is named
+<code>_ducklake_row_id</code> since DuckLake 1.1.)</em></p>
 <p>An <code>UPDATE</code> of 5 000 rows on a 20 000-row file produces: a new 5 000-row data
-file (carrying <code>_ducklake_internal_row_id</code>), a <code>…-delete.parquet</code> tombstone
+file (carrying the internal row id), a <code>…-delete.parquet</code> tombstone
 file naming 5 000 positions in the <em>old</em> file, and the old file itself left
 intact — still referenced by the snapshot that preceded the update. A raw
 listing of the data directory (<code>read_parquet('**/*.parquet')</code>) at that point
@@ -2163,7 +2164,7 @@ planned maintenance before any process reads the data files directly.</p>
 </tr>
 <tr>
 <td><a class="autorefs autorefs-internal" title="merge_files" href="../api/maintenance/DuckLakeProcedures/#dt_ducklake_manager.maintenance.procedures.DuckLakeProcedures.merge_files"><code>merge_files(max_file_size)</code></a></td>
-<td>Merges adjacent files into files of at most <code>max_file_size</code> bytes (the catalog's <code>target_file_size</code> by default). <code>min_file_size</code> is a <strong>lower</strong> bound: files <em>smaller</em> than it are left out of the merge, so it is not set by default</td>
+<td>Merges adjacent files into files of at most <code>max_file_size</code> bytes (the catalog's <code>target_file_size</code> by default), <strong>sorted by the table's <code>SORTED BY</code> key</strong>. Skips files carrying deletions (rewrite them first). <code>min_file_size</code> is a <strong>lower</strong> bound: files <em>smaller</em> than it are left out of the merge, so it is not set by default. <code>newer_than</code>/<code>older_than</code> restrict it to the files of a snapshot time window (incremental compaction)</td>
 <td>After every write (through <code>compact</code>); after <code>recluster</code></td>
 <td>None</td>
 </tr>
@@ -2174,8 +2175,14 @@ planned maintenance before any process reads the data files directly.</p>
 <td>None</td>
 </tr>
 <tr>
-<td><a class="autorefs autorefs-internal" title="recluster" href="../api/maintenance/DuckLakeMaintenance/#dt_ducklake_manager.maintenance.policy.DuckLakeMaintenance.recluster"><code>recluster(order_by)</code></a></td>
-<td>Rewrites the whole table in <code>cluster_by</code> order</td>
+<td><a class="autorefs autorefs-internal" title="set_sorted_by" href="../api/maintenance/DuckLakeProcedures/#dt_ducklake_manager.maintenance.procedures.DuckLakeProcedures.set_sorted_by"><code>set_sorted_by</code> / <code>reset_sorted_by</code></a></td>
+<td>Sets or removes the DuckLake sort key; prefer <code>update_cluster_by</code>, which keeps <code>dataset_metadata.cluster_by</code> in sync</td>
+<td>Changing the physical sort order</td>
+<td>None (future writes and merges only)</td>
+</tr>
+<tr>
+<td><a class="autorefs autorefs-internal" title="recluster" href="../api/maintenance/DuckLakeMaintenance/#dt_ducklake_manager.maintenance.policy.DuckLakeMaintenance.recluster"><code>recluster()</code></a></td>
+<td>Rewrites the whole table sorted by <code>cluster_by</code> (realigning <code>SORTED BY</code> on it if needed)</td>
 <td>When file-range overlap degrades pruning (see <a href="#recluster-and-the-overlap-indicator">Recluster and the overlap indicator</a>), typically after N updates</td>
 <td>Full rewrite; storage doubles until cleanup</td>
 </tr>
@@ -2215,22 +2222,32 @@ recoverability and free space.</p>
 <code>DatabaseDeleter.delete_rows</code>) can run the safe half of this cycle right after
 their own commit, through
 <a class="autorefs autorefs-internal" title="compact" href="../api/maintenance/DuckLakeProcedures/#dt_ducklake_manager.maintenance.procedures.DuckLakeProcedures.compact"><code>DuckLakeMaintenance.compact</code></a>
-(<code>merge_files</code> up to the catalog's <code>target_file_size</code>, then
-<code>rewrite_data_files</code>), when called with <code>compact_after_update=True</code> (opt-in:
+(<code>rewrite_data_files</code>, then <code>merge_files</code> up to the catalog's <code>target_file_size</code>
+— in this order, since the merge skips files carrying deletions), when called
+with <code>compact_after_update=True</code> (opt-in:
 the default is <code>False</code>, so a burst of writes does not pay one compaction per
 call — compact once at the end instead). On a
 connection with no DuckLake catalog attached (in-memory tests), the compaction
-is skipped. They never call <code>expire_snapshots</code>, <code>cleanup_files</code> or
+is skipped.</p>
+<p><strong>Incremental compaction.</strong> On a large table, a manager built with
+<code>compaction_window=timedelta(days=7)</code> (<code>DatabaseUpdater</code>, <code>DatabaseDeleter</code>)
+bounds that post-write merge to the files written by the snapshots of the last
+seven days (<code>merge_files(newer_than=…)</code>); older files are left to planned
+maintenance. <code>MaintenancePolicy(max_compacted_files=…)</code> bounds the number of
+operations (one output file each) run by each rewrite and merge of a
+maintenance run, capping its memory use.</p>
+<p>The write operations never call <code>expire_snapshots</code>, <code>cleanup_files</code> or
 <code>delete_orphaned_files</code> — those are only ever triggered by a deliberate,
 policy-driven call to <code>maintain</code>.</p>
 <h2 id="recluster-and-the-overlap-indicator">Recluster and the overlap indicator</h2>
 <p>DuckLake prunes files using per-file min/max statistics on <code>cluster_by</code>
 columns (<code>ducklake_file_column_stats</code>, surfaced as <code>Total Files Read</code> in
 <code>EXPLAIN ANALYZE</code>), plus Parquet row-group statistics inside each file. Both
-only help when the data is physically grouped by those columns — which
-successive updates degrade: each batch is sorted <em>within itself</em> at write
-time, but not merged into the table's global order, so file ranges
-progressively overlap.</p>
+only help when the data is physically grouped by those columns. <code>cluster_by</code> is
+the table's DuckLake <code>SORTED BY</code> key, so DuckLake sorts every <code>INSERT</code> and
+every merge by it — but each batch only <em>within itself</em> (and the rows rewritten
+by an <code>UPDATE</code> not at all until the next merge), not into the table's global
+order, so file ranges progressively overlap.</p>
 <p><a class="autorefs autorefs-internal" title="storage_report" href="../api/maintenance/DuckLakeMaintenance/#dt_ducklake_manager.maintenance.policy.DuckLakeMaintenance.storage_report"><code>storage_report()</code></a>
 measures <code>overlap_ratio</code> — the share of active, non-empty files whose
 <code>[min, max]</code> range on the first <code>cluster_by</code> column overlaps another file's
@@ -2238,7 +2255,8 @@ range (strict inequalities: two files that merely share a boundary value do
 not count as overlapping; identical ranges do). This is the indicator that
 decides when <a class="autorefs autorefs-internal" title="recluster" href="../api/maintenance/DuckLakeMaintenance/#dt_ducklake_manager.maintenance.policy.DuckLakeMaintenance.recluster"><code>recluster</code></a>
 is worth its cost: a full-table rewrite (<code>CREATE TEMP TABLE … AS SELECT *</code>,
-<code>DELETE FROM table</code>, <code>INSERT … ORDER BY cluster_by</code>, single transaction,
+<code>DELETE FROM table</code>, <code>INSERT … SELECT</code> sorted by DuckLake on <code>SORTED BY</code>,
+single transaction,
 <code>threads = 1</code> for the insert so files come out disjoint and monotone rather
 than interleaved) that temporarily doubles storage until the previous files
 are released by <code>expire_snapshots</code> + <code>cleanup_files</code>.</p>
@@ -2260,7 +2278,7 @@ else. The build accepts <code>partition_by</code>; on an existing table:</p>
 </span></code></pre></div>
 <p><code>set_partitioned_by</code> and <code>reset_partitioned_by</code> only affect the files written
 afterwards; <code>repartition</code> resets, applies the new keys and, unless
-<code>run_maintenance=False</code>, merges and rewrites the existing files so that they
+<code>run_maintenance=False</code>, rewrites and merges the existing files so that they
 adopt the new layout — a full rewrite, with the same storage cost as
 <code>recluster</code>. Partition expressions are passed as is (<code>'country'</code>,
 <code>'year(ts)'</code>, <code>'month(ts)'</code>, <code>'bucket(8, user_id)'</code>).</p>
@@ -2382,14 +2400,14 @@ explicit policy:</p>
 </span></code></pre></div>
 <h2 id="scenarios">Scenarios</h2>
 <h3 id="after-a-large-update">After a large update</h3>
-<p>The write itself already ran <code>compact()</code> (merge + rewrite) right after its
+<p>The write itself already ran <code>compact()</code> (rewrite + merge) right after its
 commit. Nothing more is required immediately; <code>storage_report()</code> tells you
 whether it is worth going further:</p>
 <div class="language-python highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="n">report</span> <span class="o">=</span> <span class="n">maintenance</span><span class="o">.</span><span class="n">storage_report</span><span class="p">()</span>
 </span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="nb">print</span><span class="p">(</span><span class="n">report</span><span class="o">.</span><span class="n">summary</span><span class="p">())</span>
 </span></code></pre></div>
 <h3 id="after-a-massive-deletion">After a massive deletion</h3>
-<p>Call <code>delete_rows(..., compact_after_update=True)</code> so it merges and rewrites
+<p>Call <code>delete_rows(..., compact_after_update=True)</code> so it rewrites and merges
 right after the deletion (or run <code>compact</code> afterwards). If the deletion also emptied every value of some columns,
 <code>delete_rows</code> drops them automatically (<code>perform_cleanup</code>, default follows
 <code>auto_cleanup</code>); check <code>report.columns_dropped</code>.</p>

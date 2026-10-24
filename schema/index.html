@@ -2173,7 +2173,7 @@ indirecting through an id.</p>
 <p>The table is:</p>
 <ul>
 <li>deduplicated on the primary keys at build time;</li>
-<li>written <strong>sorted</strong> by <code>dataset_metadata.cluster_by</code> (see <a href="#cluster_by-and-physical-sort-order">cluster_by</a>);</li>
+<li><strong>sorted</strong> by DuckLake on <code>dataset_metadata.cluster_by</code>, its <code>SORTED BY</code> key (see <a href="#cluster_by-and-physical-sort-order">cluster_by</a>);</li>
 <li>optionally Hive-partitioned on very-low-cardinality columns that are
   systematically filtered on (year, country) — never to the point of
   producing files under ~100 MB.</li>
@@ -2648,12 +2648,19 @@ modality by using a sparse code (<code>10</code>, <code>20</code>, <code>30</cod
 (<code>min</code>/<code>max</code>, exposed by <code>ducklake_file_column_stats</code>) and Parquet row-group
 statistics, both of which only help when the data is physically grouped.
 <code>cluster_by</code> (<code>dataset_metadata.cluster_by</code>, a JSON list) names the columns
-the fact table is sorted by at write time — default: the primary keys, in
-their declared order (most selective first). Build and update batches are
-written <code>ORDER BY cluster_by</code>.</p>
+the fact table is sorted by — default: the primary keys, in their declared
+order (most selective first). It is declared to DuckLake as the table's sort
+key (<code>CREATE TABLE … SORTED BY</code>, then <code>ALTER TABLE … SET SORTED BY</code> through
+<code>update_cluster_by</code>), and DuckLake applies it itself to the build, to every
+later <code>INSERT</code>, and to every merge of the post-write compaction: the package
+writes no <code>ORDER BY</code>. <code>update_cluster_by</code> changes both in one transaction;
+dropping a sort column (<code>delete_columns</code>) first removes it from the key, since
+DuckLake refuses to drop a column of the sort key. On a plain DuckDB
+connection (in-memory tests), which has no <code>SORTED BY</code>, <code>cluster_by</code> is only
+recorded.</p>
 <p>Successive updates degrade this ordering: each batch is sorted <em>within
-itself</em> but not merged into the table's global order, so file ranges
-progressively overlap. <code>DuckLakeMaintenance.recluster()</code> restores it by
+itself</em> (and the rows rewritten by an <code>UPDATE</code> only at the next merge) but not
+into the table's global order, so file ranges progressively overlap. <code>DuckLakeMaintenance.recluster()</code> restores it by
 rewriting the whole table in sort order — see
 <a href="../maintenance/">Storage lifecycle and maintenance</a> for when and how to run
 it, and for the <code>overlap_ratio</code> indicator that tells you it's needed.</p>
