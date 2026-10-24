@@ -146,7 +146,7 @@ tables by its `schema`, and `DuckLakeConnector` creates the schema on first use.
   all schemas (process-level lock).
 - **Requires schema routing** in the connection and management layer.
 
-#### Nested schemas (DuckDB 2.0 / DuckLake 1.1)
+#### Nested schemas
 
 Since DuckLake 1.1, a schema can live inside another (`CREATE SCHEMA
 db.sales.europe`). A nested schema is passed to the `schema` argument as its
