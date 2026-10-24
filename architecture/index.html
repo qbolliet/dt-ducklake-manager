@@ -458,6 +458,23 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Option B — Multiple schemas within a single catalog">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#nested-schemas" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Nested schemas
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
         
           <li class="md-nav__item">
@@ -1833,6 +1850,23 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Option B — Multiple schemas within a single catalog">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#nested-schemas" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Nested schemas
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
         
           <li class="md-nav__item">
@@ -2028,6 +2062,29 @@ tables by its <code>schema</code>, and <code>DuckLakeConnector</code> creates th
 <li><strong>With the file-based backend, a single catalog file serializes writes</strong> across
   all schemas (process-level lock).</li>
 <li><strong>Requires schema routing</strong> in the connection and management layer.</li>
+</ul>
+<h4 id="nested-schemas">Nested schemas</h4>
+<p>Since DuckLake 1.1, a schema can live inside another (<code>CREATE SCHEMA
+db.sales.europe</code>). A nested schema is passed to the <code>schema</code> argument as its
+levels joined with a dot — <code>schema="sales.europe"</code>, the convention shared with the
+GraphQL API — and its tables are qualified level by level
+(<code>"db"."sales"."europe"."fact_table"</code>). Consequences:</p>
+<ul>
+<li>the dot is reserved as the level separator: a flat schema whose own name
+  contains a dot cannot be targeted, and a path with an empty level
+  (<code>"a..b"</code>) is rejected;</li>
+<li>a nested schema needs an attached catalog: without it, the first level would be
+  read as a catalog name;</li>
+<li><code>DuckLakeConnector</code> and <code>DuckLakeTablesBuilder</code> create the missing parent levels,
+  but the connector does <strong>not</strong> <code>USE</code> a nested schema (DuckDB's <code>USE</code> only
+  accepts <code>catalog.schema</code>); the package qualifies every reference, so only
+  unqualified user queries are affected;</li>
+<li><code>information_schema</code>, <code>duckdb_schemas()</code> and the internal <code>ducklake_schema</code>
+  table report only the <strong>last</strong> level of a nested schema (<code>europe</code> for both
+  <code>sales.europe</code> and <code>hr.europe</code>), so schemas are resolved by walking their
+  parents (<code>parent_schema_oid</code> / <code>parent_schema_id</code>), never by leaf name;</li>
+<li>a catalog still on the DuckLake 1.0 specification holds flat schemas only; it
+  must be migrated (<code>ATTACH ... (AUTOMATIC_MIGRATION true)</code>) before nesting.</li>
 </ul>
 <h3 id="summary">Summary</h3>
 <table>
