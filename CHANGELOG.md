@@ -4,6 +4,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.1](https://github.com/qbolliet/dt-ducklake-manager/compare/v0.6.0...v0.6.1) (2026-10-26)
+
+
+### Bug Fixes
+
+* relax pyarrow lower bound to &gt;=21 ([#61](https://github.com/qbolliet/dt-ducklake-manager/issues/61)) ([ee427d3](https://github.com/qbolliet/dt-ducklake-manager/commit/ee427d3caf7c0f6ebdc8916afd1a756e0b7f1d65))
+
+
+### Documentation
+
+* make schema readable ([030de55](https://github.com/qbolliet/dt-ducklake-manager/commit/030de55135af9ce04985ac6141c63295d2611990))
+
 ## [0.6.0](https://github.com/qbolliet/dt-ducklake-manager/compare/v0.5.0...v0.6.0) (2026-10-24)
 
 
