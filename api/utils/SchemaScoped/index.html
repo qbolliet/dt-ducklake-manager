@@ -1821,295 +1821,295 @@ that name is attached (in-memory test connections).</p>
 
               <details class="mkdocstrings-source">
                 <summary>Source code in <code>dt_ducklake_manager/utils/sql.py</code></summary>
-                <div class="language-python highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-552">552</a></span>
-<span class="normal"><a href="#__codelineno-0-553">553</a></span>
-<span class="normal"><a href="#__codelineno-0-554">554</a></span>
-<span class="normal"><a href="#__codelineno-0-555">555</a></span>
-<span class="normal"><a href="#__codelineno-0-556">556</a></span>
-<span class="normal"><a href="#__codelineno-0-557">557</a></span>
-<span class="normal"><a href="#__codelineno-0-558">558</a></span>
-<span class="normal"><a href="#__codelineno-0-559">559</a></span>
-<span class="normal"><a href="#__codelineno-0-560">560</a></span>
-<span class="normal"><a href="#__codelineno-0-561">561</a></span>
-<span class="normal"><a href="#__codelineno-0-562">562</a></span>
-<span class="normal"><a href="#__codelineno-0-563">563</a></span>
-<span class="normal"><a href="#__codelineno-0-564">564</a></span>
-<span class="normal"><a href="#__codelineno-0-565">565</a></span>
-<span class="normal"><a href="#__codelineno-0-566">566</a></span>
-<span class="normal"><a href="#__codelineno-0-567">567</a></span>
-<span class="normal"><a href="#__codelineno-0-568">568</a></span>
-<span class="normal"><a href="#__codelineno-0-569">569</a></span>
-<span class="normal"><a href="#__codelineno-0-570">570</a></span>
-<span class="normal"><a href="#__codelineno-0-571">571</a></span>
-<span class="normal"><a href="#__codelineno-0-572">572</a></span>
-<span class="normal"><a href="#__codelineno-0-573">573</a></span>
-<span class="normal"><a href="#__codelineno-0-574">574</a></span>
-<span class="normal"><a href="#__codelineno-0-575">575</a></span>
-<span class="normal"><a href="#__codelineno-0-576">576</a></span>
-<span class="normal"><a href="#__codelineno-0-577">577</a></span>
-<span class="normal"><a href="#__codelineno-0-578">578</a></span>
-<span class="normal"><a href="#__codelineno-0-579">579</a></span>
-<span class="normal"><a href="#__codelineno-0-580">580</a></span>
-<span class="normal"><a href="#__codelineno-0-581">581</a></span>
-<span class="normal"><a href="#__codelineno-0-582">582</a></span>
-<span class="normal"><a href="#__codelineno-0-583">583</a></span>
-<span class="normal"><a href="#__codelineno-0-584">584</a></span>
-<span class="normal"><a href="#__codelineno-0-585">585</a></span>
-<span class="normal"><a href="#__codelineno-0-586">586</a></span>
-<span class="normal"><a href="#__codelineno-0-587">587</a></span>
-<span class="normal"><a href="#__codelineno-0-588">588</a></span>
-<span class="normal"><a href="#__codelineno-0-589">589</a></span>
-<span class="normal"><a href="#__codelineno-0-590">590</a></span>
-<span class="normal"><a href="#__codelineno-0-591">591</a></span>
-<span class="normal"><a href="#__codelineno-0-592">592</a></span>
-<span class="normal"><a href="#__codelineno-0-593">593</a></span>
-<span class="normal"><a href="#__codelineno-0-594">594</a></span>
-<span class="normal"><a href="#__codelineno-0-595">595</a></span>
-<span class="normal"><a href="#__codelineno-0-596">596</a></span>
-<span class="normal"><a href="#__codelineno-0-597">597</a></span>
-<span class="normal"><a href="#__codelineno-0-598">598</a></span>
-<span class="normal"><a href="#__codelineno-0-599">599</a></span>
-<span class="normal"><a href="#__codelineno-0-600">600</a></span>
-<span class="normal"><a href="#__codelineno-0-601">601</a></span>
-<span class="normal"><a href="#__codelineno-0-602">602</a></span>
-<span class="normal"><a href="#__codelineno-0-603">603</a></span>
-<span class="normal"><a href="#__codelineno-0-604">604</a></span>
-<span class="normal"><a href="#__codelineno-0-605">605</a></span>
-<span class="normal"><a href="#__codelineno-0-606">606</a></span>
-<span class="normal"><a href="#__codelineno-0-607">607</a></span>
-<span class="normal"><a href="#__codelineno-0-608">608</a></span>
-<span class="normal"><a href="#__codelineno-0-609">609</a></span>
-<span class="normal"><a href="#__codelineno-0-610">610</a></span>
-<span class="normal"><a href="#__codelineno-0-611">611</a></span>
-<span class="normal"><a href="#__codelineno-0-612">612</a></span>
-<span class="normal"><a href="#__codelineno-0-613">613</a></span>
-<span class="normal"><a href="#__codelineno-0-614">614</a></span>
-<span class="normal"><a href="#__codelineno-0-615">615</a></span>
-<span class="normal"><a href="#__codelineno-0-616">616</a></span>
-<span class="normal"><a href="#__codelineno-0-617">617</a></span>
-<span class="normal"><a href="#__codelineno-0-618">618</a></span>
-<span class="normal"><a href="#__codelineno-0-619">619</a></span>
-<span class="normal"><a href="#__codelineno-0-620">620</a></span>
-<span class="normal"><a href="#__codelineno-0-621">621</a></span>
-<span class="normal"><a href="#__codelineno-0-622">622</a></span>
-<span class="normal"><a href="#__codelineno-0-623">623</a></span>
-<span class="normal"><a href="#__codelineno-0-624">624</a></span>
-<span class="normal"><a href="#__codelineno-0-625">625</a></span>
-<span class="normal"><a href="#__codelineno-0-626">626</a></span>
-<span class="normal"><a href="#__codelineno-0-627">627</a></span>
-<span class="normal"><a href="#__codelineno-0-628">628</a></span>
-<span class="normal"><a href="#__codelineno-0-629">629</a></span>
-<span class="normal"><a href="#__codelineno-0-630">630</a></span>
-<span class="normal"><a href="#__codelineno-0-631">631</a></span>
-<span class="normal"><a href="#__codelineno-0-632">632</a></span>
-<span class="normal"><a href="#__codelineno-0-633">633</a></span>
-<span class="normal"><a href="#__codelineno-0-634">634</a></span>
-<span class="normal"><a href="#__codelineno-0-635">635</a></span>
-<span class="normal"><a href="#__codelineno-0-636">636</a></span>
-<span class="normal"><a href="#__codelineno-0-637">637</a></span>
-<span class="normal"><a href="#__codelineno-0-638">638</a></span>
-<span class="normal"><a href="#__codelineno-0-639">639</a></span>
-<span class="normal"><a href="#__codelineno-0-640">640</a></span>
-<span class="normal"><a href="#__codelineno-0-641">641</a></span>
-<span class="normal"><a href="#__codelineno-0-642">642</a></span>
-<span class="normal"><a href="#__codelineno-0-643">643</a></span>
-<span class="normal"><a href="#__codelineno-0-644">644</a></span>
-<span class="normal"><a href="#__codelineno-0-645">645</a></span>
-<span class="normal"><a href="#__codelineno-0-646">646</a></span>
-<span class="normal"><a href="#__codelineno-0-647">647</a></span>
-<span class="normal"><a href="#__codelineno-0-648">648</a></span>
-<span class="normal"><a href="#__codelineno-0-649">649</a></span>
-<span class="normal"><a href="#__codelineno-0-650">650</a></span>
-<span class="normal"><a href="#__codelineno-0-651">651</a></span>
-<span class="normal"><a href="#__codelineno-0-652">652</a></span>
-<span class="normal"><a href="#__codelineno-0-653">653</a></span>
-<span class="normal"><a href="#__codelineno-0-654">654</a></span>
-<span class="normal"><a href="#__codelineno-0-655">655</a></span>
-<span class="normal"><a href="#__codelineno-0-656">656</a></span>
-<span class="normal"><a href="#__codelineno-0-657">657</a></span>
-<span class="normal"><a href="#__codelineno-0-658">658</a></span>
-<span class="normal"><a href="#__codelineno-0-659">659</a></span>
-<span class="normal"><a href="#__codelineno-0-660">660</a></span>
-<span class="normal"><a href="#__codelineno-0-661">661</a></span>
-<span class="normal"><a href="#__codelineno-0-662">662</a></span>
-<span class="normal"><a href="#__codelineno-0-663">663</a></span>
-<span class="normal"><a href="#__codelineno-0-664">664</a></span>
-<span class="normal"><a href="#__codelineno-0-665">665</a></span>
-<span class="normal"><a href="#__codelineno-0-666">666</a></span>
-<span class="normal"><a href="#__codelineno-0-667">667</a></span>
-<span class="normal"><a href="#__codelineno-0-668">668</a></span>
-<span class="normal"><a href="#__codelineno-0-669">669</a></span>
-<span class="normal"><a href="#__codelineno-0-670">670</a></span>
-<span class="normal"><a href="#__codelineno-0-671">671</a></span>
-<span class="normal"><a href="#__codelineno-0-672">672</a></span>
-<span class="normal"><a href="#__codelineno-0-673">673</a></span>
-<span class="normal"><a href="#__codelineno-0-674">674</a></span>
-<span class="normal"><a href="#__codelineno-0-675">675</a></span>
-<span class="normal"><a href="#__codelineno-0-676">676</a></span>
-<span class="normal"><a href="#__codelineno-0-677">677</a></span>
-<span class="normal"><a href="#__codelineno-0-678">678</a></span>
-<span class="normal"><a href="#__codelineno-0-679">679</a></span>
-<span class="normal"><a href="#__codelineno-0-680">680</a></span>
-<span class="normal"><a href="#__codelineno-0-681">681</a></span>
-<span class="normal"><a href="#__codelineno-0-682">682</a></span>
-<span class="normal"><a href="#__codelineno-0-683">683</a></span>
-<span class="normal"><a href="#__codelineno-0-684">684</a></span>
-<span class="normal"><a href="#__codelineno-0-685">685</a></span>
-<span class="normal"><a href="#__codelineno-0-686">686</a></span>
-<span class="normal"><a href="#__codelineno-0-687">687</a></span>
-<span class="normal"><a href="#__codelineno-0-688">688</a></span>
-<span class="normal"><a href="#__codelineno-0-689">689</a></span>
-<span class="normal"><a href="#__codelineno-0-690">690</a></span>
-<span class="normal"><a href="#__codelineno-0-691">691</a></span>
-<span class="normal"><a href="#__codelineno-0-692">692</a></span>
-<span class="normal"><a href="#__codelineno-0-693">693</a></span>
-<span class="normal"><a href="#__codelineno-0-694">694</a></span>
-<span class="normal"><a href="#__codelineno-0-695">695</a></span>
-<span class="normal"><a href="#__codelineno-0-696">696</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-552"><a id="__codelineno-0-552" name="__codelineno-0-552"></a><span class="k">class</span><span class="w"> </span><span class="nc">SchemaScoped</span><span class="p">:</span>
-</span><span id="__span-0-553"><a id="__codelineno-0-553" name="__codelineno-0-553"></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Mixin giving schema-aware classes their shared table helpers.</span>
-</span><span id="__span-0-554"><a id="__codelineno-0-554" name="__codelineno-0-554"></a>
-</span><span id="__span-0-555"><a id="__codelineno-0-555" name="__codelineno-0-555"></a><span class="sd">    Hosts the single definition of the helpers every schema-aware class needs</span>
-</span><span id="__span-0-556"><a id="__codelineno-0-556" name="__codelineno-0-556"></a><span class="sd">    (managers, builder, auditor, recovery manager): qualifying a bare table name,</span>
-</span><span id="__span-0-557"><a id="__codelineno-0-557" name="__codelineno-0-557"></a><span class="sd">    checking a table exists and counting its rows. The host class must set</span>
-</span><span id="__span-0-558"><a id="__codelineno-0-558" name="__codelineno-0-558"></a><span class="sd">    ``conn``, ``schema`` and ``_catalog`` (the effective alias returned by</span>
-</span><span id="__span-0-559"><a id="__codelineno-0-559" name="__codelineno-0-559"></a><span class="sd">    :func:`resolve_catalog`) before calling them.</span>
-</span><span id="__span-0-560"><a id="__codelineno-0-560" name="__codelineno-0-560"></a>
-</span><span id="__span-0-561"><a id="__codelineno-0-561" name="__codelineno-0-561"></a><span class="sd">    Attributes:</span>
-</span><span id="__span-0-562"><a id="__codelineno-0-562" name="__codelineno-0-562"></a><span class="sd">        conn (duckdb.DuckDBPyConnection): Connection used by the helpers.</span>
-</span><span id="__span-0-563"><a id="__codelineno-0-563" name="__codelineno-0-563"></a><span class="sd">        schema (str): Target DuckLake schema path (``&#39;sales.europe&#39;`` for a</span>
-</span><span id="__span-0-564"><a id="__codelineno-0-564" name="__codelineno-0-564"></a><span class="sd">            nested schema).</span>
-</span><span id="__span-0-565"><a id="__codelineno-0-565" name="__codelineno-0-565"></a><span class="sd">        _catalog (str | None): Attached catalog alias, ``None`` when no catalog of</span>
-</span><span id="__span-0-566"><a id="__codelineno-0-566" name="__codelineno-0-566"></a><span class="sd">            that name is attached (in-memory test connections).</span>
-</span><span id="__span-0-567"><a id="__codelineno-0-567" name="__codelineno-0-567"></a>
-</span><span id="__span-0-568"><a id="__codelineno-0-568" name="__codelineno-0-568"></a><span class="sd">    Examples:</span>
-</span><span id="__span-0-569"><a id="__codelineno-0-569" name="__codelineno-0-569"></a><span class="sd">        &gt;&gt;&gt; import duckdb</span>
-</span><span id="__span-0-570"><a id="__codelineno-0-570" name="__codelineno-0-570"></a><span class="sd">        &gt;&gt;&gt; class Reader(SchemaScoped):</span>
-</span><span id="__span-0-571"><a id="__codelineno-0-571" name="__codelineno-0-571"></a><span class="sd">        ...     def __init__(self, conn):</span>
-</span><span id="__span-0-572"><a id="__codelineno-0-572" name="__codelineno-0-572"></a><span class="sd">        ...         self.conn, self.schema, self._catalog = conn, &quot;main&quot;, None</span>
-</span><span id="__span-0-573"><a id="__codelineno-0-573" name="__codelineno-0-573"></a><span class="sd">        &gt;&gt;&gt; Reader(duckdb.connect())._qualified(&quot;fact_table&quot;)</span>
-</span><span id="__span-0-574"><a id="__codelineno-0-574" name="__codelineno-0-574"></a><span class="sd">        &#39;&quot;main&quot;.&quot;fact_table&quot;&#39;</span>
-</span><span id="__span-0-575"><a id="__codelineno-0-575" name="__codelineno-0-575"></a><span class="sd">    &quot;&quot;&quot;</span>
-</span><span id="__span-0-576"><a id="__codelineno-0-576" name="__codelineno-0-576"></a>
-</span><span id="__span-0-577"><a id="__codelineno-0-577" name="__codelineno-0-577"></a>    <span class="n">conn</span><span class="p">:</span> <span class="s2">&quot;duckdb.DuckDBPyConnection&quot;</span>
-</span><span id="__span-0-578"><a id="__codelineno-0-578" name="__codelineno-0-578"></a>    <span class="n">schema</span><span class="p">:</span> <span class="nb">str</span>
-</span><span id="__span-0-579"><a id="__codelineno-0-579" name="__codelineno-0-579"></a>    <span class="n">_catalog</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span>
-</span><span id="__span-0-580"><a id="__codelineno-0-580" name="__codelineno-0-580"></a>
-</span><span id="__span-0-581"><a id="__codelineno-0-581" name="__codelineno-0-581"></a>    <span class="c1"># Méthode de qualification d&#39;un nom de table par le schéma (et le catalogue)</span>
-</span><span id="__span-0-582"><a id="__codelineno-0-582" name="__codelineno-0-582"></a>    <span class="k">def</span><span class="w"> </span><span class="nf">_qualified</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">table</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
-</span><span id="__span-0-583"><a id="__codelineno-0-583" name="__codelineno-0-583"></a><span class="w">        </span><span class="sd">&quot;&quot;&quot;Return ``table`` qualified by this instance&#39;s schema and catalog.</span>
-</span><span id="__span-0-584"><a id="__codelineno-0-584" name="__codelineno-0-584"></a>
-</span><span id="__span-0-585"><a id="__codelineno-0-585" name="__codelineno-0-585"></a><span class="sd">        Args:</span>
-</span><span id="__span-0-586"><a id="__codelineno-0-586" name="__codelineno-0-586"></a><span class="sd">            table: Bare table name (e.g. ``&#39;fact_table&#39;``, ``&#39;metadata&#39;``).</span>
-</span><span id="__span-0-587"><a id="__codelineno-0-587" name="__codelineno-0-587"></a>
-</span><span id="__span-0-588"><a id="__codelineno-0-588" name="__codelineno-0-588"></a><span class="sd">        Returns:</span>
-</span><span id="__span-0-589"><a id="__codelineno-0-589" name="__codelineno-0-589"></a><span class="sd">            str: The quoted identifier, catalog-qualified only when an alias is</span>
-</span><span id="__span-0-590"><a id="__codelineno-0-590" name="__codelineno-0-590"></a><span class="sd">            actually attached.</span>
-</span><span id="__span-0-591"><a id="__codelineno-0-591" name="__codelineno-0-591"></a>
-</span><span id="__span-0-592"><a id="__codelineno-0-592" name="__codelineno-0-592"></a><span class="sd">        Examples:</span>
-</span><span id="__span-0-593"><a id="__codelineno-0-593" name="__codelineno-0-593"></a><span class="sd">            &gt;&gt;&gt; manager._qualified(&quot;fact_table&quot;)</span>
-</span><span id="__span-0-594"><a id="__codelineno-0-594" name="__codelineno-0-594"></a><span class="sd">            &#39;&quot;main&quot;.&quot;fact_table&quot;&#39;</span>
-</span><span id="__span-0-595"><a id="__codelineno-0-595" name="__codelineno-0-595"></a><span class="sd">        &quot;&quot;&quot;</span>
-</span><span id="__span-0-596"><a id="__codelineno-0-596" name="__codelineno-0-596"></a>        <span class="k">return</span> <span class="n">qualify_table</span><span class="p">(</span><span class="n">table</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">schema</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">_catalog</span><span class="p">)</span>
-</span><span id="__span-0-597"><a id="__codelineno-0-597" name="__codelineno-0-597"></a>
-</span><span id="__span-0-598"><a id="__codelineno-0-598" name="__codelineno-0-598"></a>    <span class="c1"># Méthode de détection d&#39;un catalogue DuckLake sous l&#39;alias effectif</span>
-</span><span id="__span-0-599"><a id="__codelineno-0-599" name="__codelineno-0-599"></a>    <span class="k">def</span><span class="w"> </span><span class="nf">_is_ducklake</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">bool</span><span class="p">:</span>
-</span><span id="__span-0-600"><a id="__codelineno-0-600" name="__codelineno-0-600"></a><span class="w">        </span><span class="sd">&quot;&quot;&quot;Tell whether this instance&#39;s tables live in an attached DuckLake catalog.</span>
-</span><span id="__span-0-601"><a id="__codelineno-0-601" name="__codelineno-0-601"></a>
-</span><span id="__span-0-602"><a id="__codelineno-0-602" name="__codelineno-0-602"></a><span class="sd">        Re-read at each call (one ``duckdb_databases()`` lookup) rather than cached:</span>
-</span><span id="__span-0-603"><a id="__codelineno-0-603" name="__codelineno-0-603"></a><span class="sd">        the connection can be attached or detached after the instance is built.</span>
-</span><span id="__span-0-604"><a id="__codelineno-0-604" name="__codelineno-0-604"></a>
-</span><span id="__span-0-605"><a id="__codelineno-0-605" name="__codelineno-0-605"></a><span class="sd">        Returns:</span>
-</span><span id="__span-0-606"><a id="__codelineno-0-606" name="__codelineno-0-606"></a><span class="sd">            bool: True when ``_catalog`` is an attached DuckLake catalog, False on</span>
-</span><span id="__span-0-607"><a id="__codelineno-0-607" name="__codelineno-0-607"></a><span class="sd">            a plain DuckDB database or an in-memory test connection.</span>
-</span><span id="__span-0-608"><a id="__codelineno-0-608" name="__codelineno-0-608"></a>
-</span><span id="__span-0-609"><a id="__codelineno-0-609" name="__codelineno-0-609"></a><span class="sd">        Examples:</span>
-</span><span id="__span-0-610"><a id="__codelineno-0-610" name="__codelineno-0-610"></a><span class="sd">            &gt;&gt;&gt; manager._is_ducklake()</span>
-</span><span id="__span-0-611"><a id="__codelineno-0-611" name="__codelineno-0-611"></a><span class="sd">            True</span>
-</span><span id="__span-0-612"><a id="__codelineno-0-612" name="__codelineno-0-612"></a><span class="sd">        &quot;&quot;&quot;</span>
-</span><span id="__span-0-613"><a id="__codelineno-0-613" name="__codelineno-0-613"></a>        <span class="k">return</span> <span class="n">is_ducklake_catalog</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">conn</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">_catalog</span><span class="p">)</span>
-</span><span id="__span-0-614"><a id="__codelineno-0-614" name="__codelineno-0-614"></a>
-</span><span id="__span-0-615"><a id="__codelineno-0-615" name="__codelineno-0-615"></a>    <span class="c1"># Méthode de vérification de l&#39;existence d&#39;une table dans le schéma</span>
-</span><span id="__span-0-616"><a id="__codelineno-0-616" name="__codelineno-0-616"></a>    <span class="k">def</span><span class="w"> </span><span class="nf">_table_exists</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">table_name</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">bool</span><span class="p">:</span>
-</span><span id="__span-0-617"><a id="__codelineno-0-617" name="__codelineno-0-617"></a><span class="w">        </span><span class="sd">&quot;&quot;&quot;Check whether a bare-named table exists in this instance&#39;s schema.</span>
-</span><span id="__span-0-618"><a id="__codelineno-0-618" name="__codelineno-0-618"></a>
-</span><span id="__span-0-619"><a id="__codelineno-0-619" name="__codelineno-0-619"></a><span class="sd">        Filtering on the schema (and on the catalog when one is attached) matters:</span>
-</span><span id="__span-0-620"><a id="__codelineno-0-620" name="__codelineno-0-620"></a><span class="sd">        the same ``fact_table`` may exist in a neighbouring schema or catalog and</span>
-</span><span id="__span-0-621"><a id="__codelineno-0-621" name="__codelineno-0-621"></a><span class="sd">        would otherwise give a false positive.</span>
-</span><span id="__span-0-622"><a id="__codelineno-0-622" name="__codelineno-0-622"></a>
-</span><span id="__span-0-623"><a id="__codelineno-0-623" name="__codelineno-0-623"></a><span class="sd">        Args:</span>
-</span><span id="__span-0-624"><a id="__codelineno-0-624" name="__codelineno-0-624"></a><span class="sd">            table_name: Bare table name.</span>
-</span><span id="__span-0-625"><a id="__codelineno-0-625" name="__codelineno-0-625"></a>
-</span><span id="__span-0-626"><a id="__codelineno-0-626" name="__codelineno-0-626"></a><span class="sd">        Returns:</span>
-</span><span id="__span-0-627"><a id="__codelineno-0-627" name="__codelineno-0-627"></a><span class="sd">            bool: True if the table exists, False otherwise (including when the</span>
-</span><span id="__span-0-628"><a id="__codelineno-0-628" name="__codelineno-0-628"></a><span class="sd">            lookup itself fails).</span>
-</span><span id="__span-0-629"><a id="__codelineno-0-629" name="__codelineno-0-629"></a>
-</span><span id="__span-0-630"><a id="__codelineno-0-630" name="__codelineno-0-630"></a><span class="sd">        Examples:</span>
-</span><span id="__span-0-631"><a id="__codelineno-0-631" name="__codelineno-0-631"></a><span class="sd">            &gt;&gt;&gt; manager._table_exists(&quot;fact_table&quot;)</span>
-</span><span id="__span-0-632"><a id="__codelineno-0-632" name="__codelineno-0-632"></a><span class="sd">            True</span>
-</span><span id="__span-0-633"><a id="__codelineno-0-633" name="__codelineno-0-633"></a><span class="sd">        &quot;&quot;&quot;</span>
-</span><span id="__span-0-634"><a id="__codelineno-0-634" name="__codelineno-0-634"></a>        <span class="k">try</span><span class="p">:</span>
-</span><span id="__span-0-635"><a id="__codelineno-0-635" name="__codelineno-0-635"></a>            <span class="c1"># Résolution du schéma par son chemin complet : information_schema ne</span>
-</span><span id="__span-0-636"><a id="__codelineno-0-636" name="__codelineno-0-636"></a>            <span class="c1"># donne que le dernier niveau d&#39;un schéma imbriqué.</span>
-</span><span id="__span-0-637"><a id="__codelineno-0-637" name="__codelineno-0-637"></a>            <span class="n">schema_oid</span> <span class="o">=</span> <span class="n">resolve_schema_oid</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">conn</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">schema</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">_catalog</span><span class="p">)</span>
-</span><span id="__span-0-638"><a id="__codelineno-0-638" name="__codelineno-0-638"></a>            <span class="k">if</span> <span class="n">schema_oid</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
-</span><span id="__span-0-639"><a id="__codelineno-0-639" name="__codelineno-0-639"></a>                <span class="k">return</span> <span class="kc">False</span>
-</span><span id="__span-0-640"><a id="__codelineno-0-640" name="__codelineno-0-640"></a>            <span class="n">row</span> <span class="o">=</span> <span class="n">fetch_one</span><span class="p">(</span>
-</span><span id="__span-0-641"><a id="__codelineno-0-641" name="__codelineno-0-641"></a>                <span class="bp">self</span><span class="o">.</span><span class="n">conn</span><span class="o">.</span><span class="n">execute</span><span class="p">(</span>
-</span><span id="__span-0-642"><a id="__codelineno-0-642" name="__codelineno-0-642"></a>                    <span class="s2">&quot;SELECT COUNT(*) FROM duckdb_tables()&quot;</span>
-</span><span id="__span-0-643"><a id="__codelineno-0-643" name="__codelineno-0-643"></a>                    <span class="s2">&quot; WHERE schema_oid = ? AND table_name = ?&quot;</span><span class="p">,</span>
-</span><span id="__span-0-644"><a id="__codelineno-0-644" name="__codelineno-0-644"></a>                    <span class="p">[</span><span class="n">schema_oid</span><span class="p">,</span> <span class="n">table_name</span><span class="p">],</span>
-</span><span id="__span-0-645"><a id="__codelineno-0-645" name="__codelineno-0-645"></a>                <span class="p">)</span>
-</span><span id="__span-0-646"><a id="__codelineno-0-646" name="__codelineno-0-646"></a>            <span class="p">)</span>
-</span><span id="__span-0-647"><a id="__codelineno-0-647" name="__codelineno-0-647"></a>        <span class="k">except</span> <span class="ne">Exception</span><span class="p">:</span>
-</span><span id="__span-0-648"><a id="__codelineno-0-648" name="__codelineno-0-648"></a>            <span class="k">return</span> <span class="kc">False</span>
-</span><span id="__span-0-649"><a id="__codelineno-0-649" name="__codelineno-0-649"></a>        <span class="k">return</span> <span class="n">row</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="ow">and</span> <span class="n">row</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="o">&gt;</span> <span class="mi">0</span>
-</span><span id="__span-0-650"><a id="__codelineno-0-650" name="__codelineno-0-650"></a>
-</span><span id="__span-0-651"><a id="__codelineno-0-651" name="__codelineno-0-651"></a>    <span class="c1"># Méthode de comptage des lignes d&#39;une table du schéma</span>
-</span><span id="__span-0-652"><a id="__codelineno-0-652" name="__codelineno-0-652"></a>    <span class="k">def</span><span class="w"> </span><span class="nf">_count_rows</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">table</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">int</span><span class="p">:</span>
-</span><span id="__span-0-653"><a id="__codelineno-0-653" name="__codelineno-0-653"></a><span class="w">        </span><span class="sd">&quot;&quot;&quot;Count the rows of a bare-named table of this instance&#39;s schema.</span>
-</span><span id="__span-0-654"><a id="__codelineno-0-654" name="__codelineno-0-654"></a>
-</span><span id="__span-0-655"><a id="__codelineno-0-655" name="__codelineno-0-655"></a><span class="sd">        Args:</span>
-</span><span id="__span-0-656"><a id="__codelineno-0-656" name="__codelineno-0-656"></a><span class="sd">            table: Bare table name (e.g. ``&#39;fact_table&#39;``).</span>
-</span><span id="__span-0-657"><a id="__codelineno-0-657" name="__codelineno-0-657"></a>
-</span><span id="__span-0-658"><a id="__codelineno-0-658" name="__codelineno-0-658"></a><span class="sd">        Returns:</span>
-</span><span id="__span-0-659"><a id="__codelineno-0-659" name="__codelineno-0-659"></a><span class="sd">            int: Row count, or ``0`` if the table cannot be read (e.g. not created</span>
-</span><span id="__span-0-660"><a id="__codelineno-0-660" name="__codelineno-0-660"></a><span class="sd">            yet).</span>
-</span><span id="__span-0-661"><a id="__codelineno-0-661" name="__codelineno-0-661"></a>
-</span><span id="__span-0-662"><a id="__codelineno-0-662" name="__codelineno-0-662"></a><span class="sd">        Examples:</span>
-</span><span id="__span-0-663"><a id="__codelineno-0-663" name="__codelineno-0-663"></a><span class="sd">            &gt;&gt;&gt; manager._count_rows(&quot;fact_table&quot;)</span>
-</span><span id="__span-0-664"><a id="__codelineno-0-664" name="__codelineno-0-664"></a><span class="sd">            3</span>
-</span><span id="__span-0-665"><a id="__codelineno-0-665" name="__codelineno-0-665"></a><span class="sd">        &quot;&quot;&quot;</span>
-</span><span id="__span-0-666"><a id="__codelineno-0-666" name="__codelineno-0-666"></a>        <span class="k">try</span><span class="p">:</span>
-</span><span id="__span-0-667"><a id="__codelineno-0-667" name="__codelineno-0-667"></a>            <span class="n">row</span> <span class="o">=</span> <span class="n">fetch_one</span><span class="p">(</span>
-</span><span id="__span-0-668"><a id="__codelineno-0-668" name="__codelineno-0-668"></a>                <span class="bp">self</span><span class="o">.</span><span class="n">conn</span><span class="o">.</span><span class="n">execute</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;SELECT COUNT(*) FROM </span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">_qualified</span><span class="p">(</span><span class="n">table</span><span class="p">)</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
-</span><span id="__span-0-669"><a id="__codelineno-0-669" name="__codelineno-0-669"></a>            <span class="p">)</span>
-</span><span id="__span-0-670"><a id="__codelineno-0-670" name="__codelineno-0-670"></a>        <span class="k">except</span> <span class="ne">Exception</span><span class="p">:</span>
-</span><span id="__span-0-671"><a id="__codelineno-0-671" name="__codelineno-0-671"></a>            <span class="k">return</span> <span class="mi">0</span>
-</span><span id="__span-0-672"><a id="__codelineno-0-672" name="__codelineno-0-672"></a>        <span class="k">return</span> <span class="nb">int</span><span class="p">(</span><span class="n">row</span><span class="p">[</span><span class="mi">0</span><span class="p">])</span> <span class="k">if</span> <span class="n">row</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="k">else</span> <span class="mi">0</span>
-</span><span id="__span-0-673"><a id="__codelineno-0-673" name="__codelineno-0-673"></a>
-</span><span id="__span-0-674"><a id="__codelineno-0-674" name="__codelineno-0-674"></a>    <span class="c1"># Méthode de lecture des types physiques des colonnes d&#39;une table du schéma</span>
-</span><span id="__span-0-675"><a id="__codelineno-0-675" name="__codelineno-0-675"></a>    <span class="k">def</span><span class="w"> </span><span class="nf">_physical_column_types</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">table</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">&quot;fact_table&quot;</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">str</span><span class="p">]:</span>
-</span><span id="__span-0-676"><a id="__codelineno-0-676" name="__codelineno-0-676"></a><span class="w">        </span><span class="sd">&quot;&quot;&quot;Read the physical SQL type of every column of a table of this schema.</span>
-</span><span id="__span-0-677"><a id="__codelineno-0-677" name="__codelineno-0-677"></a>
-</span><span id="__span-0-678"><a id="__codelineno-0-678" name="__codelineno-0-678"></a><span class="sd">        The type is the one DuckDB reports for the stored column (``DESCRIBE``), with</span>
-</span><span id="__span-0-679"><a id="__codelineno-0-679" name="__codelineno-0-679"></a><span class="sd">        its parameters: ``DECIMAL(10,2)``, not ``DECIMAL``. This is the value recorded</span>
-</span><span id="__span-0-680"><a id="__codelineno-0-680" name="__codelineno-0-680"></a><span class="sd">        in ``metadata.sql_type``.</span>
-</span><span id="__span-0-681"><a id="__codelineno-0-681" name="__codelineno-0-681"></a>
-</span><span id="__span-0-682"><a id="__codelineno-0-682" name="__codelineno-0-682"></a><span class="sd">        Args:</span>
-</span><span id="__span-0-683"><a id="__codelineno-0-683" name="__codelineno-0-683"></a><span class="sd">            table: Bare table name. Defaults to ``&#39;fact_table&#39;``.</span>
-</span><span id="__span-0-684"><a id="__codelineno-0-684" name="__codelineno-0-684"></a>
-</span><span id="__span-0-685"><a id="__codelineno-0-685" name="__codelineno-0-685"></a><span class="sd">        Returns:</span>
-</span><span id="__span-0-686"><a id="__codelineno-0-686" name="__codelineno-0-686"></a><span class="sd">            dict[str, str]: Column name -&gt; physical SQL type, in column order.</span>
-</span><span id="__span-0-687"><a id="__codelineno-0-687" name="__codelineno-0-687"></a>
-</span><span id="__span-0-688"><a id="__codelineno-0-688" name="__codelineno-0-688"></a><span class="sd">        Raises:</span>
-</span><span id="__span-0-689"><a id="__codelineno-0-689" name="__codelineno-0-689"></a><span class="sd">            duckdb.Error: If the table cannot be described.</span>
-</span><span id="__span-0-690"><a id="__codelineno-0-690" name="__codelineno-0-690"></a>
-</span><span id="__span-0-691"><a id="__codelineno-0-691" name="__codelineno-0-691"></a><span class="sd">        Examples:</span>
-</span><span id="__span-0-692"><a id="__codelineno-0-692" name="__codelineno-0-692"></a><span class="sd">            &gt;&gt;&gt; manager._physical_column_types()[&quot;score&quot;]</span>
-</span><span id="__span-0-693"><a id="__codelineno-0-693" name="__codelineno-0-693"></a><span class="sd">            &#39;DECIMAL(10,2)&#39;</span>
-</span><span id="__span-0-694"><a id="__codelineno-0-694" name="__codelineno-0-694"></a><span class="sd">        &quot;&quot;&quot;</span>
-</span><span id="__span-0-695"><a id="__codelineno-0-695" name="__codelineno-0-695"></a>        <span class="n">rows</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">conn</span><span class="o">.</span><span class="n">execute</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;DESCRIBE </span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">_qualified</span><span class="p">(</span><span class="n">table</span><span class="p">)</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">fetchall</span><span class="p">()</span>
-</span><span id="__span-0-696"><a id="__codelineno-0-696" name="__codelineno-0-696"></a>        <span class="k">return</span> <span class="p">{</span><span class="nb">str</span><span class="p">(</span><span class="n">row</span><span class="p">[</span><span class="mi">0</span><span class="p">]):</span> <span class="nb">str</span><span class="p">(</span><span class="n">row</span><span class="p">[</span><span class="mi">1</span><span class="p">])</span> <span class="k">for</span> <span class="n">row</span> <span class="ow">in</span> <span class="n">rows</span><span class="p">}</span>
+                <div class="language-python highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-552">552</a></span>
+<span class="normal"><a href="#dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-553">553</a></span>
+<span class="normal"><a href="#dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-554">554</a></span>
+<span class="normal"><a href="#dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-555">555</a></span>
+<span class="normal"><a href="#dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-556">556</a></span>
+<span class="normal"><a href="#dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-557">557</a></span>
+<span class="normal"><a href="#dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-558">558</a></span>
+<span class="normal"><a href="#dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-559">559</a></span>
+<span class="normal"><a href="#dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-560">560</a></span>
+<span class="normal"><a href="#dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-561">561</a></span>
+<span class="normal"><a href="#dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-562">562</a></span>
+<span class="normal"><a href="#dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-563">563</a></span>
+<span class="normal"><a href="#dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-564">564</a></span>
+<span class="normal"><a href="#dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-565">565</a></span>
+<span class="normal"><a href="#dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-566">566</a></span>
+<span class="normal"><a href="#dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-567">567</a></span>
+<span class="normal"><a href="#dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-568">568</a></span>
+<span class="normal"><a href="#dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-569">569</a></span>
+<span class="normal"><a href="#dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-570">570</a></span>
+<span class="normal"><a href="#dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-571">571</a></span>
+<span class="normal"><a href="#dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-572">572</a></span>
+<span class="normal"><a href="#dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-573">573</a></span>
+<span class="normal"><a href="#dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-574">574</a></span>
+<span class="normal"><a href="#dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-575">575</a></span>
+<span class="normal"><a href="#dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-576">576</a></span>
+<span class="normal"><a href="#dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-577">577</a></span>
+<span class="normal"><a href="#dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-578">578</a></span>
+<span class="normal"><a href="#dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-579">579</a></span>
+<span class="normal"><a href="#dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-580">580</a></span>
+<span class="normal"><a href="#dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-581">581</a></span>
+<span class="normal"><a href="#dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-582">582</a></span>
+<span class="normal"><a href="#dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-583">583</a></span>
+<span class="normal"><a href="#dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-584">584</a></span>
+<span class="normal"><a href="#dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-585">585</a></span>
+<span class="normal"><a href="#dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-586">586</a></span>
+<span class="normal"><a href="#dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-587">587</a></span>
+<span class="normal"><a href="#dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-588">588</a></span>
+<span class="normal"><a href="#dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-589">589</a></span>
+<span class="normal"><a href="#dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-590">590</a></span>
+<span class="normal"><a href="#dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-591">591</a></span>
+<span class="normal"><a href="#dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-592">592</a></span>
+<span class="normal"><a href="#dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-593">593</a></span>
+<span class="normal"><a href="#dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-594">594</a></span>
+<span class="normal"><a href="#dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-595">595</a></span>
+<span class="normal"><a href="#dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-596">596</a></span>
+<span class="normal"><a href="#dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-597">597</a></span>
+<span class="normal"><a href="#dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-598">598</a></span>
+<span class="normal"><a href="#dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-599">599</a></span>
+<span class="normal"><a href="#dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-600">600</a></span>
+<span class="normal"><a href="#dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-601">601</a></span>
+<span class="normal"><a href="#dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-602">602</a></span>
+<span class="normal"><a href="#dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-603">603</a></span>
+<span class="normal"><a href="#dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-604">604</a></span>
+<span class="normal"><a href="#dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-605">605</a></span>
+<span class="normal"><a href="#dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-606">606</a></span>
+<span class="normal"><a href="#dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-607">607</a></span>
+<span class="normal"><a href="#dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-608">608</a></span>
+<span class="normal"><a href="#dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-609">609</a></span>
+<span class="normal"><a href="#dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-610">610</a></span>
+<span class="normal"><a href="#dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-611">611</a></span>
+<span class="normal"><a href="#dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-612">612</a></span>
+<span class="normal"><a href="#dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-613">613</a></span>
+<span class="normal"><a href="#dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-614">614</a></span>
+<span class="normal"><a href="#dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-615">615</a></span>
+<span class="normal"><a href="#dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-616">616</a></span>
+<span class="normal"><a href="#dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-617">617</a></span>
+<span class="normal"><a href="#dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-618">618</a></span>
+<span class="normal"><a href="#dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-619">619</a></span>
+<span class="normal"><a href="#dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-620">620</a></span>
+<span class="normal"><a href="#dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-621">621</a></span>
+<span class="normal"><a href="#dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-622">622</a></span>
+<span class="normal"><a href="#dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-623">623</a></span>
+<span class="normal"><a href="#dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-624">624</a></span>
+<span class="normal"><a href="#dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-625">625</a></span>
+<span class="normal"><a href="#dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-626">626</a></span>
+<span class="normal"><a href="#dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-627">627</a></span>
+<span class="normal"><a href="#dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-628">628</a></span>
+<span class="normal"><a href="#dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-629">629</a></span>
+<span class="normal"><a href="#dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-630">630</a></span>
+<span class="normal"><a href="#dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-631">631</a></span>
+<span class="normal"><a href="#dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-632">632</a></span>
+<span class="normal"><a href="#dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-633">633</a></span>
+<span class="normal"><a href="#dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-634">634</a></span>
+<span class="normal"><a href="#dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-635">635</a></span>
+<span class="normal"><a href="#dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-636">636</a></span>
+<span class="normal"><a href="#dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-637">637</a></span>
+<span class="normal"><a href="#dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-638">638</a></span>
+<span class="normal"><a href="#dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-639">639</a></span>
+<span class="normal"><a href="#dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-640">640</a></span>
+<span class="normal"><a href="#dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-641">641</a></span>
+<span class="normal"><a href="#dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-642">642</a></span>
+<span class="normal"><a href="#dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-643">643</a></span>
+<span class="normal"><a href="#dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-644">644</a></span>
+<span class="normal"><a href="#dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-645">645</a></span>
+<span class="normal"><a href="#dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-646">646</a></span>
+<span class="normal"><a href="#dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-647">647</a></span>
+<span class="normal"><a href="#dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-648">648</a></span>
+<span class="normal"><a href="#dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-649">649</a></span>
+<span class="normal"><a href="#dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-650">650</a></span>
+<span class="normal"><a href="#dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-651">651</a></span>
+<span class="normal"><a href="#dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-652">652</a></span>
+<span class="normal"><a href="#dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-653">653</a></span>
+<span class="normal"><a href="#dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-654">654</a></span>
+<span class="normal"><a href="#dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-655">655</a></span>
+<span class="normal"><a href="#dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-656">656</a></span>
+<span class="normal"><a href="#dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-657">657</a></span>
+<span class="normal"><a href="#dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-658">658</a></span>
+<span class="normal"><a href="#dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-659">659</a></span>
+<span class="normal"><a href="#dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-660">660</a></span>
+<span class="normal"><a href="#dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-661">661</a></span>
+<span class="normal"><a href="#dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-662">662</a></span>
+<span class="normal"><a href="#dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-663">663</a></span>
+<span class="normal"><a href="#dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-664">664</a></span>
+<span class="normal"><a href="#dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-665">665</a></span>
+<span class="normal"><a href="#dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-666">666</a></span>
+<span class="normal"><a href="#dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-667">667</a></span>
+<span class="normal"><a href="#dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-668">668</a></span>
+<span class="normal"><a href="#dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-669">669</a></span>
+<span class="normal"><a href="#dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-670">670</a></span>
+<span class="normal"><a href="#dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-671">671</a></span>
+<span class="normal"><a href="#dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-672">672</a></span>
+<span class="normal"><a href="#dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-673">673</a></span>
+<span class="normal"><a href="#dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-674">674</a></span>
+<span class="normal"><a href="#dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-675">675</a></span>
+<span class="normal"><a href="#dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-676">676</a></span>
+<span class="normal"><a href="#dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-677">677</a></span>
+<span class="normal"><a href="#dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-678">678</a></span>
+<span class="normal"><a href="#dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-679">679</a></span>
+<span class="normal"><a href="#dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-680">680</a></span>
+<span class="normal"><a href="#dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-681">681</a></span>
+<span class="normal"><a href="#dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-682">682</a></span>
+<span class="normal"><a href="#dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-683">683</a></span>
+<span class="normal"><a href="#dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-684">684</a></span>
+<span class="normal"><a href="#dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-685">685</a></span>
+<span class="normal"><a href="#dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-686">686</a></span>
+<span class="normal"><a href="#dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-687">687</a></span>
+<span class="normal"><a href="#dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-688">688</a></span>
+<span class="normal"><a href="#dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-689">689</a></span>
+<span class="normal"><a href="#dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-690">690</a></span>
+<span class="normal"><a href="#dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-691">691</a></span>
+<span class="normal"><a href="#dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-692">692</a></span>
+<span class="normal"><a href="#dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-693">693</a></span>
+<span class="normal"><a href="#dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-694">694</a></span>
+<span class="normal"><a href="#dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-695">695</a></span>
+<span class="normal"><a href="#dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-696">696</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__span-0-552"><a id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-552" name="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-552"></a><span class="k">class</span><span class="w"> </span><span class="nc">SchemaScoped</span><span class="p">:</span>
+</span><span id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__span-0-553"><a id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-553" name="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-553"></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Mixin giving schema-aware classes their shared table helpers.</span>
+</span><span id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__span-0-554"><a id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-554" name="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-554"></a>
+</span><span id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__span-0-555"><a id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-555" name="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-555"></a><span class="sd">    Hosts the single definition of the helpers every schema-aware class needs</span>
+</span><span id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__span-0-556"><a id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-556" name="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-556"></a><span class="sd">    (managers, builder, auditor, recovery manager): qualifying a bare table name,</span>
+</span><span id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__span-0-557"><a id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-557" name="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-557"></a><span class="sd">    checking a table exists and counting its rows. The host class must set</span>
+</span><span id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__span-0-558"><a id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-558" name="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-558"></a><span class="sd">    ``conn``, ``schema`` and ``_catalog`` (the effective alias returned by</span>
+</span><span id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__span-0-559"><a id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-559" name="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-559"></a><span class="sd">    :func:`resolve_catalog`) before calling them.</span>
+</span><span id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__span-0-560"><a id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-560" name="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-560"></a>
+</span><span id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__span-0-561"><a id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-561" name="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-561"></a><span class="sd">    Attributes:</span>
+</span><span id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__span-0-562"><a id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-562" name="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-562"></a><span class="sd">        conn (duckdb.DuckDBPyConnection): Connection used by the helpers.</span>
+</span><span id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__span-0-563"><a id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-563" name="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-563"></a><span class="sd">        schema (str): Target DuckLake schema path (``&#39;sales.europe&#39;`` for a</span>
+</span><span id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__span-0-564"><a id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-564" name="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-564"></a><span class="sd">            nested schema).</span>
+</span><span id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__span-0-565"><a id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-565" name="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-565"></a><span class="sd">        _catalog (str | None): Attached catalog alias, ``None`` when no catalog of</span>
+</span><span id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__span-0-566"><a id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-566" name="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-566"></a><span class="sd">            that name is attached (in-memory test connections).</span>
+</span><span id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__span-0-567"><a id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-567" name="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-567"></a>
+</span><span id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__span-0-568"><a id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-568" name="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-568"></a><span class="sd">    Examples:</span>
+</span><span id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__span-0-569"><a id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-569" name="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-569"></a><span class="sd">        &gt;&gt;&gt; import duckdb</span>
+</span><span id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__span-0-570"><a id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-570" name="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-570"></a><span class="sd">        &gt;&gt;&gt; class Reader(SchemaScoped):</span>
+</span><span id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__span-0-571"><a id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-571" name="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-571"></a><span class="sd">        ...     def __init__(self, conn):</span>
+</span><span id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__span-0-572"><a id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-572" name="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-572"></a><span class="sd">        ...         self.conn, self.schema, self._catalog = conn, &quot;main&quot;, None</span>
+</span><span id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__span-0-573"><a id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-573" name="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-573"></a><span class="sd">        &gt;&gt;&gt; Reader(duckdb.connect())._qualified(&quot;fact_table&quot;)</span>
+</span><span id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__span-0-574"><a id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-574" name="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-574"></a><span class="sd">        &#39;&quot;main&quot;.&quot;fact_table&quot;&#39;</span>
+</span><span id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__span-0-575"><a id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-575" name="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-575"></a><span class="sd">    &quot;&quot;&quot;</span>
+</span><span id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__span-0-576"><a id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-576" name="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-576"></a>
+</span><span id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__span-0-577"><a id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-577" name="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-577"></a>    <span class="n">conn</span><span class="p">:</span> <span class="s2">&quot;duckdb.DuckDBPyConnection&quot;</span>
+</span><span id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__span-0-578"><a id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-578" name="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-578"></a>    <span class="n">schema</span><span class="p">:</span> <span class="nb">str</span>
+</span><span id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__span-0-579"><a id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-579" name="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-579"></a>    <span class="n">_catalog</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span>
+</span><span id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__span-0-580"><a id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-580" name="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-580"></a>
+</span><span id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__span-0-581"><a id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-581" name="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-581"></a>    <span class="c1"># Méthode de qualification d&#39;un nom de table par le schéma (et le catalogue)</span>
+</span><span id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__span-0-582"><a id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-582" name="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-582"></a>    <span class="k">def</span><span class="w"> </span><span class="nf">_qualified</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">table</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
+</span><span id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__span-0-583"><a id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-583" name="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-583"></a><span class="w">        </span><span class="sd">&quot;&quot;&quot;Return ``table`` qualified by this instance&#39;s schema and catalog.</span>
+</span><span id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__span-0-584"><a id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-584" name="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-584"></a>
+</span><span id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__span-0-585"><a id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-585" name="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-585"></a><span class="sd">        Args:</span>
+</span><span id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__span-0-586"><a id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-586" name="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-586"></a><span class="sd">            table: Bare table name (e.g. ``&#39;fact_table&#39;``, ``&#39;metadata&#39;``).</span>
+</span><span id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__span-0-587"><a id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-587" name="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-587"></a>
+</span><span id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__span-0-588"><a id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-588" name="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-588"></a><span class="sd">        Returns:</span>
+</span><span id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__span-0-589"><a id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-589" name="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-589"></a><span class="sd">            str: The quoted identifier, catalog-qualified only when an alias is</span>
+</span><span id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__span-0-590"><a id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-590" name="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-590"></a><span class="sd">            actually attached.</span>
+</span><span id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__span-0-591"><a id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-591" name="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-591"></a>
+</span><span id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__span-0-592"><a id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-592" name="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-592"></a><span class="sd">        Examples:</span>
+</span><span id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__span-0-593"><a id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-593" name="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-593"></a><span class="sd">            &gt;&gt;&gt; manager._qualified(&quot;fact_table&quot;)</span>
+</span><span id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__span-0-594"><a id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-594" name="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-594"></a><span class="sd">            &#39;&quot;main&quot;.&quot;fact_table&quot;&#39;</span>
+</span><span id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__span-0-595"><a id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-595" name="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-595"></a><span class="sd">        &quot;&quot;&quot;</span>
+</span><span id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__span-0-596"><a id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-596" name="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-596"></a>        <span class="k">return</span> <span class="n">qualify_table</span><span class="p">(</span><span class="n">table</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">schema</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">_catalog</span><span class="p">)</span>
+</span><span id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__span-0-597"><a id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-597" name="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-597"></a>
+</span><span id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__span-0-598"><a id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-598" name="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-598"></a>    <span class="c1"># Méthode de détection d&#39;un catalogue DuckLake sous l&#39;alias effectif</span>
+</span><span id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__span-0-599"><a id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-599" name="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-599"></a>    <span class="k">def</span><span class="w"> </span><span class="nf">_is_ducklake</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">bool</span><span class="p">:</span>
+</span><span id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__span-0-600"><a id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-600" name="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-600"></a><span class="w">        </span><span class="sd">&quot;&quot;&quot;Tell whether this instance&#39;s tables live in an attached DuckLake catalog.</span>
+</span><span id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__span-0-601"><a id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-601" name="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-601"></a>
+</span><span id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__span-0-602"><a id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-602" name="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-602"></a><span class="sd">        Re-read at each call (one ``duckdb_databases()`` lookup) rather than cached:</span>
+</span><span id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__span-0-603"><a id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-603" name="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-603"></a><span class="sd">        the connection can be attached or detached after the instance is built.</span>
+</span><span id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__span-0-604"><a id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-604" name="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-604"></a>
+</span><span id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__span-0-605"><a id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-605" name="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-605"></a><span class="sd">        Returns:</span>
+</span><span id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__span-0-606"><a id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-606" name="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-606"></a><span class="sd">            bool: True when ``_catalog`` is an attached DuckLake catalog, False on</span>
+</span><span id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__span-0-607"><a id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-607" name="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-607"></a><span class="sd">            a plain DuckDB database or an in-memory test connection.</span>
+</span><span id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__span-0-608"><a id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-608" name="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-608"></a>
+</span><span id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__span-0-609"><a id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-609" name="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-609"></a><span class="sd">        Examples:</span>
+</span><span id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__span-0-610"><a id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-610" name="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-610"></a><span class="sd">            &gt;&gt;&gt; manager._is_ducklake()</span>
+</span><span id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__span-0-611"><a id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-611" name="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-611"></a><span class="sd">            True</span>
+</span><span id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__span-0-612"><a id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-612" name="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-612"></a><span class="sd">        &quot;&quot;&quot;</span>
+</span><span id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__span-0-613"><a id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-613" name="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-613"></a>        <span class="k">return</span> <span class="n">is_ducklake_catalog</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">conn</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">_catalog</span><span class="p">)</span>
+</span><span id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__span-0-614"><a id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-614" name="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-614"></a>
+</span><span id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__span-0-615"><a id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-615" name="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-615"></a>    <span class="c1"># Méthode de vérification de l&#39;existence d&#39;une table dans le schéma</span>
+</span><span id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__span-0-616"><a id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-616" name="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-616"></a>    <span class="k">def</span><span class="w"> </span><span class="nf">_table_exists</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">table_name</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">bool</span><span class="p">:</span>
+</span><span id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__span-0-617"><a id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-617" name="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-617"></a><span class="w">        </span><span class="sd">&quot;&quot;&quot;Check whether a bare-named table exists in this instance&#39;s schema.</span>
+</span><span id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__span-0-618"><a id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-618" name="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-618"></a>
+</span><span id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__span-0-619"><a id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-619" name="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-619"></a><span class="sd">        Filtering on the schema (and on the catalog when one is attached) matters:</span>
+</span><span id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__span-0-620"><a id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-620" name="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-620"></a><span class="sd">        the same ``fact_table`` may exist in a neighbouring schema or catalog and</span>
+</span><span id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__span-0-621"><a id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-621" name="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-621"></a><span class="sd">        would otherwise give a false positive.</span>
+</span><span id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__span-0-622"><a id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-622" name="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-622"></a>
+</span><span id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__span-0-623"><a id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-623" name="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-623"></a><span class="sd">        Args:</span>
+</span><span id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__span-0-624"><a id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-624" name="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-624"></a><span class="sd">            table_name: Bare table name.</span>
+</span><span id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__span-0-625"><a id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-625" name="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-625"></a>
+</span><span id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__span-0-626"><a id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-626" name="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-626"></a><span class="sd">        Returns:</span>
+</span><span id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__span-0-627"><a id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-627" name="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-627"></a><span class="sd">            bool: True if the table exists, False otherwise (including when the</span>
+</span><span id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__span-0-628"><a id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-628" name="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-628"></a><span class="sd">            lookup itself fails).</span>
+</span><span id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__span-0-629"><a id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-629" name="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-629"></a>
+</span><span id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__span-0-630"><a id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-630" name="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-630"></a><span class="sd">        Examples:</span>
+</span><span id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__span-0-631"><a id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-631" name="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-631"></a><span class="sd">            &gt;&gt;&gt; manager._table_exists(&quot;fact_table&quot;)</span>
+</span><span id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__span-0-632"><a id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-632" name="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-632"></a><span class="sd">            True</span>
+</span><span id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__span-0-633"><a id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-633" name="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-633"></a><span class="sd">        &quot;&quot;&quot;</span>
+</span><span id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__span-0-634"><a id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-634" name="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-634"></a>        <span class="k">try</span><span class="p">:</span>
+</span><span id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__span-0-635"><a id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-635" name="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-635"></a>            <span class="c1"># Résolution du schéma par son chemin complet : information_schema ne</span>
+</span><span id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__span-0-636"><a id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-636" name="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-636"></a>            <span class="c1"># donne que le dernier niveau d&#39;un schéma imbriqué.</span>
+</span><span id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__span-0-637"><a id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-637" name="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-637"></a>            <span class="n">schema_oid</span> <span class="o">=</span> <span class="n">resolve_schema_oid</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">conn</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">schema</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">_catalog</span><span class="p">)</span>
+</span><span id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__span-0-638"><a id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-638" name="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-638"></a>            <span class="k">if</span> <span class="n">schema_oid</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+</span><span id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__span-0-639"><a id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-639" name="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-639"></a>                <span class="k">return</span> <span class="kc">False</span>
+</span><span id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__span-0-640"><a id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-640" name="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-640"></a>            <span class="n">row</span> <span class="o">=</span> <span class="n">fetch_one</span><span class="p">(</span>
+</span><span id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__span-0-641"><a id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-641" name="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-641"></a>                <span class="bp">self</span><span class="o">.</span><span class="n">conn</span><span class="o">.</span><span class="n">execute</span><span class="p">(</span>
+</span><span id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__span-0-642"><a id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-642" name="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-642"></a>                    <span class="s2">&quot;SELECT COUNT(*) FROM duckdb_tables()&quot;</span>
+</span><span id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__span-0-643"><a id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-643" name="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-643"></a>                    <span class="s2">&quot; WHERE schema_oid = ? AND table_name = ?&quot;</span><span class="p">,</span>
+</span><span id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__span-0-644"><a id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-644" name="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-644"></a>                    <span class="p">[</span><span class="n">schema_oid</span><span class="p">,</span> <span class="n">table_name</span><span class="p">],</span>
+</span><span id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__span-0-645"><a id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-645" name="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-645"></a>                <span class="p">)</span>
+</span><span id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__span-0-646"><a id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-646" name="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-646"></a>            <span class="p">)</span>
+</span><span id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__span-0-647"><a id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-647" name="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-647"></a>        <span class="k">except</span> <span class="ne">Exception</span><span class="p">:</span>
+</span><span id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__span-0-648"><a id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-648" name="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-648"></a>            <span class="k">return</span> <span class="kc">False</span>
+</span><span id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__span-0-649"><a id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-649" name="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-649"></a>        <span class="k">return</span> <span class="n">row</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="ow">and</span> <span class="n">row</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="o">&gt;</span> <span class="mi">0</span>
+</span><span id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__span-0-650"><a id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-650" name="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-650"></a>
+</span><span id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__span-0-651"><a id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-651" name="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-651"></a>    <span class="c1"># Méthode de comptage des lignes d&#39;une table du schéma</span>
+</span><span id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__span-0-652"><a id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-652" name="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-652"></a>    <span class="k">def</span><span class="w"> </span><span class="nf">_count_rows</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">table</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">int</span><span class="p">:</span>
+</span><span id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__span-0-653"><a id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-653" name="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-653"></a><span class="w">        </span><span class="sd">&quot;&quot;&quot;Count the rows of a bare-named table of this instance&#39;s schema.</span>
+</span><span id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__span-0-654"><a id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-654" name="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-654"></a>
+</span><span id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__span-0-655"><a id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-655" name="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-655"></a><span class="sd">        Args:</span>
+</span><span id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__span-0-656"><a id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-656" name="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-656"></a><span class="sd">            table: Bare table name (e.g. ``&#39;fact_table&#39;``).</span>
+</span><span id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__span-0-657"><a id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-657" name="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-657"></a>
+</span><span id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__span-0-658"><a id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-658" name="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-658"></a><span class="sd">        Returns:</span>
+</span><span id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__span-0-659"><a id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-659" name="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-659"></a><span class="sd">            int: Row count, or ``0`` if the table cannot be read (e.g. not created</span>
+</span><span id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__span-0-660"><a id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-660" name="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-660"></a><span class="sd">            yet).</span>
+</span><span id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__span-0-661"><a id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-661" name="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-661"></a>
+</span><span id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__span-0-662"><a id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-662" name="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-662"></a><span class="sd">        Examples:</span>
+</span><span id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__span-0-663"><a id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-663" name="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-663"></a><span class="sd">            &gt;&gt;&gt; manager._count_rows(&quot;fact_table&quot;)</span>
+</span><span id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__span-0-664"><a id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-664" name="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-664"></a><span class="sd">            3</span>
+</span><span id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__span-0-665"><a id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-665" name="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-665"></a><span class="sd">        &quot;&quot;&quot;</span>
+</span><span id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__span-0-666"><a id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-666" name="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-666"></a>        <span class="k">try</span><span class="p">:</span>
+</span><span id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__span-0-667"><a id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-667" name="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-667"></a>            <span class="n">row</span> <span class="o">=</span> <span class="n">fetch_one</span><span class="p">(</span>
+</span><span id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__span-0-668"><a id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-668" name="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-668"></a>                <span class="bp">self</span><span class="o">.</span><span class="n">conn</span><span class="o">.</span><span class="n">execute</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;SELECT COUNT(*) FROM </span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">_qualified</span><span class="p">(</span><span class="n">table</span><span class="p">)</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+</span><span id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__span-0-669"><a id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-669" name="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-669"></a>            <span class="p">)</span>
+</span><span id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__span-0-670"><a id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-670" name="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-670"></a>        <span class="k">except</span> <span class="ne">Exception</span><span class="p">:</span>
+</span><span id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__span-0-671"><a id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-671" name="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-671"></a>            <span class="k">return</span> <span class="mi">0</span>
+</span><span id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__span-0-672"><a id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-672" name="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-672"></a>        <span class="k">return</span> <span class="nb">int</span><span class="p">(</span><span class="n">row</span><span class="p">[</span><span class="mi">0</span><span class="p">])</span> <span class="k">if</span> <span class="n">row</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="k">else</span> <span class="mi">0</span>
+</span><span id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__span-0-673"><a id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-673" name="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-673"></a>
+</span><span id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__span-0-674"><a id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-674" name="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-674"></a>    <span class="c1"># Méthode de lecture des types physiques des colonnes d&#39;une table du schéma</span>
+</span><span id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__span-0-675"><a id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-675" name="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-675"></a>    <span class="k">def</span><span class="w"> </span><span class="nf">_physical_column_types</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">table</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">&quot;fact_table&quot;</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">str</span><span class="p">]:</span>
+</span><span id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__span-0-676"><a id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-676" name="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-676"></a><span class="w">        </span><span class="sd">&quot;&quot;&quot;Read the physical SQL type of every column of a table of this schema.</span>
+</span><span id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__span-0-677"><a id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-677" name="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-677"></a>
+</span><span id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__span-0-678"><a id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-678" name="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-678"></a><span class="sd">        The type is the one DuckDB reports for the stored column (``DESCRIBE``), with</span>
+</span><span id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__span-0-679"><a id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-679" name="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-679"></a><span class="sd">        its parameters: ``DECIMAL(10,2)``, not ``DECIMAL``. This is the value recorded</span>
+</span><span id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__span-0-680"><a id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-680" name="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-680"></a><span class="sd">        in ``metadata.sql_type``.</span>
+</span><span id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__span-0-681"><a id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-681" name="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-681"></a>
+</span><span id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__span-0-682"><a id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-682" name="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-682"></a><span class="sd">        Args:</span>
+</span><span id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__span-0-683"><a id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-683" name="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-683"></a><span class="sd">            table: Bare table name. Defaults to ``&#39;fact_table&#39;``.</span>
+</span><span id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__span-0-684"><a id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-684" name="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-684"></a>
+</span><span id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__span-0-685"><a id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-685" name="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-685"></a><span class="sd">        Returns:</span>
+</span><span id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__span-0-686"><a id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-686" name="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-686"></a><span class="sd">            dict[str, str]: Column name -&gt; physical SQL type, in column order.</span>
+</span><span id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__span-0-687"><a id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-687" name="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-687"></a>
+</span><span id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__span-0-688"><a id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-688" name="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-688"></a><span class="sd">        Raises:</span>
+</span><span id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__span-0-689"><a id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-689" name="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-689"></a><span class="sd">            duckdb.Error: If the table cannot be described.</span>
+</span><span id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__span-0-690"><a id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-690" name="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-690"></a>
+</span><span id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__span-0-691"><a id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-691" name="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-691"></a><span class="sd">        Examples:</span>
+</span><span id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__span-0-692"><a id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-692" name="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-692"></a><span class="sd">            &gt;&gt;&gt; manager._physical_column_types()[&quot;score&quot;]</span>
+</span><span id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__span-0-693"><a id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-693" name="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-693"></a><span class="sd">            &#39;DECIMAL(10,2)&#39;</span>
+</span><span id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__span-0-694"><a id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-694" name="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-694"></a><span class="sd">        &quot;&quot;&quot;</span>
+</span><span id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__span-0-695"><a id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-695" name="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-695"></a>        <span class="n">rows</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">conn</span><span class="o">.</span><span class="n">execute</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;DESCRIBE </span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">_qualified</span><span class="p">(</span><span class="n">table</span><span class="p">)</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">fetchall</span><span class="p">()</span>
+</span><span id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__span-0-696"><a id="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-696" name="dt_ducklake_manager.utils.sql.SchemaScoped--source--__codelineno-0-696"></a>        <span class="k">return</span> <span class="p">{</span><span class="nb">str</span><span class="p">(</span><span class="n">row</span><span class="p">[</span><span class="mi">0</span><span class="p">]):</span> <span class="nb">str</span><span class="p">(</span><span class="n">row</span><span class="p">[</span><span class="mi">1</span><span class="p">])</span> <span class="k">for</span> <span class="n">row</span> <span class="ow">in</span> <span class="n">rows</span><span class="p">}</span>
 </span></code></pre></div></td></tr></table></div>
               </details>
 

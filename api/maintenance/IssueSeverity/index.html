@@ -1779,19 +1779,19 @@
 
               <details class="mkdocstrings-source">
                 <summary>Source code in <code>dt_ducklake_manager/maintenance/auditor.py</code></summary>
-                <div class="language-python highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-60">60</a></span>
-<span class="normal"><a href="#__codelineno-0-61">61</a></span>
-<span class="normal"><a href="#__codelineno-0-62">62</a></span>
-<span class="normal"><a href="#__codelineno-0-63">63</a></span>
-<span class="normal"><a href="#__codelineno-0-64">64</a></span>
-<span class="normal"><a href="#__codelineno-0-65">65</a></span>
-<span class="normal"><a href="#__codelineno-0-66">66</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-60"><a id="__codelineno-0-60" name="__codelineno-0-60"></a><span class="k">class</span><span class="w"> </span><span class="nc">IssueSeverity</span><span class="p">(</span><span class="n">Enum</span><span class="p">):</span>
-</span><span id="__span-0-61"><a id="__codelineno-0-61" name="__codelineno-0-61"></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Issue severity levels.&quot;&quot;&quot;</span>
-</span><span id="__span-0-62"><a id="__codelineno-0-62" name="__codelineno-0-62"></a>
-</span><span id="__span-0-63"><a id="__codelineno-0-63" name="__codelineno-0-63"></a>    <span class="n">LOW</span> <span class="o">=</span> <span class="s2">&quot;low&quot;</span>
-</span><span id="__span-0-64"><a id="__codelineno-0-64" name="__codelineno-0-64"></a>    <span class="n">MEDIUM</span> <span class="o">=</span> <span class="s2">&quot;medium&quot;</span>
-</span><span id="__span-0-65"><a id="__codelineno-0-65" name="__codelineno-0-65"></a>    <span class="n">HIGH</span> <span class="o">=</span> <span class="s2">&quot;high&quot;</span>
-</span><span id="__span-0-66"><a id="__codelineno-0-66" name="__codelineno-0-66"></a>    <span class="n">CRITICAL</span> <span class="o">=</span> <span class="s2">&quot;critical&quot;</span>
+                <div class="language-python highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#dt_ducklake_manager.maintenance.auditor.IssueSeverity--source--__codelineno-0-60">60</a></span>
+<span class="normal"><a href="#dt_ducklake_manager.maintenance.auditor.IssueSeverity--source--__codelineno-0-61">61</a></span>
+<span class="normal"><a href="#dt_ducklake_manager.maintenance.auditor.IssueSeverity--source--__codelineno-0-62">62</a></span>
+<span class="normal"><a href="#dt_ducklake_manager.maintenance.auditor.IssueSeverity--source--__codelineno-0-63">63</a></span>
+<span class="normal"><a href="#dt_ducklake_manager.maintenance.auditor.IssueSeverity--source--__codelineno-0-64">64</a></span>
+<span class="normal"><a href="#dt_ducklake_manager.maintenance.auditor.IssueSeverity--source--__codelineno-0-65">65</a></span>
+<span class="normal"><a href="#dt_ducklake_manager.maintenance.auditor.IssueSeverity--source--__codelineno-0-66">66</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="dt_ducklake_manager.maintenance.auditor.IssueSeverity--source--__span-0-60"><a id="dt_ducklake_manager.maintenance.auditor.IssueSeverity--source--__codelineno-0-60" name="dt_ducklake_manager.maintenance.auditor.IssueSeverity--source--__codelineno-0-60"></a><span class="k">class</span><span class="w"> </span><span class="nc">IssueSeverity</span><span class="p">(</span><span class="n">Enum</span><span class="p">):</span>
+</span><span id="dt_ducklake_manager.maintenance.auditor.IssueSeverity--source--__span-0-61"><a id="dt_ducklake_manager.maintenance.auditor.IssueSeverity--source--__codelineno-0-61" name="dt_ducklake_manager.maintenance.auditor.IssueSeverity--source--__codelineno-0-61"></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Issue severity levels.&quot;&quot;&quot;</span>
+</span><span id="dt_ducklake_manager.maintenance.auditor.IssueSeverity--source--__span-0-62"><a id="dt_ducklake_manager.maintenance.auditor.IssueSeverity--source--__codelineno-0-62" name="dt_ducklake_manager.maintenance.auditor.IssueSeverity--source--__codelineno-0-62"></a>
+</span><span id="dt_ducklake_manager.maintenance.auditor.IssueSeverity--source--__span-0-63"><a id="dt_ducklake_manager.maintenance.auditor.IssueSeverity--source--__codelineno-0-63" name="dt_ducklake_manager.maintenance.auditor.IssueSeverity--source--__codelineno-0-63"></a>    <span class="n">LOW</span> <span class="o">=</span> <span class="s2">&quot;low&quot;</span>
+</span><span id="dt_ducklake_manager.maintenance.auditor.IssueSeverity--source--__span-0-64"><a id="dt_ducklake_manager.maintenance.auditor.IssueSeverity--source--__codelineno-0-64" name="dt_ducklake_manager.maintenance.auditor.IssueSeverity--source--__codelineno-0-64"></a>    <span class="n">MEDIUM</span> <span class="o">=</span> <span class="s2">&quot;medium&quot;</span>
+</span><span id="dt_ducklake_manager.maintenance.auditor.IssueSeverity--source--__span-0-65"><a id="dt_ducklake_manager.maintenance.auditor.IssueSeverity--source--__codelineno-0-65" name="dt_ducklake_manager.maintenance.auditor.IssueSeverity--source--__codelineno-0-65"></a>    <span class="n">HIGH</span> <span class="o">=</span> <span class="s2">&quot;high&quot;</span>
+</span><span id="dt_ducklake_manager.maintenance.auditor.IssueSeverity--source--__span-0-66"><a id="dt_ducklake_manager.maintenance.auditor.IssueSeverity--source--__codelineno-0-66" name="dt_ducklake_manager.maintenance.auditor.IssueSeverity--source--__codelineno-0-66"></a>    <span class="n">CRITICAL</span> <span class="o">=</span> <span class="s2">&quot;critical&quot;</span>
 </span></code></pre></div></td></tr></table></div>
               </details>
 
